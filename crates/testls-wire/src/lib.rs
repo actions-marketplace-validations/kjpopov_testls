@@ -3,11 +3,18 @@
 
 mod client_hello;
 mod codec;
+mod record;
+mod server;
 mod version;
 
 pub use client_hello::{
     CONTENT_HANDSHAKE, ClientHello, Extension, HANDSHAKE_CLIENT_HELLO, KeyShareEntry,
     MAX_FRAGMENT_LEN, Ssl2ClientHello, ext,
 };
-pub use codec::EncodeError;
+pub use codec::{DecodeError, EncodeError};
+pub use record::{AnyRecord, ContentType, Record, Ssl2Record, parse_record};
+pub use server::{
+    Alert, AlertLevel, HRR_RANDOM, HandshakeMessage, RawExtension, ServerHello, Ssl2ServerHello,
+    handshake_type, parse_certificate_list, parse_handshake,
+};
 pub use version::ProtocolVersion;
