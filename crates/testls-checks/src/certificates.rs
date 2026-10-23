@@ -102,6 +102,7 @@ pub fn describe_certificate(der: &[u8]) -> Result<CertificateInfo, String> {
                 .general_names
                 .iter()
                 .filter_map(san_label)
+                .map(|name| printable(&name))
                 .collect()
         })
         .unwrap_or_default();
@@ -118,13 +119,27 @@ pub fn describe_certificate(der: &[u8]) -> Result<CertificateInfo, String> {
         Err(_) => "unknown".to_owned(),
     };
     Ok(CertificateInfo {
-        subject: cert.subject().to_string(),
-        issuer: cert.issuer().to_string(),
+        subject: printable(&cert.subject().to_string()),
+        issuer: printable(&cert.issuer().to_string()),
         not_before: validity.not_before.to_string(),
         not_after: validity.not_after.to_string(),
         names,
         key,
     })
+}
+
+/// Escapes control characters (e.g. terminal escape sequences) in
+/// certificate-supplied text so it is safe to print.
+fn printable(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_control() {
+                c.escape_default().to_string()
+            } else {
+                c.to_string()
+            }
+        })
+        .collect()
 }
 
 /// Display form of a DNS or IP subject alternative name; other kinds are
@@ -530,6 +545,24 @@ mod tests {
         assert_eq!(info.key, "RSA 1024 bits");
 
         assert!(describe_certificate(b"junk").is_err());
+    }
+
+    /// Self-signed certificate whose subject and SAN contain ESC sequences.
+    const CONTROL_CHARS: &[u8] = include_bytes!("testdata/control-chars.der");
+
+    /// Control characters from the certificate are escaped, not passed
+    /// through to the terminal.
+    #[test]
+    fn describe_escapes_control_characters() {
+        let info = describe_certificate(CONTROL_CHARS).unwrap();
+        let all = [&info.subject, &info.issuer]
+            .into_iter()
+            .chain(&info.names)
+            .collect::<Vec<_>>();
+        for text in &all {
+            assert!(!text.chars().any(char::is_control), "{text:?}");
+        }
+        assert_eq!(info.names, [r"bad\u{1b}[2Jname"]);
     }
 
     /// RFC 9525 wildcard rules.
