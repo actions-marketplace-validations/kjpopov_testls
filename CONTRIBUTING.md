@@ -4,6 +4,9 @@ Thanks for your interest in improving `testls`.
 
 This project is intentionally lean, but we welcome bug reports, fixes, tests, and thoughtful feature ideas.
 
+See [AGENTS.md](AGENTS.md) for the concrete checks, code requirements, and PR
+conventions every change must meet.
+
 ## Project goals
 
 `testls` aims to provide a fast, Rust-native TLS/SSL scanner with:
