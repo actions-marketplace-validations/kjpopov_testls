@@ -1,12 +1,18 @@
 # testls
 
+[![CI](https://github.com/kjpopov/testls/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kjpopov/testls/actions/workflows/ci.yml)
+[![Release](https://github.com/kjpopov/testls/actions/workflows/release.yml/badge.svg)](https://github.com/kjpopov/testls/actions/workflows/release.yml)
+[![Latest release](https://img.shields.io/github/v/release/kjpopov/testls?include_prereleases&sort=semver)](https://github.com/kjpopov/testls/releases)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
+
 > `$ test ls` does nothing. `testls` protects your web servers.
 
 TLS/SSL scanner for the web era, written in Rust and inspired by
 [testssl.sh](https://testssl.sh). Single static binary. No bash. No subprocess.
 
-> **Status: early development.** Nothing below is implemented yet; the feature
-> list describes the planned scope. See [docs/PLAN.md](docs/PLAN.md).
+> **Status: early development (alpha).** Protocol detection and cipher suite
+> enumeration work today; everything else in the feature list is planned. See
+> [docs/PLAN.md](docs/PLAN.md).
 
 ## Why
 
@@ -15,6 +21,21 @@ TLS/SSL scanner for the web era, written in Rust and inspired by
   without linking OpenSSL
 - Web service (planned) — built-in HTTP server with a REST API, streaming
   results, and an embedded browser UI
+
+## Install
+
+Download a prebuilt binary for Linux (static musl, x86_64/aarch64), macOS
+(x86_64/arm64), or Windows (x86_64) from the
+[releases page](https://github.com/kjpopov/testls/releases), verify it against
+`SHA256SUMS`, and put `testls` on your `PATH`:
+
+```bash
+tar xzf testls-v0.1.0-alpha.1-x86_64-unknown-linux-musl.tar.gz
+./testls-v0.1.0-alpha.1-x86_64-unknown-linux-musl/testls example.com
+```
+
+On macOS the binaries are not notarized yet; clear the quarantine flag with
+`xattr -d com.apple.quarantine testls` if Gatekeeper blocks them.
 
 ## Quick Start (planned)
 
