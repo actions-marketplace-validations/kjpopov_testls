@@ -9,6 +9,9 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+testls-data.workspace = true
+testls-probe.workspace = true
+testls-wire.workspace = true
 
 [lints]
 workspace = true

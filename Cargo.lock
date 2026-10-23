@@ -229,6 +229,11 @@ dependencies = [
 [[package]]
 name = "testls-checks"
 version = "0.1.0-alpha.1"
+dependencies = [
+ "testls-data",
+ "testls-probe",
+ "testls-wire",
+]
 
 [[package]]
 name = "testls-data"
