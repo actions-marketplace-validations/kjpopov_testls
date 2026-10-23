@@ -7,7 +7,7 @@ mod trust;
 
 use std::fmt;
 
-pub use certificates::certificate_findings;
+pub use certificates::{CertificateInfo, certificate_findings, describe_certificate};
 pub use ciphers::{cipher_findings, cipher_name, cipher_severity};
 pub use protocols::{protocol_findings, protocol_severity};
 pub use trust::{TrustStore, trust_findings};

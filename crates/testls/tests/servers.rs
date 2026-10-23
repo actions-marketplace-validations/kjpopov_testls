@@ -30,6 +30,9 @@ impl Scan {
     }
 }
 
+/// Test CA that signed the servers' certificate.
+const CA_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/servers/ca.pem");
+
 /// Blocks until `addr` accepts TCP connections; fails after 30 seconds.
 fn wait_for(addr: &str) {
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -69,18 +72,26 @@ fn legacy_server() {
     assert!(s.has("critical TLSv1.2 TLS_DH_anon_WITH_AES_128_CBC_SHA: anonymous"));
     assert!(s.has("medium   TLSv1.0 offered: deprecated (RFC 8996)"));
     assert!(s.has("info     TLSv1.2: server follows the client's cipher order"));
+    assert_eq!(s.line("Certificate"), "Certificate (TLSv1.2)");
+    assert_eq!(s.line("#0"), "#0 CN=localhost");
+    assert_eq!(s.line("names"), "names   localhost, 127.0.0.1");
+    assert!(s.has("high     certificate chain is not trusted: issuer is not a trusted root"));
     assert_eq!(
         s.code, 1,
         "critical findings must fail the default threshold"
     );
 }
 
-/// TLS 1.2+ server with strong suites in server order: expects no findings
-/// even at `--fail-on info`, and exit code 0.
+/// TLS 1.2+ server with strong suites in server order and a certificate
+/// from a trusted CA: expects no findings even at `--fail-on info`, and exit
+/// code 0.
 #[test]
 #[ignore = "needs tests/servers running"]
 fn modern_server() {
-    let s = scan("127.0.0.1:14434", &["--fail-on", "info"]);
+    let s = scan(
+        "127.0.0.1:14434",
+        &["--fail-on", "info", "--ca-file", CA_FILE],
+    );
     assert_eq!(s.line("TLSv1.1 "), "TLSv1.1  not offered");
     assert_eq!(s.line("TLSv1.2 "), "TLSv1.2  offered");
     assert_eq!(s.line("TLSv1.3 "), "TLSv1.3  offered");
@@ -88,9 +99,35 @@ fn modern_server() {
     assert_eq!(s.line("Ciphers TLSv1.3"), "Ciphers TLSv1.3 server order");
     assert!(s.has("0x1302  TLS_AES_256_GCM_SHA384"));
     assert!(s.has("0xcca8  TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256"));
+    assert_eq!(s.line("Certificate"), "Certificate (TLSv1.3)");
+    assert_eq!(s.line("key"), "key     RSA 2048 bits");
     assert_eq!(s.line("Findings"), "Findings");
     assert!(s.stdout.trim_end().ends_with("none"), "{}", s.stdout);
     assert_eq!(s.code, 0);
+}
+
+/// Without the test CA the same server's certificate is untrusted, and an
+/// SNI name it does not cover is a mismatch.
+#[test]
+#[ignore = "needs tests/servers running"]
+fn untrusted_certificate() {
+    let s = scan("127.0.0.1:14434", &["--sni", "example.com"]);
+    assert!(s.has("high     certificate chain is not trusted: issuer is not a trusted root"));
+    assert!(s.has("high     certificate does not cover example.com"));
+    assert_eq!(s.code, 1);
+}
+
+/// An unreadable `--ca-file` is a scan error (exit code 2), reported before
+/// any connection is made.
+#[test]
+fn bad_ca_file_is_scan_error() {
+    let out = Command::new(env!("CARGO_BIN_EXE_testls"))
+        .args(["127.0.0.1:1", "--ca-file", "/nonexistent/ca.pem"])
+        .output()
+        .expect("run testls");
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8(out.stderr).expect("utf-8 output");
+    assert!(stderr.contains("cannot load"), "{stderr}");
 }
 
 /// A closed port must be reported as a scan error (exit code 2). Port 1 on
