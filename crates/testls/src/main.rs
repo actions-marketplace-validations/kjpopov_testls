@@ -72,12 +72,21 @@ async fn resolve(target: &Target) -> std::io::Result<SocketAddr> {
     }
 }
 
+/// Reports whether stdout is a terminal that can render ANSI colour.
+///
+/// On Windows this also turns on virtual terminal processing for the
+/// console; a console that refuses it counts as not colour-capable, so
+/// `--color auto` falls back to plain text there.
+fn colour_terminal() -> bool {
+    std::io::stdout().is_terminal() && anstyle_query::windows::enable_ansi_colors().unwrap_or(true)
+}
+
 /// Runs the scan and maps the outcome to the exit code contract.
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
     let paint = Painter::new(cli.color.enabled(
-        std::io::stdout().is_terminal(),
+        cli.color != ColorChoice::Never && colour_terminal(),
         std::env::var("NO_COLOR").ok().as_deref(),
     ));
     let store = match &cli.ca_file {
