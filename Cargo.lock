@@ -520,6 +520,7 @@ dependencies = [
 name = "testls"
 version = "0.1.0-alpha.1"
 dependencies = [
+ "anstyle-query",
  "clap",
  "testls-checks",
  "testls-probe",
@@ -560,6 +561,9 @@ dependencies = [
 [[package]]
 name = "testls-report"
 version = "0.1.0-alpha.1"
+dependencies = [
+ "testls-checks",
+]
 
 [[package]]
 name = "testls-wire"
