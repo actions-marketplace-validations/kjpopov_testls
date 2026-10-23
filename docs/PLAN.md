@@ -40,16 +40,16 @@ Two connection paths:
 - [x] Workspace skeleton, CI (fmt, clippy, test, MSRV), static musl build
 - [ ] Release workflow (cross-platform binaries on tag)
 - [x] `testls-data`: IANA cipher suite, group, sig-scheme registries → generated Rust tables
-- [ ] `testls-wire`: ClientHello builder (SSLv2-compat, SSLv3, TLS1.0–1.3),
+- [x] `testls-wire`: ClientHello builder (SSLv2-compat, SSLv3, TLS1.0–1.3),
       ServerHello/HelloRetryRequest/Alert parser, extensions (SNI,
       supported_versions, supported_groups, signature_algorithms, key_share)
-- [ ] Protocol detection: SSLv2, SSLv3, TLS 1.0, 1.1, 1.2, 1.3
-- [ ] Cipher enumeration per protocol (iterative removal) + server preference
+- [x] Protocol detection: SSLv2, SSLv3, TLS 1.0, 1.1, 1.2, 1.3
+- [x] Cipher enumeration per protocol (iterative removal) + server preference
 - [ ] Certificate: chain, expiry, hostname/SAN, key type/size, sig algorithm,
       trust against webpki-roots / system roots
 - [ ] Output: text (coloured, TTY-aware) + JSON (versioned schema)
 - [ ] Exit codes: 0 ok, 1 findings ≥ threshold, 2 scan error
-- [ ] Target parsing: host, host:port, URL, IPv4/IPv6, explicit `--sni`
+- [x] Target parsing: host, host:port, URL, IPv4/IPv6, explicit `--sni`
 - [ ] Integration tests against local test servers (see Testing)
 
 ### v0.2 — Key exchange, headers, revocation
