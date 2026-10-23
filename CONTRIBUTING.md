@@ -36,6 +36,15 @@ When preparing a change:
 - document user-visible changes when relevant
 - ensure the project still builds and tests cleanly
 
+Scanner changes should also pass the integration tests against local servers
+(podman or docker):
+
+```sh
+podman compose -f tests/servers/compose.yaml up -d --build
+cargo test -p testls --test servers -- --ignored
+podman compose -f tests/servers/compose.yaml down
+```
+
 ### 3. Coding expectations
 
 - Write idiomatic Rust

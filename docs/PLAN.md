@@ -50,7 +50,7 @@ Two connection paths:
 - [ ] Output: text (coloured, TTY-aware) + JSON (versioned schema)
 - [x] Exit codes: 0 ok, 1 findings ≥ `--fail-on` (default `high`), 2 scan error
 - [x] Target parsing: host, host:port, URL, IPv4/IPv6, explicit `--sni`
-- [ ] Integration tests against local test servers (see Testing)
+- [x] Integration tests against local test servers (see Testing)
 
 ### v0.2 — Key exchange, headers, revocation
 - Supported groups incl. X25519MLKEM768, ECDHE curve list, DH param size
@@ -74,8 +74,10 @@ Two connection paths:
 
 - Unit tests + `proptest` round-trips for the wire codec
 - `cargo-fuzz` targets for all parsers (ServerHello, Certificate, Alert)
-- Integration: docker-compose with nginx/openssl builds configured for
-  specific protocol/cipher sets; golden JSON snapshots (`insta`)
+- Integration: `tests/servers/compose.yaml` runs `openssl s_server`
+  containers with specific protocol/cipher sets (podman or docker);
+  `crates/testls/tests/servers.rs` scans them (`--ignored`, own CI job).
+  Golden JSON snapshots (`insta`) once JSON output lands
 - Opt-in live tests against badssl.com (not in default CI)
 
 ## Open questions
