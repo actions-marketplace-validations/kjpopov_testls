@@ -2,6 +2,7 @@
 
 mod target;
 
+use std::io::IsTerminal as _;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -11,12 +12,13 @@ use clap::Parser;
 use clap::builder::TypedValueParser as _;
 use testls_checks::{
     Finding, Severity, TrustStore, certificate_findings, cipher_findings, cipher_name,
-    describe_certificate, protocol_findings, trust_findings,
+    cipher_severity, describe_certificate, protocol_findings, protocol_severity, trust_findings,
 };
 use testls_probe::{
     CipherOrder, ProtocolSupport, Transport, detect_protocols, enumerate_ciphers,
     fetch_certificates,
 };
+use testls_report::{ColorChoice, Painter};
 use testls_wire::ProtocolVersion;
 
 use target::{Host, Target};
@@ -50,6 +52,13 @@ struct Cli {
     /// bundled Mozilla roots.
     #[arg(long, value_name = "FILE")]
     ca_file: Option<PathBuf>,
+
+    /// Colour the output: `auto` colours only on a terminal when `NO_COLOR`
+    /// is unset.
+    #[arg(long, default_value_t = ColorChoice::Auto, value_name = "WHEN",
+          value_parser = clap::builder::PossibleValuesParser::new(ColorChoice::ALL.map(ColorChoice::as_str))
+              .map(|s| s.parse::<ColorChoice>().expect("listed value")))]
+    color: ColorChoice,
 }
 
 /// Resolves the target to the first socket address it maps to.
@@ -67,6 +76,10 @@ async fn resolve(target: &Target) -> std::io::Result<SocketAddr> {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
+    let paint = Painter::new(cli.color.enabled(
+        std::io::stdout().is_terminal(),
+        std::env::var("NO_COLOR").ok().as_deref(),
+    ));
     let store = match &cli.ca_file {
         Some(path) => match std::fs::read(path)
             .map_err(|e| e.to_string())
@@ -96,7 +109,7 @@ async fn main() -> ExitCode {
     println!("Target: {} ({addr})", cli.target);
     println!("SNI:    {}", sni.unwrap_or("(none)"));
     println!();
-    println!("Protocols");
+    println!("{}", paint.heading("Protocols"));
     let protocols = detect_protocols(&transport, sni).await;
     if protocols
         .iter()
@@ -108,7 +121,7 @@ async fn main() -> ExitCode {
     let mut findings = protocol_findings(&protocols);
     for r in &protocols {
         let status = match &r.support {
-            ProtocolSupport::Supported => "offered".to_owned(),
+            ProtocolSupport::Supported => paint.severity(protocol_severity(r.version).0, "offered"),
             ProtocolSupport::NotSupported => "not offered".to_owned(),
             ProtocolSupport::Error(e) => format!("error: {e}"),
         };
@@ -120,43 +133,23 @@ async fn main() -> ExitCode {
             continue;
         }
         println!();
-        match enumerate_ciphers(&transport, r.version, sni).await {
-            Ok(c) => {
-                let order = match c.order {
-                    CipherOrder::Server => "server order",
-                    CipherOrder::Client => "client order",
-                    CipherOrder::NotApplicable => "",
-                };
-                println!("Ciphers {} {order}", r.version);
-                for &id in &c.suites {
-                    println!("  {}", cipher_label(r.version, id));
-                }
-                findings.extend(cipher_findings(&c));
-            }
-            Err(e) => {
-                println!("Ciphers {}: error: {e}", r.version);
-                findings.push(Finding::new(
-                    "cipher.error",
-                    Severity::Info,
-                    format!("{} ciphers could not be enumerated: {e}", r.version),
-                ));
-            }
-        }
+        findings.extend(cipher_section(&transport, r.version, sni, paint).await);
     }
 
     println!();
     let host = sni.map_or_else(|| addr.ip().to_string(), str::to_owned);
-    findings.extend(certificate_section(&transport, sni, &host, &store).await);
+    findings.extend(certificate_section(&transport, sni, &host, &store, paint).await);
 
     findings.retain(|f| f.severity > Severity::Ok);
     findings.sort_by_key(|f| std::cmp::Reverse(f.severity));
     println!();
-    println!("Findings");
+    println!("{}", paint.heading("Findings"));
     if findings.is_empty() {
-        println!("  none");
+        println!("  {}", paint.severity(Severity::Ok, "none"));
     }
     for f in &findings {
-        println!("  {:<8} {}", f.severity.as_str(), f.message);
+        let label = format!("{:<8}", f.severity.as_str());
+        println!("  {} {}", paint.severity(f.severity, &label), f.message);
     }
 
     if findings.iter().any(|f| f.severity >= cli.fail_on) {
@@ -166,19 +159,57 @@ async fn main() -> ExitCode {
     }
 }
 
+/// Enumerates and prints the cipher suites of one protocol `version`,
+/// coloured by severity, returning their findings.
+async fn cipher_section(
+    transport: &Transport,
+    version: ProtocolVersion,
+    sni: Option<&str>,
+    paint: Painter,
+) -> Vec<Finding> {
+    match enumerate_ciphers(transport, version, sni).await {
+        Ok(c) => {
+            let order = match c.order {
+                CipherOrder::Server => "server order",
+                CipherOrder::Client => "client order",
+                CipherOrder::NotApplicable => "",
+            };
+            println!("{} {order}", paint.heading(&format!("Ciphers {version}")));
+            for &id in &c.suites {
+                let (severity, _, _) = cipher_severity(version, id);
+                println!("  {}", paint.severity(severity, &cipher_label(version, id)));
+            }
+            cipher_findings(&c)
+        }
+        Err(e) => {
+            println!(
+                "{}: error: {e}",
+                paint.heading(&format!("Ciphers {version}"))
+            );
+            vec![Finding::new(
+                "cipher.error",
+                Severity::Info,
+                format!("{version} ciphers could not be enumerated: {e}"),
+            )]
+        }
+    }
+}
+
 /// Fetches and prints the certificate chain, returning its findings.
 ///
-/// The leaf is checked against `host`, the SNI name or the target IP.
+/// The leaf is checked against `host`, the SNI name or the target IP;
+/// headings are styled with `paint`.
 async fn certificate_section(
     transport: &Transport,
     sni: Option<&str>,
     host: &str,
     store: &TrustStore,
+    paint: Painter,
 ) -> Vec<Finding> {
     let chain = match fetch_certificates(transport, sni).await {
         Ok(chain) => chain,
         Err(e) => {
-            println!("Certificate: error: {e}");
+            println!("{}: error: {e}", paint.heading("Certificate"));
             return vec![Finding::new(
                 "cert.error",
                 Severity::Info,
@@ -186,7 +217,10 @@ async fn certificate_section(
             )];
         }
     };
-    println!("Certificate ({})", chain.version);
+    println!(
+        "{}",
+        paint.heading(&format!("Certificate ({})", chain.version))
+    );
     for (position, der) in chain.certificates.iter().enumerate() {
         match describe_certificate(der) {
             Ok(info) => {

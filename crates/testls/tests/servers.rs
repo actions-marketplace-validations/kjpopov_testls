@@ -106,6 +106,36 @@ fn modern_server() {
     assert_eq!(s.code, 0);
 }
 
+/// `--color` default (`auto`) leaves piped output plain; `always` colours
+/// headings and severities; `never` stays plain.
+#[test]
+#[ignore = "needs tests/servers running"]
+fn color_modes() {
+    let plain = scan("127.0.0.1:14433", &[]);
+    assert!(!plain.has("\x1b["), "{}", plain.stdout);
+
+    let coloured = scan("127.0.0.1:14433", &["--color", "always"]);
+    assert!(
+        coloured.has("\x1b[1mProtocols\x1b[0m"),
+        "{}",
+        coloured.stdout
+    );
+    assert!(
+        coloured.has("\x1b[33moffered\x1b[0m"),
+        "{}",
+        coloured.stdout
+    );
+    assert!(
+        coloured.has("\x1b[1;31mcritical\x1b[0m"),
+        "{}",
+        coloured.stdout
+    );
+    assert_eq!(coloured.code, plain.code);
+
+    let never = scan("127.0.0.1:14433", &["--color", "never"]);
+    assert!(!never.has("\x1b["), "{}", never.stdout);
+}
+
 /// Without the test CA the same server's certificate is untrusted, and an
 /// SNI name it does not cover is a mismatch.
 #[test]

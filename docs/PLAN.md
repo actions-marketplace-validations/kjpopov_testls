@@ -48,7 +48,8 @@ Two connection paths:
 - [x] Certificate: chain, expiry, hostname/SAN, key type/size, sig algorithm,
       trust against webpki-roots or a `--ca-file` bundle
 - [ ] `--system-roots`: trust the operating system's root store
-- [ ] Output: text (coloured, TTY-aware) + JSON (versioned schema)
+- [x] Output: coloured, TTY-aware text (`--color auto|always|never`)
+- [ ] Output: JSON (versioned schema)
 - [x] Exit codes: 0 ok, 1 findings ≥ `--fail-on` (default `high`), 2 scan error
 - [x] Target parsing: host, host:port, URL, IPv4/IPv6, explicit `--sni`
 - [x] Integration tests against local test servers (see Testing)
@@ -110,3 +111,4 @@ Two connection paths:
 | 14 | rustls with the `ring` crypto provider (no `aws-lc-rs`) | Simple cross-builds for static musl and Windows: no cmake/nasm toolchain |
 | 15 | Trust is checked with `rustls-webpki` path building, at a time clamped into the leaf's validity period | Same verifier as rustls clients; expiry is reported once, by the certificate checks |
 | 16 | `--ca-file` replaces the bundled roots with a PEM bundle; the leaf is matched against the SNI name, else the target IP | Lets private PKIs and the integration tests get a clean trust result |
+| 17 | Colour defaults to `--color auto`: on for terminals, off when piped or `NO_COLOR` is set; hand-written ANSI codes, no colour crate | Same convention as cargo/git/ripgrep; logs and files stay clean; no new dependencies |
