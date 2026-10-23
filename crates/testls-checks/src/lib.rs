@@ -3,12 +3,14 @@
 mod certificates;
 mod ciphers;
 mod protocols;
+mod trust;
 
 use std::fmt;
 
 pub use certificates::certificate_findings;
 pub use ciphers::{cipher_findings, cipher_name, cipher_severity};
 pub use protocols::{protocol_findings, protocol_severity};
+pub use trust::{TrustStore, trust_findings};
 
 /// How serious a finding is. Ordered from least to most severe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
