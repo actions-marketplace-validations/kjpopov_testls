@@ -2,51 +2,57 @@
 
 > `$ test ls` does nothing. `testls` protects your web servers.
 
-TLS/SSL scanner for the web era. A Rust-native reimplementation of
-[testssl.sh](https://testssl.sh) with a built-in web service and browser-based UI.
-Single static binary. No bash. No subprocess.
+TLS/SSL scanner for the web era, written in Rust and inspired by
+[testssl.sh](https://testssl.sh). Single static binary. No bash. No subprocess.
+
+> **Status: early development.** Nothing below is implemented yet; the feature
+> list describes the planned scope. See [docs/PLAN.md](docs/PLAN.md).
 
 ## Why
 
 - Rust — memory-safe, fast, and packaged as a single static binary
-- Web service — built-in HTTP server with a REST API and streaming results
-- Browser component — inspect TLS behavior from the browser, not only the CLI
-- Drop-in parity — same checks, same output format, and similar exit codes as testssl.sh
+- Own handshake engine — probes legacy and modern protocols (SSLv2–TLS 1.3)
+  without linking OpenSSL
+- Web service (planned) — built-in HTTP server with a REST API, streaming
+  results, and an embedded browser UI
 
-## Quick Start
+## Quick Start (planned)
 
 ```bash
 # CLI
-testls https://example.com
+testls example.com
 
-# Web service (serves UI + API on :8443)
-testls --serve --port 8443
+# Web service (UI + API, binds to localhost by default)
+testls serve --port 8080
 ```
 
-## Features
+## Planned Features
 
-| Area | Details |
-| --- | --- |
-| Protocol detection | TLS 1.0–1.3, DTLS, STARTTLS |
-| Cipher & curve audit | Full cipher suite enumeration, weak/obsolete flags |
-| Certificate checks | Expiry, chain, SAN, revocation (OCSP/CRL) |
-| HSTS & headers | Strict-Transport-Security, preload, header hygiene |
-| Key exchange | ECDHE, RSA, X25519, post-quantum (ML-KEM) |
-| Grading | A+–M scale, compatible with testssl.sh output |
-| API | JSON + SSE streaming for CI/CD integration |
-| Browser | In-browser TLS inspection panel |
+| Area | Details | Target |
+| --- | --- | --- |
+| Protocol detection | SSLv2, SSLv3, TLS 1.0–1.3 | v0.1 |
+| Cipher audit | Per-protocol cipher suite enumeration, weak/obsolete flags | v0.1 |
+| Certificate checks | Expiry, chain, SAN/hostname, key size, signature algorithm | v0.1 |
+| Output | Human-readable text and JSON, CI-friendly exit codes | v0.1 |
+| Key exchange | Supported groups (X25519, ECDHE curves, ML-KEM hybrids) | v0.2 |
+| HTTP headers | HSTS, preload, header hygiene | v0.2 |
+| Revocation | OCSP stapling, OCSP/CRL | v0.2 |
+| STARTTLS | SMTP, IMAP, POP3, … | v0.3 |
+| Vulnerabilities | Heartbleed, ROBOT, POODLE, … | v0.3+ |
+| Grading | Own grading model | v0.3+ |
+| Web service | REST + SSE API and embedded web UI | v0.4 |
 
 ## Architecture
 
 ```text
 ┌─────────────────────────────────────────────┐
-│  Browser (WebExtension)                     │
-│  └─ in-page TLS inspection panel            │
+│  Web UI (embedded SPA)                      │
 └──────────────────┬──────────────────────────┘
-                   │ WebSocket / SSE
+                   │ REST / SSE
 ┌──────────────────▼──────────────────────────┐
 │  testls (Rust, single binary)               │
-│  ├─ TLS engine (rustls + native TLS)        │
+│  ├─ Probe engine (raw ClientHello codec)    │
+│  ├─ Full-handshake client (rustls)          │
 │  ├─ Check runner (async, parallel)          │
 │  ├─ HTTP server (axum)                      │
 │  └─ CLI (clap)                              │
@@ -56,10 +62,17 @@ testls --serve --port 8443
 ## Development
 
 ```bash
-git clone https://github.com/you/testls
+git clone https://github.com/kjpopov/testls
+cd testls
 cargo build --release
 cargo test
 ```
+
+## Responsible Use
+
+Only scan systems you own or are authorized to test. The web service binds to
+localhost by default and is intended as a local or internal tool, not a public
+scanning service.
 
 ## Methodology
 
@@ -71,25 +84,10 @@ for our AI-assistance disclosure policy.
 ## License
 
 This project is dual-licensed under the [MIT License](LICENSE-MIT) or the
-[Apache License 2.0](LICENSE-APACHE).
-
-The package metadata declares:
-
-```toml
-[package]
-license = "MIT OR Apache-2.0"
-```
+[Apache License 2.0](LICENSE-APACHE), at your option.
 
 ## Credits
 
 Inspired by [testssl.sh](https://testssl.sh) by Dirk Wetter.
-`testls` is an independent reimplementation, not a fork.
-
----
-
-A few notes:
-
-- Swap `you` in the clone URL for your GitHub username.
-- This project is intentionally positioned as a practical TLS scanner for modern web infrastructure.
-- The methodology section is deliberately low-key for transparency without turning the project into an AI story.
-
+`testls` is an independent, clean-room implementation, not a fork, and does
+not reuse testssl.sh code or data (testssl.sh is GPLv2).

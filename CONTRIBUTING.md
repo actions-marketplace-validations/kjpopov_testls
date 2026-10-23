@@ -8,7 +8,7 @@ This project is intentionally lean, but we welcome bug reports, fixes, tests, an
 
 `testls` aims to provide a fast, Rust-native TLS/SSL scanner with:
 
-- a CLI experience similar to `testssl.sh`
+- a CLI experience inspired by `testssl.sh` (no output compatibility promise)
 - a built-in web service and browser UI
 - a single static binary deployment model
 - clear, reviewable code and maintainable test coverage
@@ -44,10 +44,17 @@ When preparing a change:
 - Preserve the project’s compatibility and operational goals
 - Avoid adding unnecessary dependencies or shelling out to external tools unless clearly required
 
+### 4. Clean-room rule
+
+`testls` is MIT/Apache-2.0 licensed; `testssl.sh` is GPLv2. Do not copy code,
+cipher tables, client-simulation data, or other content from `testssl.sh`.
+Derive protocol data from primary sources (IANA registries, RFCs) and cite
+them in code comments or data files.
+
 ## Development setup
 
 ```bash
-git clone https://github.com/you/testls
+git clone https://github.com/kjpopov/testls
 cd testls
 cargo build
 cargo test
@@ -82,7 +89,9 @@ Please keep discussions constructive and respectful. We aim to maintain a welcom
 
 ## License
 
-By contributing to `testls`, you agree that your contributions will be licensed under the project’s chosen license.
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in `testls` shall be dual-licensed under the MIT License and the
+Apache License 2.0, without any additional terms or conditions.
 
 ---
 
