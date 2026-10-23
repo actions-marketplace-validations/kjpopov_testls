@@ -48,7 +48,7 @@ Two connection paths:
 - [ ] Certificate: chain, expiry, hostname/SAN, key type/size, sig algorithm,
       trust against webpki-roots / system roots
 - [ ] Output: text (coloured, TTY-aware) + JSON (versioned schema)
-- [ ] Exit codes: 0 ok, 1 findings ≥ threshold, 2 scan error
+- [x] Exit codes: 0 ok, 1 findings ≥ `--fail-on` (default `high`), 2 scan error
 - [x] Target parsing: host, host:port, URL, IPv4/IPv6, explicit `--sni`
 - [ ] Integration tests against local test servers (see Testing)
 
@@ -83,7 +83,6 @@ Two connection paths:
 - Wire codec: hand-rolled vs. building on an existing parser crate
   (e.g. `tls-parser`) for the read side?
 - JSON report schema: shape, versioning, stability guarantees
-- Severity model: levels and how they map to exit codes / `--fail-on`
 - Default scan profile: what runs without flags, and how long it may take
 - Rate limiting / politeness defaults towards scanned servers
 - STARTTLS / vulnerability prioritization for v0.3
@@ -104,3 +103,4 @@ Two connection paths:
 | 10 | Release targets: Linux x86_64/aarch64 musl, macOS x86_64/arm64, Windows x86_64 | Static Linux; self-contained elsewhere |
 | 11 | Trust roots: webpki-roots default, `--system-roots` opt-in | Reproducible results across machines |
 | 12 | GitHub + GitHub Actions | Existing repo host |
+| 13 | Severity levels ok < info < low < medium < high < critical; `--fail-on` defaults to `high` | Weak-but-common configs (CBC, no PFS) should not fail CI by default |

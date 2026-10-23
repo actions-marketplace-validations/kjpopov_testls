@@ -7,6 +7,8 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use clap::Parser;
+use clap::builder::TypedValueParser as _;
+use testls_checks::{Finding, Severity, cipher_findings, cipher_name, protocol_findings};
 use testls_probe::{CipherOrder, ProtocolSupport, Transport, detect_protocols, enumerate_ciphers};
 use testls_wire::ProtocolVersion;
 
@@ -30,6 +32,12 @@ struct Cli {
     /// Per-probe read timeout in seconds.
     #[arg(long, default_value_t = 10, value_name = "SECS")]
     read_timeout: u64,
+
+    /// Exit with status 1 if any finding is at least this severe.
+    #[arg(long, default_value_t = Severity::High, value_name = "SEVERITY",
+          value_parser = clap::builder::PossibleValuesParser::new(Severity::ALL.map(Severity::as_str))
+              .map(|s| s.parse::<Severity>().expect("listed value")))]
+    fail_on: Severity,
 }
 
 async fn resolve(target: &Target) -> std::io::Result<SocketAddr> {
@@ -63,6 +71,14 @@ async fn main() -> ExitCode {
     println!();
     println!("Protocols");
     let protocols = detect_protocols(&transport, sni).await;
+    if protocols
+        .iter()
+        .all(|r| matches!(r.support, ProtocolSupport::Error(_)))
+    {
+        eprintln!("error: no protocol could be tested");
+        return ExitCode::from(2);
+    }
+    let mut findings = protocol_findings(&protocols);
     for r in &protocols {
         let status = match &r.support {
             ProtocolSupport::Supported => "offered".to_owned(),
@@ -85,33 +101,45 @@ async fn main() -> ExitCode {
                     CipherOrder::NotApplicable => "",
                 };
                 println!("Ciphers {} {order}", r.version);
-                for id in c.suites {
+                for &id in &c.suites {
                     println!("  {}", cipher_label(r.version, id));
                 }
+                findings.extend(cipher_findings(&c));
             }
-            Err(e) => println!("Ciphers {}: error: {e}", r.version),
+            Err(e) => {
+                println!("Ciphers {}: error: {e}", r.version);
+                findings.push(Finding::new(
+                    "cipher.error",
+                    Severity::Info,
+                    format!("{} ciphers could not be enumerated: {e}", r.version),
+                ));
+            }
         }
     }
-    ExitCode::SUCCESS
+
+    findings.retain(|f| f.severity > Severity::Ok);
+    findings.sort_by_key(|f| std::cmp::Reverse(f.severity));
+    println!();
+    println!("Findings");
+    if findings.is_empty() {
+        println!("  none");
+    }
+    for f in &findings {
+        println!("  {:<8} {}", f.severity.as_str(), f.message);
+    }
+
+    if findings.iter().any(|f| f.severity >= cli.fail_on) {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 fn cipher_label(version: ProtocolVersion, id: u32) -> String {
+    let name = cipher_name(version, id);
     if version == ProtocolVersion::SSL2 {
-        let name = match id {
-            0x01_0080 => "SSL_CK_RC4_128_WITH_MD5",
-            0x02_0080 => "SSL_CK_RC4_128_EXPORT40_WITH_MD5",
-            0x03_0080 => "SSL_CK_RC2_128_CBC_WITH_MD5",
-            0x04_0080 => "SSL_CK_RC2_128_CBC_EXPORT40_WITH_MD5",
-            0x05_0080 => "SSL_CK_IDEA_128_CBC_WITH_MD5",
-            0x06_0040 => "SSL_CK_DES_64_CBC_WITH_MD5",
-            0x07_00c0 => "SSL_CK_DES_192_EDE3_CBC_WITH_MD5",
-            _ => "unknown",
-        };
-        return format!("0x{id:06x}  {name}");
+        format!("0x{id:06x}  {name}")
+    } else {
+        format!("0x{id:04x}  {name}")
     }
-    let name = u16::try_from(id)
-        .ok()
-        .and_then(testls_data::cipher_suite)
-        .map_or("unknown", |c| c.name);
-    format!("0x{id:04x}  {name}")
 }

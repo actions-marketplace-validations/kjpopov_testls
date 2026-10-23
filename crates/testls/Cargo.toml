@@ -11,7 +11,6 @@ authors.workspace = true
 [dependencies]
 clap = { workspace = true }
 testls-checks.workspace = true
-testls-data.workspace = true
 testls-probe.workspace = true
 testls-report.workspace = true
 testls-wire.workspace = true

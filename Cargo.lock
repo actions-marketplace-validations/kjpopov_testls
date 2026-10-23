@@ -219,7 +219,6 @@ version = "0.1.0-alpha.1"
 dependencies = [
  "clap",
  "testls-checks",
- "testls-data",
  "testls-probe",
  "testls-report",
  "testls-wire",
