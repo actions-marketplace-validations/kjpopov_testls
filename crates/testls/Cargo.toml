@@ -1,0 +1,19 @@
+[package]
+name = "testls"
+description = "TLS/SSL scanner for the web era, inspired by testssl.sh."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+testls-checks.workspace = true
+testls-data.workspace = true
+testls-probe.workspace = true
+testls-report.workspace = true
+testls-wire.workspace = true
+
+[lints]
+workspace = true
