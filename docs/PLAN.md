@@ -45,8 +45,9 @@ Two connection paths:
       supported_versions, supported_groups, signature_algorithms, key_share)
 - [x] Protocol detection: SSLv2, SSLv3, TLS 1.0, 1.1, 1.2, 1.3
 - [x] Cipher enumeration per protocol (iterative removal) + server preference
-- [ ] Certificate: chain, expiry, hostname/SAN, key type/size, sig algorithm,
-      trust against webpki-roots / system roots
+- [x] Certificate: chain, expiry, hostname/SAN, key type/size, sig algorithm,
+      trust against webpki-roots or a `--ca-file` bundle
+- [ ] `--system-roots`: trust the operating system's root store
 - [ ] Output: text (coloured, TTY-aware) + JSON (versioned schema)
 - [x] Exit codes: 0 ok, 1 findings ≥ `--fail-on` (default `high`), 2 scan error
 - [x] Target parsing: host, host:port, URL, IPv4/IPv6, explicit `--sni`
@@ -108,3 +109,4 @@ Two connection paths:
 | 13 | Severity levels ok < info < low < medium < high < critical; `--fail-on` defaults to `high` | Weak-but-common configs (CBC, no PFS) should not fail CI by default |
 | 14 | rustls with the `ring` crypto provider (no `aws-lc-rs`) | Simple cross-builds for static musl and Windows: no cmake/nasm toolchain |
 | 15 | Trust is checked with `rustls-webpki` path building, at a time clamped into the leaf's validity period | Same verifier as rustls clients; expiry is reported once, by the certificate checks |
+| 16 | `--ca-file` replaces the bundled roots with a PEM bundle; the leaf is matched against the SNI name, else the target IP | Lets private PKIs and the integration tests get a clean trust result |

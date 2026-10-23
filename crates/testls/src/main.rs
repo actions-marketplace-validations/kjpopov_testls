@@ -3,13 +3,20 @@
 mod target;
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use clap::builder::TypedValueParser as _;
-use testls_checks::{Finding, Severity, cipher_findings, cipher_name, protocol_findings};
-use testls_probe::{CipherOrder, ProtocolSupport, Transport, detect_protocols, enumerate_ciphers};
+use testls_checks::{
+    Finding, Severity, TrustStore, certificate_findings, cipher_findings, cipher_name,
+    describe_certificate, protocol_findings, trust_findings,
+};
+use testls_probe::{
+    CipherOrder, ProtocolSupport, Transport, detect_protocols, enumerate_ciphers,
+    fetch_certificates,
+};
 use testls_wire::ProtocolVersion;
 
 use target::{Host, Target};
@@ -38,8 +45,14 @@ struct Cli {
           value_parser = clap::builder::PossibleValuesParser::new(Severity::ALL.map(Severity::as_str))
               .map(|s| s.parse::<Severity>().expect("listed value")))]
     fail_on: Severity,
+
+    /// Trust only the root certificates in this PEM file instead of the
+    /// bundled Mozilla roots.
+    #[arg(long, value_name = "FILE")]
+    ca_file: Option<PathBuf>,
 }
 
+/// Resolves the target to the first socket address it maps to.
 async fn resolve(target: &Target) -> std::io::Result<SocketAddr> {
     match &target.host {
         Host::Ip(ip) => Ok(SocketAddr::new(*ip, target.port)),
@@ -50,9 +63,23 @@ async fn resolve(target: &Target) -> std::io::Result<SocketAddr> {
     }
 }
 
+/// Runs the scan and maps the outcome to the exit code contract.
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
+    let store = match &cli.ca_file {
+        Some(path) => match std::fs::read(path)
+            .map_err(|e| e.to_string())
+            .and_then(|pem| TrustStore::from_pem(&pem))
+        {
+            Ok(store) => store,
+            Err(e) => {
+                eprintln!("error: cannot load {}: {e}", path.display());
+                return ExitCode::from(2);
+            }
+        },
+        None => TrustStore::webpki(),
+    };
     let addr = match resolve(&cli.target).await {
         Ok(a) => a,
         Err(e) => {
@@ -117,6 +144,10 @@ async fn main() -> ExitCode {
         }
     }
 
+    println!();
+    let host = sni.map_or_else(|| addr.ip().to_string(), str::to_owned);
+    findings.extend(certificate_section(&transport, sni, &host, &store).await);
+
     findings.retain(|f| f.severity > Severity::Ok);
     findings.sort_by_key(|f| std::cmp::Reverse(f.severity));
     println!();
@@ -135,6 +166,52 @@ async fn main() -> ExitCode {
     }
 }
 
+/// Fetches and prints the certificate chain, returning its findings.
+///
+/// The leaf is checked against `host`, the SNI name or the target IP.
+async fn certificate_section(
+    transport: &Transport,
+    sni: Option<&str>,
+    host: &str,
+    store: &TrustStore,
+) -> Vec<Finding> {
+    let chain = match fetch_certificates(transport, sni).await {
+        Ok(chain) => chain,
+        Err(e) => {
+            println!("Certificate: error: {e}");
+            return vec![Finding::new(
+                "cert.error",
+                Severity::Info,
+                format!("certificate could not be retrieved: {e}"),
+            )];
+        }
+    };
+    println!("Certificate ({})", chain.version);
+    for (position, der) in chain.certificates.iter().enumerate() {
+        match describe_certificate(der) {
+            Ok(info) => {
+                println!("  #{position} {}", info.subject);
+                println!("     issuer  {}", info.issuer);
+                println!("     valid   {} to {}", info.not_before, info.not_after);
+                if !info.names.is_empty() {
+                    println!("     names   {}", info.names.join(", "));
+                }
+                println!("     key     {}", info.key);
+            }
+            Err(e) => println!("  #{position} cannot be parsed: {e}"),
+        }
+    }
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_secs()).ok())
+        .unwrap_or(i64::MAX);
+    let mut findings = certificate_findings(&chain.certificates, Some(host), now);
+    findings.extend(trust_findings(&chain.certificates, now, store));
+    findings
+}
+
+/// Formats a cipher suite id and name for the cipher listing.
 fn cipher_label(version: ProtocolVersion, id: u32) -> String {
     let name = cipher_name(version, id);
     if version == ProtocolVersion::SSL2 {
