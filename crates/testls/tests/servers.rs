@@ -8,12 +8,14 @@ use std::process::Command;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
+/// Exit code and captured stdout of one `testls` run.
 struct Scan {
     code: i32,
     stdout: String,
 }
 
 impl Scan {
+    /// Returns the first trimmed stdout line starting with `prefix`; panics if none.
     fn line(&self, prefix: &str) -> &str {
         self.stdout
             .lines()
@@ -22,11 +24,13 @@ impl Scan {
             .unwrap_or_else(|| panic!("no line starting with {prefix:?} in:\n{}", self.stdout))
     }
 
+    /// Reports whether stdout contains `needle` anywhere.
     fn has(&self, needle: &str) -> bool {
         self.stdout.contains(needle)
     }
 }
 
+/// Blocks until `addr` accepts TCP connections; fails after 30 seconds.
 fn wait_for(addr: &str) {
     let deadline = Instant::now() + Duration::from_secs(30);
     while TcpStream::connect(addr).is_err() {
@@ -35,6 +39,7 @@ fn wait_for(addr: &str) {
     }
 }
 
+/// Waits for the server at `addr`, then runs the `testls` binary against it.
 fn scan(addr: &str, args: &[&str]) -> Scan {
     wait_for(addr);
     let out = Command::new(env!("CARGO_BIN_EXE_testls"))
@@ -48,6 +53,8 @@ fn scan(addr: &str, args: &[&str]) -> Scan {
     }
 }
 
+/// TLS 1.0–1.2 server with every cipher enabled: expects deprecated
+/// protocols, client cipher order, an anonymous suite, and exit code 1.
 #[test]
 #[ignore = "needs tests/servers running"]
 fn legacy_server() {
@@ -68,6 +75,8 @@ fn legacy_server() {
     );
 }
 
+/// TLS 1.2+ server with strong suites in server order: expects no findings
+/// even at `--fail-on info`, and exit code 0.
 #[test]
 #[ignore = "needs tests/servers running"]
 fn modern_server() {
@@ -84,9 +93,10 @@ fn modern_server() {
     assert_eq!(s.code, 0);
 }
 
+/// A closed port must be reported as a scan error (exit code 2). Port 1 on
+/// loopback is closed, so no server is needed.
 #[test]
 fn unreachable_is_scan_error() {
-    // Port 1 on loopback is closed, so no server is needed.
     let out = Command::new(env!("CARGO_BIN_EXE_testls"))
         .args(["127.0.0.1:1", "--connect-timeout", "2"])
         .output()
