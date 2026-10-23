@@ -9,7 +9,9 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+testls-data.workspace = true
 testls-wire.workspace = true
+getrandom.workspace = true
 tokio = { workspace = true, features = ["net", "io-util", "time"] }
 
 [dev-dependencies]
