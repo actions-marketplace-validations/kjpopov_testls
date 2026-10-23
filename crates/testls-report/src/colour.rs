@@ -89,7 +89,7 @@ pub struct Painter {
 impl Painter {
     /// Creates a painter that colours only if `enabled`.
     #[must_use]
-    pub fn new(enabled: bool) -> Self {
+    pub const fn new(enabled: bool) -> Self {
         Self { enabled }
     }
 

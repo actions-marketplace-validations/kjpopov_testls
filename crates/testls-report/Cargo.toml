@@ -10,6 +10,8 @@ authors.workspace = true
 
 [dependencies]
 testls-checks.workspace = true
+testls-probe.workspace = true
+testls-wire.workspace = true
 
 [lints]
 workspace = true
