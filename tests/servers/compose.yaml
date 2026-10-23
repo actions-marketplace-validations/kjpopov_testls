@@ -1,0 +1,21 @@
+# Local TLS servers for the integration tests in crates/testls/tests/servers.rs.
+#
+#   podman compose -f tests/servers/compose.yaml up -d --build
+#   cargo test -p testls --test servers -- --ignored
+#   podman compose -f tests/servers/compose.yaml down
+#
+# `docker compose` works the same way.
+services:
+  # TLS 1.0-1.2, every cipher OpenSSL still has, client cipher order.
+  legacy:
+    build: .
+    image: localhost/testls-server
+    command: ["-cipher", "ALL:@SECLEVEL=0", "-min_protocol", "TLSv1", "-max_protocol", "TLSv1.2"]
+    ports: ["127.0.0.1:14433:4433"]
+
+  # TLS 1.2-1.3, ECDHE with AEAD only, server cipher order.
+  modern:
+    build: .
+    image: localhost/testls-server
+    command: ["-serverpref", "-min_protocol", "TLSv1.2", "-cipher", "ECDHE+AESGCM:ECDHE+CHACHA20"]
+    ports: ["127.0.0.1:14434:4433"]
