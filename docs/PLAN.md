@@ -38,7 +38,7 @@ Two connection paths:
 
 ### v0.1 — Core scanner CLI
 - [x] Workspace skeleton, CI (fmt, clippy, test, MSRV), static musl build
-- [ ] Release workflow (cross-platform binaries on tag)
+- [x] Release workflow (cross-platform binaries on tag)
 - [x] `testls-data`: IANA cipher suite, group, sig-scheme registries → generated Rust tables
 - [x] `testls-wire`: ClientHello builder (SSLv2-compat, SSLv3, TLS1.0–1.3),
       ServerHello/HelloRetryRequest/Alert parser, extensions (SNI,
