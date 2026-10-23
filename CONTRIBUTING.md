@@ -1,0 +1,89 @@
+# Contributing to testls
+
+Thanks for your interest in improving `testls`.
+
+This project is intentionally lean, but we welcome bug reports, fixes, tests, and thoughtful feature ideas.
+
+## Project goals
+
+`testls` aims to provide a fast, Rust-native TLS/SSL scanner with:
+
+- a CLI experience similar to `testssl.sh`
+- a built-in web service and browser UI
+- a single static binary deployment model
+- clear, reviewable code and maintainable test coverage
+
+## How to contribute
+
+### 1. Report an issue
+
+Before opening a bug report or feature request, please:
+
+- check whether the issue already exists
+- include the exact command, input, and observed output
+- describe the expected behavior
+- note the platform, Rust version, and environment where it fails
+
+Please keep issue reports actionable and specific. Good reproduction steps are very helpful.
+
+### 2. Open a pull request
+
+When preparing a change:
+
+- keep the scope focused
+- prefer small, reviewable commits
+- include tests for behavior changes
+- document user-visible changes when relevant
+- ensure the project still builds and tests cleanly
+
+### 3. Coding expectations
+
+- Write idiomatic Rust
+- Prefer clear naming and straightforward control flow
+- Keep functions focused and easy to reason about
+- Preserve the project’s compatibility and operational goals
+- Avoid adding unnecessary dependencies or shelling out to external tools unless clearly required
+
+## Development setup
+
+```bash
+git clone https://github.com/you/testls
+cd testls
+cargo build
+cargo test
+```
+
+If you are working on the web UI or server components, it may also help to run the project locally with example inputs and inspect output in the browser.
+
+## Testing
+
+Please run the relevant tests before opening a PR.
+
+```bash
+cargo test
+```
+
+For behavior-heavy changes, add or update regression tests where appropriate.
+
+## AI assistance disclosure
+
+This project is developed with human review and responsibility in the loop.
+
+- AI tooling may be used as part of the development process
+- All contributions are reviewed by a human maintainer
+- Code changes are expected to be understandable, testable, and maintainable
+- AI-generated code does not bypass review or responsibility
+
+If you use AI tools while working on the project, please be transparent about it in your PR description where appropriate.
+
+## Code of conduct
+
+Please keep discussions constructive and respectful. We aim to maintain a welcoming, professional environment for contributors.
+
+## License
+
+By contributing to `testls`, you agree that your contributions will be licensed under the project’s chosen license.
+
+---
+
+Thank you for helping make `testls` more useful, robust, and reliable.
