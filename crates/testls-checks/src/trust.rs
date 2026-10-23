@@ -8,6 +8,7 @@
 
 use std::time::Duration;
 
+use rustls_pki_types::pem::PemObject as _;
 use rustls_pki_types::{CertificateDer, TrustAnchor, UnixTime};
 use webpki::{EndEntityCert, Error, KeyUsage};
 use x509_parser::parse_x509_certificate;
@@ -50,6 +51,23 @@ impl TrustStore {
             })
             .collect::<Result<_, _>>()?;
         Ok(Self { anchors })
+    }
+
+    /// Builds a store from a PEM bundle of root certificates; other PEM
+    /// sections are ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message if the PEM is malformed, contains no certificate,
+    /// or a certificate is not a usable trust anchor.
+    pub fn from_pem(pem: &[u8]) -> Result<Self, String> {
+        let certificates = CertificateDer::pem_slice_iter(pem)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("invalid PEM: {e}"))?;
+        if certificates.is_empty() {
+            return Err("no certificates found".to_owned());
+        }
+        Self::from_certificates(certificates.iter().map(AsRef::as_ref))
     }
 
     /// Number of trust anchors in the store.
@@ -255,5 +273,16 @@ mod tests {
         assert!(!TrustStore::webpki().is_empty());
         assert_eq!(test_store().len(), 1);
         assert!(TrustStore::from_certificates([b"garbage".as_slice()]).is_err());
+    }
+
+    /// PEM bundles load every certificate and reject empty input.
+    #[test]
+    fn pem_store() {
+        let pem = include_bytes!("testdata/trust-root.pem");
+        let store = TrustStore::from_pem(pem).unwrap();
+        assert_eq!(store.len(), 1);
+        assert_eq!(messages(&[LEAF, INTERMEDIATE], MID_2026, &store), NONE);
+        assert!(TrustStore::from_pem(b"").is_err());
+        assert!(TrustStore::from_pem(b"-----BEGIN CERTIFICATE-----\n!!\n").is_err());
     }
 }

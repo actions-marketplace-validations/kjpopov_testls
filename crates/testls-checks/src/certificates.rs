@@ -68,6 +68,83 @@ pub fn certificate_findings(chain: &[Vec<u8>], host: Option<&str>, now: i64) -> 
     findings
 }
 
+/// Human-readable details of one certificate, for display.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CertificateInfo {
+    /// Subject distinguished name, e.g. `CN=localhost`.
+    pub subject: String,
+    /// Issuer distinguished name.
+    pub issuer: String,
+    /// Start of the validity period.
+    pub not_before: String,
+    /// End of the validity period.
+    pub not_after: String,
+    /// DNS names and IP addresses from the subject alternative names.
+    pub names: Vec<String>,
+    /// Public key algorithm and size, e.g. `RSA 2048 bits`.
+    pub key: String,
+}
+
+/// Describes a DER certificate for display.
+///
+/// # Errors
+///
+/// Returns the parse error if `der` is not exactly one certificate.
+pub fn describe_certificate(der: &[u8]) -> Result<CertificateInfo, String> {
+    let cert = parse_entry(der)?;
+    let validity = cert.validity();
+    let names = cert
+        .subject_alternative_name()
+        .ok()
+        .flatten()
+        .map(|ext| {
+            ext.value
+                .general_names
+                .iter()
+                .filter_map(san_label)
+                .collect()
+        })
+        .unwrap_or_default();
+    let key = match cert.public_key().parsed() {
+        Ok(key) => {
+            let label = match key {
+                PublicKey::RSA(_) => "RSA",
+                PublicKey::EC(_) => "EC",
+                PublicKey::DSA(_) => "DSA",
+                _ => "other",
+            };
+            format!("{label} {} bits", key.key_size())
+        }
+        Err(_) => "unknown".to_owned(),
+    };
+    Ok(CertificateInfo {
+        subject: cert.subject().to_string(),
+        issuer: cert.issuer().to_string(),
+        not_before: validity.not_before.to_string(),
+        not_after: validity.not_after.to_string(),
+        names,
+        key,
+    })
+}
+
+/// Display form of a DNS or IP subject alternative name; other kinds are
+/// skipped.
+fn san_label(name: &GeneralName<'_>) -> Option<String> {
+    match name {
+        GeneralName::DNSName(dns) => Some((*dns).to_owned()),
+        GeneralName::IPAddress(octets) => match octets.len() {
+            4 => <[u8; 4]>::try_from(*octets)
+                .ok()
+                .map(|o| IpAddr::from(o).to_string()),
+            16 => <[u8; 16]>::try_from(*octets)
+                .ok()
+                .map(|o| IpAddr::from(o).to_string()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Parses one chain entry, which must be exactly one DER certificate
 /// (RFC 8446 §4.4.2 `cert_data`); trailing bytes are an error.
 fn parse_entry(der: &[u8]) -> Result<X509Certificate<'_>, String> {
@@ -435,6 +512,24 @@ mod tests {
             .into_iter()
             .map(|f| f.id)
             .collect()
+    }
+
+    /// Subject, issuer, validity, SANs, and key are extracted for display.
+    #[test]
+    fn describe() {
+        let info = describe_certificate(EC_LOCALHOST).unwrap();
+        assert_eq!(info.subject, info.issuer);
+        assert!(info.subject.contains("localhost"), "{}", info.subject);
+        assert!(info.not_before.contains("2026"), "{}", info.not_before);
+        assert!(info.not_after.contains("2027"), "{}", info.not_after);
+        assert_eq!(info.names, ["localhost", "127.0.0.1"]);
+        assert_eq!(info.key, "EC 256 bits");
+
+        let info = describe_certificate(RSA1024_SHA1).unwrap();
+        assert_eq!(info.names, ["*.example.com"]);
+        assert_eq!(info.key, "RSA 1024 bits");
+
+        assert!(describe_certificate(b"junk").is_err());
     }
 
     /// RFC 9525 wildcard rules.
