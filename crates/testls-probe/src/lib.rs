@@ -1,5 +1,6 @@
 //! Async TLS probes over TCP built on testls-wire.
 
+mod ciphers;
 pub mod hello;
 mod protocols;
 mod response;
@@ -13,6 +14,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
+pub use ciphers::{CipherOrder, CipherResult, enumerate_ciphers};
 pub use protocols::{ProtocolResult, ProtocolSupport, classify, detect_protocols, probe_protocol};
 pub use response::HelloResponse;
 use response::ResponseParser;
@@ -31,6 +33,8 @@ pub enum ProbeError {
     Encode(EncodeError),
     /// The server sent bytes that are not a valid TLS/SSL reply.
     Decode(DecodeError),
+    /// The server behaved inconsistently across probes.
+    Unexpected(&'static str),
 }
 
 impl fmt::Display for ProbeError {
@@ -41,6 +45,7 @@ impl fmt::Display for ProbeError {
             Self::Timeout => f.write_str("timed out"),
             Self::Encode(e) => write!(f, "cannot encode hello: {e}"),
             Self::Decode(e) => write!(f, "malformed server reply: {e}"),
+            Self::Unexpected(msg) => f.write_str(msg),
         }
     }
 }
@@ -49,7 +54,7 @@ impl std::error::Error for ProbeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Connect(e) | Self::Io(e) => Some(e),
-            Self::Timeout => None,
+            Self::Timeout | Self::Unexpected(_) => None,
             Self::Encode(e) => Some(e),
             Self::Decode(e) => Some(e),
         }
