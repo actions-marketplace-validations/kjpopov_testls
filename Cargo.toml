@@ -16,6 +16,8 @@ testls-data = { path = "crates/testls-data" }
 testls-probe = { path = "crates/testls-probe" }
 testls-checks = { path = "crates/testls-checks" }
 testls-report = { path = "crates/testls-report" }
+getrandom = "0.4"
+tokio = { version = "1.47", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
