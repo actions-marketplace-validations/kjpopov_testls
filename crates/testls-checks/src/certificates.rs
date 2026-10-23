@@ -1,7 +1,8 @@
 //! Findings for the server's certificate chain: validity period, host name
 //! match, public key strength, and signature algorithm.
 //!
-//! Trust (chain building against a root store) is checked separately.
+//! Trust (chain building against a root store) is checked by
+//! [`trust_findings`](crate::trust_findings).
 
 use std::net::IpAddr;
 

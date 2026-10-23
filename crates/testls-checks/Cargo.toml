@@ -9,9 +9,12 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+rustls-pki-types.workspace = true
+rustls-webpki.workspace = true
 testls-data.workspace = true
 testls-probe.workspace = true
 testls-wire.workspace = true
+webpki-roots.workspace = true
 x509-parser.workspace = true
 
 [lints]
