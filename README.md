@@ -70,7 +70,15 @@ for our AI-assistance disclosure policy.
 
 ## License
 
-MIT OR Apache-2.0 — choose whichever you prefer.
+This project is dual-licensed under the [MIT License](LICENSE-MIT) or the
+[Apache License 2.0](LICENSE-APACHE).
+
+The package metadata declares:
+
+```toml
+[package]
+license = "MIT OR Apache-2.0"
+```
 
 ## Credits
 
