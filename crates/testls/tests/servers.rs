@@ -89,14 +89,14 @@ fn legacy_server() {
 }
 
 /// TLS 1.2+ server with strong suites in server order and a certificate
-/// from a trusted CA: expects no findings even at `--fail-on info`, and exit
-/// code 0.
+/// from a trusted CA: expects only the missing HTTP security headers, which
+/// `s_server -www` never sends, and exit code 0 at `--fail-on medium`.
 #[test]
 #[ignore = "needs tests/servers running"]
 fn modern_server() {
     let s = scan(
         "127.0.0.1:14434",
-        &["--fail-on", "info", "--ca-file", CA_FILE],
+        &["--fail-on", "medium", "--ca-file", CA_FILE],
     );
     assert_eq!(s.line("TLSv1.1 "), "TLSv1.1  not offered");
     assert_eq!(s.line("TLSv1.2 "), "TLSv1.2  offered");
@@ -112,8 +112,25 @@ fn modern_server() {
     assert!(s.has("0x11ec  X25519MLKEM768"));
     assert_eq!(s.line("Certificate"), "Certificate (TLSv1.3)");
     assert_eq!(s.line("key"), "key     RSA 2048 bits");
-    assert_eq!(s.line("Findings"), "Findings");
-    assert!(s.stdout.trim_end().ends_with("none"), "{}", s.stdout);
+    assert_eq!(s.line("HTTP headers"), "HTTP headers (status 200)");
+    assert_eq!(
+        s.line("Strict-Transport-Security"),
+        "Strict-Transport-Security  not set"
+    );
+    let findings = s.stdout.split_once("\nFindings\n").expect("findings").1;
+    let lines: Vec<&str> = findings.lines().map(str::trim).collect();
+    assert_eq!(
+        lines,
+        [
+            "low      no Strict-Transport-Security header",
+            "info     no X-Content-Type-Options: nosniff header",
+            "info     no X-Frame-Options header or CSP frame-ancestors directive",
+            "info     no Content-Security-Policy header",
+            "info     no Referrer-Policy header",
+        ],
+        "{}",
+        s.stdout
+    );
     assert_eq!(s.code, 0);
 }
 
@@ -190,6 +207,12 @@ fn json_report() {
             .any(|g| g["name"] == "x25519" && g["severity"] == "ok")
     );
     assert_eq!(v["certificate"]["chain"][0]["subject"], "CN=localhost");
+    assert_eq!(v["http"]["status"], 200);
+    assert_eq!(
+        v["http"]["headers"]["strict-transport-security"],
+        serde_json::Value::Null
+    );
+    assert_eq!(v["http"]["hsts"], serde_json::Value::Null);
     assert_eq!(v["findings"][0]["severity"], "critical");
     assert!(
         v["findings"]
@@ -197,6 +220,13 @@ fn json_report() {
             .unwrap()
             .iter()
             .any(|f| f["id"] == "cert.untrusted")
+    );
+    assert!(
+        v["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["id"] == "hsts.missing" && f["severity"] == "low")
     );
     assert_eq!(s.code, 1);
 }
@@ -234,7 +264,7 @@ fn system_roots_trust_ssl_cert_file() {
     let addr = "127.0.0.1:14434";
     wait_for(addr);
     let out = Command::new(env!("CARGO_BIN_EXE_testls"))
-        .args([addr, "--system-roots", "--fail-on", "info"])
+        .args([addr, "--system-roots", "--fail-on", "medium"])
         .env("SSL_CERT_FILE", CA_FILE)
         .env_remove("SSL_CERT_DIR")
         .output()

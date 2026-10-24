@@ -10,7 +10,9 @@ use testls_checks::{
     CertificateInfo, Finding, Severity, cipher_name, cipher_severity, dh_severity, group_name,
     group_severity, protocol_severity,
 };
-use testls_probe::{CipherOrder, CipherResult, KeyExchangeResult, ProtocolResult, ProtocolSupport};
+use testls_probe::{
+    CipherOrder, CipherResult, HttpResponse, KeyExchangeResult, ProtocolResult, ProtocolSupport,
+};
 use testls_wire::ProtocolVersion;
 
 use crate::Painter;
@@ -151,6 +153,40 @@ pub fn certificate(section: &Result<CertificateSection, String>, paint: Painter)
                 let _ = writeln!(out, "  #{position} cannot be parsed: {e}");
             }
         }
+    }
+    out
+}
+
+/// Security headers listed in the HTTP section, in display order.
+pub(crate) const SECURITY_HEADERS: [&str; 5] = [
+    "Strict-Transport-Security",
+    "Content-Security-Policy",
+    "X-Frame-Options",
+    "X-Content-Type-Options",
+    "Referrer-Policy",
+];
+
+/// Renders the status and security headers of the reply to `GET /`, or why
+/// it could not be fetched. A missing HSTS header is coloured as low.
+#[must_use]
+pub fn http(section: &Result<HttpResponse, String>, paint: Painter) -> String {
+    let response = match section {
+        Ok(r) => r,
+        Err(e) => return format!("{}: error: {e}\n", paint.heading("HTTP headers")),
+    };
+    let mut out = format!(
+        "{}\n",
+        paint.heading(&format!("HTTP headers (status {})", response.status))
+    );
+    for name in SECURITY_HEADERS {
+        let line = match response.header(name) {
+            Some(value) => format!("{name:<26} {value}"),
+            None if name == "Strict-Transport-Security" => {
+                paint.severity(Severity::Low, &format!("{name:<26} not set"))
+            }
+            None => format!("{name:<26} not set"),
+        };
+        let _ = writeln!(out, "  {line}");
     }
     out
 }
@@ -355,6 +391,36 @@ mod tests {
         assert_eq!(
             certificate(&Err("refused".into()), PLAIN),
             "Certificate: error: refused\n"
+        );
+    }
+
+    /// The HTTP section lists each security header or `not set`, and a
+    /// failed fetch is reported on the heading line.
+    #[test]
+    fn http_lines() {
+        let response = Ok(HttpResponse {
+            status: 200,
+            headers: vec![
+                ("server".into(), "test".into()),
+                ("x-content-type-options".into(), "nosniff".into()),
+            ],
+        });
+        assert_eq!(
+            http(&response, PLAIN),
+            "HTTP headers (status 200)\n  \
+             Strict-Transport-Security  not set\n  \
+             Content-Security-Policy    not set\n  \
+             X-Frame-Options            not set\n  \
+             X-Content-Type-Options     nosniff\n  \
+             Referrer-Policy            not set\n"
+        );
+        assert!(
+            http(&response, Painter::new(true))
+                .contains("\x1b[36mStrict-Transport-Security  not set\x1b[0m")
+        );
+        assert_eq!(
+            http(&Err("refused".into()), PLAIN),
+            "HTTP headers: error: refused\n"
         );
     }
 
