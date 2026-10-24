@@ -36,6 +36,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "server_key_exchange"
+path = "fuzz_targets/server_key_exchange.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "ssl2_server_hello"
 path = "fuzz_targets/ssl2_server_hello.rs"
 test = false

@@ -5,7 +5,7 @@
 
 use libfuzzer_sys::fuzz_target;
 use testls_wire::{
-    Alert, AnyRecord, ContentType, ServerHello, Ssl2ServerHello, handshake_type,
+    Alert, AnyRecord, ContentType, DheParams, EcdheParams, ServerHello, Ssl2ServerHello, handshake_type,
     parse_certificate_list, parse_handshake, parse_record,
 };
 
@@ -46,6 +46,10 @@ fuzz_target!(|data: &[u8]| {
             }
             handshake_type::CERTIFICATE => {
                 let _ = parse_certificate_list(message.body);
+            }
+            handshake_type::SERVER_KEY_EXCHANGE => {
+                let _ = EcdheParams::parse(message.body);
+                let _ = DheParams::parse(message.body);
             }
             _ => {}
         }

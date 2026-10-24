@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [record_stream, server_hello, certificate_list, ssl2_server_hello]
+        target: [record_stream, server_hello, certificate_list, server_key_exchange, ssl2_server_hello]
     runs-on: ubuntu-latest
     env:
       TARGET: ${{ matrix.target }}
