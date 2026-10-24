@@ -49,7 +49,7 @@ Two connection paths:
       trust against webpki-roots or a `--ca-file` bundle
 - [ ] `--system-roots`: trust the operating system's root store
 - [x] Output: coloured, TTY-aware text (`--color auto|always|never`)
-- [ ] Output: JSON (versioned schema)
+- [x] Output: JSON (`--format json`, versioned schema in [json-schema.md](json-schema.md))
 - [x] Exit codes: 0 ok, 1 findings ≥ `--fail-on` (default `high`), 2 scan error
 - [x] Target parsing: host, host:port, URL, IPv4/IPv6, explicit `--sni`
 - [x] Integration tests against local test servers (see Testing)
@@ -79,14 +79,13 @@ Two connection paths:
 - Integration: `tests/servers/compose.yaml` runs `openssl s_server`
   containers with specific protocol/cipher sets (podman or docker);
   `crates/testls/tests/servers.rs` scans them (`--ignored`, own CI job).
-  Golden JSON snapshots (`insta`) once JSON output lands
+  The JSON renderer is checked field by field against expected documents
 - Opt-in live tests against badssl.com (not in default CI)
 
 ## Open questions
 
 - Wire codec: hand-rolled vs. building on an existing parser crate
   (e.g. `tls-parser`) for the read side?
-- JSON report schema: shape, versioning, stability guarantees
 - Default scan profile: what runs without flags, and how long it may take
 - Rate limiting / politeness defaults towards scanned servers
 - STARTTLS / vulnerability prioritization for v0.3
@@ -112,3 +111,4 @@ Two connection paths:
 | 15 | Trust is checked with `rustls-webpki` path building, at a time clamped into the leaf's validity period | Same verifier as rustls clients; expiry is reported once, by the certificate checks |
 | 16 | `--ca-file` replaces the bundled roots with a PEM bundle; the leaf is matched against the SNI name, else the target IP | Lets private PKIs and the integration tests get a clean trust result |
 | 17 | Colour defaults to `--color auto`: on for terminals, off when piped or `NO_COLOR` is set; hand-written ANSI codes, no colour crate; on Windows `auto` also requires enabling virtual terminal processing (via `anstyle-query`, already pulled in by clap) | Same convention as cargo/git/ripgrep; logs and files stay clean; legacy Windows consoles would print raw escape codes |
+| 18 | JSON output (`--format json`) is one document printed at the end, built with serde from dedicated schema structs; `schema_version` bumps only on breaking changes; times are Unix seconds | Internal types can change without breaking consumers; additive fields stay compatible; integers avoid date-format parsing |

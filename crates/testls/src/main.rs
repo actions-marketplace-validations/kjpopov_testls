@@ -18,7 +18,7 @@ use testls_probe::{
     ProtocolSupport, Transport, detect_protocols, enumerate_ciphers, fetch_certificates,
 };
 use testls_report::text::{self, CertificateSection, CipherSection};
-use testls_report::{ColorChoice, Painter};
+use testls_report::{ColorChoice, Format, Painter, json};
 use testls_wire::ProtocolVersion;
 
 use target::{Host, Target};
@@ -59,6 +59,13 @@ struct Cli {
           value_parser = clap::builder::PossibleValuesParser::new(ColorChoice::ALL.map(ColorChoice::as_str))
               .map(|s| s.parse::<ColorChoice>().expect("listed value")))]
     color: ColorChoice,
+
+    /// Output format: `text` prints sections as they finish, `json` prints
+    /// one document at the end.
+    #[arg(long, default_value_t = Format::Text, value_name = "FORMAT",
+          value_parser = clap::builder::PossibleValuesParser::new(Format::ALL.map(Format::as_str))
+              .map(|s| s.parse::<Format>().expect("listed value")))]
+    format: Format,
 }
 
 /// Resolves the target to the first socket address it maps to.
@@ -115,10 +122,18 @@ async fn main() -> ExitCode {
     transport.connect_timeout = Duration::from_secs(cli.connect_timeout);
     transport.read_timeout = Duration::from_secs(cli.read_timeout);
 
-    print!("{}", text::header(&cli.target.to_string(), addr, sni));
-    println!();
+    let started_at = unix_now();
+    let target = cli.target.to_string();
+    let is_text = cli.format == Format::Text;
+    let show = |section: String| {
+        if is_text {
+            print!("{section}");
+        }
+    };
+
+    show(text::header(&target, addr, sni));
     let protocols = detect_protocols(&transport, sni).await;
-    print!("{}", text::protocols(&protocols, paint));
+    show(format!("\n{}", text::protocols(&protocols, paint)));
     if protocols
         .iter()
         .all(|r| matches!(r.support, ProtocolSupport::Error(_)))
@@ -128,32 +143,56 @@ async fn main() -> ExitCode {
     }
     let mut findings = protocol_findings(&protocols);
 
+    let mut ciphers = Vec::new();
     for r in &protocols {
         if r.support != ProtocolSupport::Supported {
             continue;
         }
         let section = cipher_section(&transport, r.version, sni).await;
-        println!();
-        print!("{}", text::ciphers(&section, paint));
+        show(format!("\n{}", text::ciphers(&section, paint)));
         findings.extend(section_findings(&section));
+        ciphers.push(section);
     }
 
     let host = sni.map_or_else(|| addr.ip().to_string(), str::to_owned);
-    let (section, cert_findings) = certificate_section(&transport, sni, &host, &store).await;
-    println!();
-    print!("{}", text::certificate(&section, paint));
+    let (certificate, cert_findings) = certificate_section(&transport, sni, &host, &store).await;
+    show(format!("\n{}", text::certificate(&certificate, paint)));
     findings.extend(cert_findings);
 
     findings.retain(|f| f.severity > Severity::Ok);
     findings.sort_by_key(|f| std::cmp::Reverse(f.severity));
-    println!();
-    print!("{}", text::findings(&findings, paint));
+    show(format!("\n{}", text::findings(&findings, paint)));
+
+    if cli.format == Format::Json {
+        print!(
+            "{}",
+            json::render(&json::Report {
+                target: &target,
+                addr,
+                sni,
+                started_at,
+                protocols: &protocols,
+                ciphers: &ciphers,
+                certificate: &certificate,
+                findings: &findings,
+            })
+        );
+    }
 
     if findings.iter().any(|f| f.severity >= cli.fail_on) {
         ExitCode::from(1)
     } else {
         ExitCode::SUCCESS
     }
+}
+
+/// Current time as a Unix timestamp.
+fn unix_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_secs()).ok())
+        .unwrap_or(i64::MAX)
 }
 
 /// Enumerates the cipher suites of one protocol `version`.
@@ -203,11 +242,7 @@ async fn certificate_section(
             return (Err(e.to_string()), vec![finding]);
         }
     };
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .and_then(|d| i64::try_from(d.as_secs()).ok())
-        .unwrap_or(i64::MAX);
+    let now = unix_now();
     let mut findings = certificate_findings(&chain.certificates, Some(host), now);
     findings.extend(trust_findings(&chain.certificates, now, store));
     let section = CertificateSection {

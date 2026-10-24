@@ -136,6 +136,45 @@ fn color_modes() {
     assert!(!never.has("\x1b["), "{}", never.stdout);
 }
 
+/// `--format json` prints one parseable document with the schema version,
+/// the same findings as text output, and the same exit code.
+#[test]
+#[ignore = "needs tests/servers running"]
+fn json_report() {
+    let s = scan(
+        "127.0.0.1:14433",
+        &["--format", "json", "--color", "always"],
+    );
+    assert!(!s.has("\x1b["), "{}", s.stdout);
+    let v: serde_json::Value = serde_json::from_str(&s.stdout).expect("valid JSON");
+    assert_eq!(v["schema_version"], 1);
+    assert_eq!(v["target"]["address"], "127.0.0.1:14433");
+    let tls10 = v["protocols"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["version"] == "TLSv1.0")
+        .unwrap();
+    assert_eq!(tls10["status"], "offered");
+    assert!(
+        v["ciphers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["protocol"] == "TLSv1.2" && c["order"] == "client")
+    );
+    assert_eq!(v["certificate"]["chain"][0]["subject"], "CN=localhost");
+    assert_eq!(v["findings"][0]["severity"], "critical");
+    assert!(
+        v["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["id"] == "cert.untrusted")
+    );
+    assert_eq!(s.code, 1);
+}
+
 /// Without the test CA the same server's certificate is untrusted, and an
 /// SNI name it does not cover is a mismatch.
 #[test]
