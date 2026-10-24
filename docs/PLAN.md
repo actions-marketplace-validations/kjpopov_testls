@@ -38,6 +38,7 @@ Two connection paths:
 
 ### v0.1 — Core scanner CLI
 - [x] Workspace skeleton, CI (fmt, clippy, test, MSRV), static musl build
+- [x] Dependency audit in CI: `cargo deny` (RustSec advisories, licences, sources)
 - [x] Release workflow (cross-platform binaries on tag)
 - [x] `testls-data`: IANA cipher suite, group, sig-scheme registries → generated Rust tables
 - [x] `testls-wire`: ClientHello builder (SSLv2-compat, SSLv3, TLS1.0–1.3),
@@ -112,3 +113,4 @@ Two connection paths:
 | 16 | `--ca-file` replaces the bundled roots with a PEM bundle; the leaf is matched against the SNI name, else the target IP | Lets private PKIs and the integration tests get a clean trust result |
 | 17 | Colour defaults to `--color auto`: on for terminals, off when piped or `NO_COLOR` is set; hand-written ANSI codes, no colour crate; on Windows `auto` also requires enabling virtual terminal processing (via `anstyle-query`, already pulled in by clap) | Same convention as cargo/git/ripgrep; logs and files stay clean; legacy Windows consoles would print raw escape codes |
 | 18 | JSON output (`--format json`) is one document printed at the end, built with serde from dedicated schema structs; `schema_version` bumps only on breaking changes; times are Unix seconds | Internal types can change without breaking consumers; additive fields stay compatible; integers avoid date-format parsing |
+| 19 | `cargo deny` checks advisories daily and on every push; on pull requests only licences, bans and sources block the merge | New advisories should be fixed promptly, but must not fail unrelated PRs |
