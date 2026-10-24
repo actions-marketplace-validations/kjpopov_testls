@@ -9,6 +9,9 @@ all-features = true
 # versions. Add an `ignore` entry (with a reason) only for advisories that do
 # not affect testls.
 version = 2
+# Set explicitly: the default for `unsound` only covers direct dependencies.
+unmaintained = "all"
+unsound = "all"
 yanked = "deny"
 ignore = []
 
@@ -44,4 +47,3 @@ allow-wildcard-paths = true
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-allow-registry = ["https://github.com/rust-lang/crates.io-index"]

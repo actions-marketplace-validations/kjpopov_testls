@@ -26,7 +26,8 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo +1.97 check --workspace   # MSRV
-cargo deny check                # advisories, licences, sources
+cargo deny check                # advisories, bans, licences, sources
+                                # (cargo install --locked cargo-deny)
 zizmor .github                  # if you changed workflows
 ```
 
