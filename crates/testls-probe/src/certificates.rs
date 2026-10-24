@@ -14,6 +14,7 @@ use testls_wire::ProtocolVersion;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
+use tokio_rustls::client::TlsStream;
 
 use crate::{ProbeError, Transport};
 
@@ -39,29 +40,7 @@ pub async fn fetch_certificates(
     transport: &Transport,
     sni: Option<&str>,
 ) -> Result<CertificateChain, ProbeError> {
-    let server_name = match sni {
-        Some(name) => ServerName::try_from(name.to_owned())
-            .map_err(|_| ProbeError::Unexpected("SNI is not a valid server name"))?,
-        None => ServerName::from(transport.addr.ip()),
-    };
-    let stream = timeout(
-        transport.connect_timeout,
-        TcpStream::connect(transport.addr),
-    )
-    .await
-    .map_err(|_| ProbeError::Timeout)?
-    .map_err(ProbeError::Connect)?;
-    stream.set_nodelay(true).map_err(ProbeError::Io)?;
-
-    let connector = TlsConnector::from(Arc::new(client_config()));
-    let tls = timeout(
-        transport.read_timeout,
-        connector.connect(server_name, stream),
-    )
-    .await
-    .map_err(|_| ProbeError::Timeout)?
-    .map_err(ProbeError::Io)?;
-
+    let tls = connect_tls(transport, sni, client_config()).await?;
     let (_, conn) = tls.get_ref();
     let version = conn
         .protocol_version()
@@ -81,8 +60,45 @@ pub async fn fetch_certificates(
     })
 }
 
+/// Opens a TCP connection and completes a TLS handshake with `config`.
+///
+/// `sni` is sent as the server name; without it the target IP is used and
+/// no SNI extension is sent.
+///
+/// # Errors
+/// Returns a [`ProbeError`] on connect/I/O failure, timeout, or a failed
+/// handshake.
+pub(crate) async fn connect_tls(
+    transport: &Transport,
+    sni: Option<&str>,
+    config: ClientConfig,
+) -> Result<TlsStream<TcpStream>, ProbeError> {
+    let server_name = match sni {
+        Some(name) => ServerName::try_from(name.to_owned())
+            .map_err(|_| ProbeError::Unexpected("SNI is not a valid server name"))?,
+        None => ServerName::from(transport.addr.ip()),
+    };
+    let stream = timeout(
+        transport.connect_timeout,
+        TcpStream::connect(transport.addr),
+    )
+    .await
+    .map_err(|_| ProbeError::Timeout)?
+    .map_err(ProbeError::Connect)?;
+    stream.set_nodelay(true).map_err(ProbeError::Io)?;
+
+    let connector = TlsConnector::from(Arc::new(config));
+    timeout(
+        transport.read_timeout,
+        connector.connect(server_name, stream),
+    )
+    .await
+    .map_err(|_| ProbeError::Timeout)?
+    .map_err(ProbeError::Io)
+}
+
 /// Client config offering TLS 1.2 and 1.3 with the recording verifier.
-fn client_config() -> ClientConfig {
+pub(crate) fn client_config() -> ClientConfig {
     let provider = Arc::new(ring::default_provider());
     ClientConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()

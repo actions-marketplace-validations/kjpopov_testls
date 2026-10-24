@@ -4,6 +4,7 @@ mod certificates;
 mod ciphers;
 mod groups;
 pub mod hello;
+mod http;
 mod protocols;
 mod response;
 
@@ -19,6 +20,7 @@ use tokio::time::timeout;
 pub use certificates::{CertificateChain, fetch_certificates};
 pub use ciphers::{CipherOrder, CipherResult, enumerate_ciphers};
 pub use groups::{KeyExchangeResult, probe_key_exchange};
+pub use http::{HttpResponse, fetch_http_headers};
 pub use protocols::{ProtocolResult, ProtocolSupport, classify, detect_protocols, probe_protocol};
 pub use response::HelloResponse;
 use response::ResponseParser;
