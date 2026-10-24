@@ -42,7 +42,11 @@ jobs:
           key: ${{ matrix.target }}
       - name: Fuzz
         working-directory: fuzz
-        run: cargo +nightly fuzz run "$TARGET" -- -max_total_time="$SECONDS_PER_TARGET"
+        # The prebuilt cargo-fuzz is a musl binary and would default to the
+        # musl target, which AddressSanitizer does not support.
+        run: |
+          host="$(rustc +nightly -vV | sed -n 's/^host: //p')"
+          cargo +nightly fuzz run --target "$host" "$TARGET" -- -max_total_time="$SECONDS_PER_TARGET"
       - if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
