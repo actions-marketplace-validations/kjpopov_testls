@@ -27,6 +27,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo +1.97 check --workspace   # MSRV
 cargo deny check                # advisories, licences, sources
+zizmor .github                  # if you changed workflows
 ```
 
 Scanner changes must also pass the integration tests (podman or docker):
