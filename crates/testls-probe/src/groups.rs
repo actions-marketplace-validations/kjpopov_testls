@@ -30,15 +30,25 @@ pub struct KeyExchangeResult {
 }
 
 /// Whether `suite` carries `ServerECDHParams` in its `ServerKeyExchange`.
+///
+/// PSK suites are excluded: their parameters follow a `psk_identity_hint`
+/// (RFC 5489, section 2).
 fn is_ecdhe_suite(suite: u16) -> bool {
-    cipher_suite(suite)
-        .is_some_and(|c| c.name.starts_with("TLS_ECDHE_") || c.name.starts_with("TLS_ECDH_anon_"))
+    cipher_suite(suite).is_some_and(|c| {
+        (c.name.starts_with("TLS_ECDHE_") || c.name.starts_with("TLS_ECDH_anon_"))
+            && !c.name.contains("_PSK_")
+    })
 }
 
 /// Whether `suite` carries `ServerDHParams` in its `ServerKeyExchange`.
+///
+/// PSK suites are excluded: their parameters follow a `psk_identity_hint`
+/// (RFC 4279, section 3).
 fn is_dhe_suite(suite: u16) -> bool {
-    cipher_suite(suite)
-        .is_some_and(|c| c.name.starts_with("TLS_DHE_") || c.name.starts_with("TLS_DH_anon_"))
+    cipher_suite(suite).is_some_and(|c| {
+        (c.name.starts_with("TLS_DHE_") || c.name.starts_with("TLS_DH_anon_"))
+            && !c.name.contains("_PSK_")
+    })
 }
 
 /// Named groups worth offering at `version`.
@@ -182,7 +192,9 @@ async fn dh_bits(
     else {
         return Ok(None);
     };
-    if !suites.contains(&hello.cipher_suite) {
+    if !suites.contains(&hello.cipher_suite)
+        || hello.negotiated_version().map_err(ProbeError::Decode)? != version
+    {
         return Ok(None);
     }
     let params = DheParams::parse(&body).map_err(ProbeError::Decode)?;
@@ -286,6 +298,9 @@ mod tests {
         assert!(is_dhe_suite(0x009e));
         assert!(!is_dhe_suite(0x009c));
         assert!(!is_dhe_suite(0xc02f));
+        // TLS_ECDHE_PSK_WITH_AES_128_CBC_SHA256, TLS_DHE_PSK_WITH_AES_128_GCM_SHA256
+        assert!(!is_ecdhe_suite(0xc037));
+        assert!(!is_dhe_suite(0x00aa));
     }
 
     /// TLS 1.3 candidates include hybrids but no legacy curves; TLS 1.2
@@ -517,6 +532,21 @@ mod mock_server {
         assert_eq!(r.groups, vec![0x11ec, 0x001d]);
         assert_eq!(r.group_order, CipherOrder::Server);
         assert_eq!(r.dh_bits, None);
+    }
+
+    /// A DH size sent at another protocol version is not reported.
+    #[tokio::test]
+    async fn dh_bits_version_mismatch() {
+        let addr = serve(&[], 128).await;
+        let bits = dh_bits(
+            &Transport::new(addr),
+            ProtocolVersion::TLS11,
+            &[0x009e],
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(bits, None);
     }
 
     /// Without ECDHE or DHE suites nothing is probed.
