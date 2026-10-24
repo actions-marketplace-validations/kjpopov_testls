@@ -1,0 +1,44 @@
+# Weekly version updates. Security updates are enabled separately in the
+# repository settings and are not limited by this schedule or the cooldown.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    # Wait a week after a release so yanked or compromised versions are caught first.
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    groups:
+      # Patch and minor bumps land together; majors get their own PR.
+      cargo-minor:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # The base image is pinned by digest so Dependabot can propose refreshes.
+  - package-ecosystem: docker
+    directory: /tests/servers
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "test"
