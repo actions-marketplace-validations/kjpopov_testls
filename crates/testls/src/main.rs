@@ -11,13 +11,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use clap::Parser;
 use clap::builder::TypedValueParser as _;
 use testls_checks::{
-    Finding, Severity, TrustStore, certificate_findings, cipher_findings, cipher_name,
-    cipher_severity, describe_certificate, protocol_findings, protocol_severity, trust_findings,
+    Finding, Severity, TrustStore, certificate_findings, cipher_findings, describe_certificate,
+    protocol_findings, trust_findings,
 };
 use testls_probe::{
-    CipherOrder, ProtocolSupport, Transport, detect_protocols, enumerate_ciphers,
-    fetch_certificates,
+    ProtocolSupport, Transport, detect_protocols, enumerate_ciphers, fetch_certificates,
 };
+use testls_report::text::{self, CertificateSection, CipherSection};
 use testls_report::{ColorChoice, Painter};
 use testls_wire::ProtocolVersion;
 
@@ -115,11 +115,10 @@ async fn main() -> ExitCode {
     transport.connect_timeout = Duration::from_secs(cli.connect_timeout);
     transport.read_timeout = Duration::from_secs(cli.read_timeout);
 
-    println!("Target: {} ({addr})", cli.target);
-    println!("SNI:    {}", sni.unwrap_or("(none)"));
+    print!("{}", text::header(&cli.target.to_string(), addr, sni));
     println!();
-    println!("{}", paint.heading("Protocols"));
     let protocols = detect_protocols(&transport, sni).await;
+    print!("{}", text::protocols(&protocols, paint));
     if protocols
         .iter()
         .all(|r| matches!(r.support, ProtocolSupport::Error(_)))
@@ -128,38 +127,27 @@ async fn main() -> ExitCode {
         return ExitCode::from(2);
     }
     let mut findings = protocol_findings(&protocols);
-    for r in &protocols {
-        let status = match &r.support {
-            ProtocolSupport::Supported => paint.severity(protocol_severity(r.version).0, "offered"),
-            ProtocolSupport::NotSupported => "not offered".to_owned(),
-            ProtocolSupport::Error(e) => format!("error: {e}"),
-        };
-        println!("  {:<8} {status}", r.version.to_string());
-    }
 
     for r in &protocols {
         if r.support != ProtocolSupport::Supported {
             continue;
         }
+        let section = cipher_section(&transport, r.version, sni).await;
         println!();
-        findings.extend(cipher_section(&transport, r.version, sni, paint).await);
+        print!("{}", text::ciphers(&section, paint));
+        findings.extend(section_findings(&section));
     }
 
-    println!();
     let host = sni.map_or_else(|| addr.ip().to_string(), str::to_owned);
-    findings.extend(certificate_section(&transport, sni, &host, &store, paint).await);
+    let (section, cert_findings) = certificate_section(&transport, sni, &host, &store).await;
+    println!();
+    print!("{}", text::certificate(&section, paint));
+    findings.extend(cert_findings);
 
     findings.retain(|f| f.severity > Severity::Ok);
     findings.sort_by_key(|f| std::cmp::Reverse(f.severity));
     println!();
-    println!("{}", paint.heading("Findings"));
-    if findings.is_empty() {
-        println!("  {}", paint.severity(Severity::Ok, "none"));
-    }
-    for f in &findings {
-        let label = format!("{:<8}", f.severity.as_str());
-        println!("  {} {}", paint.severity(f.severity, &label), f.message);
-    }
+    print!("{}", text::findings(&findings, paint));
 
     if findings.iter().any(|f| f.severity >= cli.fail_on) {
         ExitCode::from(1)
@@ -168,82 +156,53 @@ async fn main() -> ExitCode {
     }
 }
 
-/// Enumerates and prints the cipher suites of one protocol `version`,
-/// coloured by severity, returning their findings.
+/// Enumerates the cipher suites of one protocol `version`.
 async fn cipher_section(
     transport: &Transport,
     version: ProtocolVersion,
     sni: Option<&str>,
-    paint: Painter,
-) -> Vec<Finding> {
-    match enumerate_ciphers(transport, version, sni).await {
-        Ok(c) => {
-            let order = match c.order {
-                CipherOrder::Server => "server order",
-                CipherOrder::Client => "client order",
-                CipherOrder::NotApplicable => "",
-            };
-            println!("{} {order}", paint.heading(&format!("Ciphers {version}")));
-            for &id in &c.suites {
-                let (severity, _, _) = cipher_severity(version, id);
-                println!("  {}", paint.severity(severity, &cipher_label(version, id)));
-            }
-            cipher_findings(&c)
-        }
-        Err(e) => {
-            println!(
-                "{}: error: {e}",
-                paint.heading(&format!("Ciphers {version}"))
-            );
-            vec![Finding::new(
-                "cipher.error",
-                Severity::Info,
-                format!("{version} ciphers could not be enumerated: {e}"),
-            )]
-        }
+) -> CipherSection {
+    CipherSection {
+        version,
+        outcome: enumerate_ciphers(transport, version, sni)
+            .await
+            .map_err(|e| e.to_string()),
     }
 }
 
-/// Fetches and prints the certificate chain, returning its findings.
+/// Findings for one cipher section; a failed enumeration is informational.
+fn section_findings(section: &CipherSection) -> Vec<Finding> {
+    match &section.outcome {
+        Ok(c) => cipher_findings(c),
+        Err(e) => vec![Finding::new(
+            "cipher.error",
+            Severity::Info,
+            format!("{} ciphers could not be enumerated: {e}", section.version),
+        )],
+    }
+}
+
+/// Fetches and checks the certificate chain, returning its description and
+/// findings.
 ///
-/// The leaf is checked against `host`, the SNI name or the target IP;
-/// headings are styled with `paint`.
+/// The leaf is checked against `host`, the SNI name or the target IP.
 async fn certificate_section(
     transport: &Transport,
     sni: Option<&str>,
     host: &str,
     store: &TrustStore,
-    paint: Painter,
-) -> Vec<Finding> {
+) -> (Result<CertificateSection, String>, Vec<Finding>) {
     let chain = match fetch_certificates(transport, sni).await {
         Ok(chain) => chain,
         Err(e) => {
-            println!("{}: error: {e}", paint.heading("Certificate"));
-            return vec![Finding::new(
+            let finding = Finding::new(
                 "cert.error",
                 Severity::Info,
                 format!("certificate could not be retrieved: {e}"),
-            )];
+            );
+            return (Err(e.to_string()), vec![finding]);
         }
     };
-    println!(
-        "{}",
-        paint.heading(&format!("Certificate ({})", chain.version))
-    );
-    for (position, der) in chain.certificates.iter().enumerate() {
-        match describe_certificate(der) {
-            Ok(info) => {
-                println!("  #{position} {}", info.subject);
-                println!("     issuer  {}", info.issuer);
-                println!("     valid   {} to {}", info.not_before, info.not_after);
-                if !info.names.is_empty() {
-                    println!("     names   {}", info.names.join(", "));
-                }
-                println!("     key     {}", info.key);
-            }
-            Err(e) => println!("  #{position} cannot be parsed: {e}"),
-        }
-    }
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()
@@ -251,15 +210,13 @@ async fn certificate_section(
         .unwrap_or(i64::MAX);
     let mut findings = certificate_findings(&chain.certificates, Some(host), now);
     findings.extend(trust_findings(&chain.certificates, now, store));
-    findings
-}
-
-/// Formats a cipher suite id and name for the cipher listing.
-fn cipher_label(version: ProtocolVersion, id: u32) -> String {
-    let name = cipher_name(version, id);
-    if version == ProtocolVersion::SSL2 {
-        format!("0x{id:06x}  {name}")
-    } else {
-        format!("0x{id:04x}  {name}")
-    }
+    let section = CertificateSection {
+        version: chain.version,
+        certificates: chain
+            .certificates
+            .iter()
+            .map(|der| describe_certificate(der))
+            .collect(),
+    };
+    (Ok(section), findings)
 }
