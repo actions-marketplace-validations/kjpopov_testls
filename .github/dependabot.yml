@@ -30,7 +30,9 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+        update-types: [minor, patch]
 
+  # The base image is pinned by digest so Dependabot can propose refreshes.
   - package-ecosystem: docker
     directory: /tests/servers
     schedule:
