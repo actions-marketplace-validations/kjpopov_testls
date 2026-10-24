@@ -17,5 +17,8 @@ testls-report.workspace = true
 testls-wire.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "net"] }
 
+[dev-dependencies]
+serde_json.workspace = true
+
 [lints]
 workspace = true
