@@ -21,6 +21,7 @@ cargo +nightly fuzz run record_stream -- -max_total_time=60
 Without rustup (for example Homebrew Rust), build without sanitizers:
 `RUSTC_BOOTSTRAP=1 cargo fuzz run -s none record_stream`.
 
-CI runs every target for a minute when `testls-wire` or `fuzz/` changes and
-for ten minutes once a week. Crashing inputs are uploaded as artifacts; add a
+CI runs every target for a minute when `testls-wire`, `fuzz/` or the root
+`Cargo.toml` changes and for ten minutes once a week; on other pull requests
+the fuzz jobs pass without fuzzing. Crashing inputs are uploaded as artifacts; add a
 regression unit test in `testls-wire` for each one you fix.
