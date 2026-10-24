@@ -15,6 +15,9 @@ pub enum HelloResponse {
         /// DER certificates from a plaintext `Certificate` message (TLS 1.2
         /// and earlier), leaf first. Empty if none was seen.
         certificates: Vec<Vec<u8>>,
+        /// Body of a plaintext `ServerKeyExchange` message (TLS 1.2 and
+        /// earlier), if the server sent one.
+        server_key_exchange: Option<Vec<u8>>,
     },
     /// The server accepted an SSLv2 `CLIENT-HELLO`.
     Ssl2(Ssl2ServerHello),
@@ -31,6 +34,7 @@ pub(crate) struct ResponseParser {
     handshake: Vec<u8>,
     hello: Option<ServerHello>,
     certificates: Vec<Vec<u8>>,
+    server_key_exchange: Option<Vec<u8>>,
 }
 
 impl ResponseParser {
@@ -65,6 +69,7 @@ impl ResponseParser {
             Some(hello) => HelloResponse::ServerHello {
                 hello,
                 certificates: self.certificates,
+                server_key_exchange: self.server_key_exchange,
             },
             None => HelloResponse::Closed,
         }
@@ -119,6 +124,9 @@ impl ResponseParser {
                 }
                 (handshake_type::CERTIFICATE, Some(_)) => {
                     self.certificates = parse_certificate_list(msg.body)?;
+                }
+                (handshake_type::SERVER_KEY_EXCHANGE, Some(_)) => {
+                    self.server_key_exchange = Some(msg.body.to_vec());
                 }
                 (handshake_type::SERVER_HELLO_DONE, Some(_)) => done = true,
                 _ => {}
@@ -185,6 +193,7 @@ mod tests {
         let cert = handshake(11, &[0, 0, 6, 0, 0, 3, 1, 2, 3]);
         let mut flight = server_hello(0x0303, &[]);
         flight.extend_from_slice(&cert);
+        flight.extend_from_slice(&handshake(12, &[3, 0, 0x17, 1, 4]));
         flight.extend_from_slice(&handshake(14, &[]));
         let bytes = record(22, &flight);
 
@@ -194,12 +203,14 @@ mod tests {
                 let HelloResponse::ServerHello {
                     hello,
                     certificates,
+                    server_key_exchange,
                 } = r
                 else {
                     panic!("unexpected {r:?}");
                 };
                 assert_eq!(hello.cipher_suite, 0xc02f);
                 assert_eq!(certificates, vec![vec![1, 2, 3]]);
+                assert_eq!(server_key_exchange, Some(vec![3, 0, 0x17, 1, 4]));
                 return;
             }
         }
