@@ -26,6 +26,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo +1.97 check --workspace   # MSRV
+cargo deny check                # advisories, licences, sources
 ```
 
 Scanner changes must also pass the integration tests (podman or docker):
@@ -53,7 +54,9 @@ podman compose -f tests/servers/compose.yaml down
   logic and `crates/testls/tests/` for end-to-end CLI behavior. Tests that
   need the local servers must be `#[ignore = "needs tests/servers running"]`.
 - **Dependencies:** keep them minimal. Add shared ones to
-  `[workspace.dependencies]`, and don't shell out to external tools.
+  `[workspace.dependencies]`, and don't shell out to external tools. New
+  crates must pass `cargo deny check` (see `deny.toml`); extend the licence
+  allow-list only for permissive licences, with a comment naming the crate.
 - **Exit codes** are part of the CLI contract: `0` = no findings at or above
   `--fail-on`, `1` = findings at or above it, `2` = scan error.
 

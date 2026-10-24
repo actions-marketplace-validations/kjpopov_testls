@@ -1,0 +1,30 @@
+name: cargo-deny
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  schedule:
+    # New RustSec advisories appear without code changes; check daily.
+    - cron: "17 5 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  deny:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        checks: [advisories, bans licenses sources]
+    # A freshly published advisory should not block unrelated pull requests;
+    # it still fails the scheduled and main-branch runs.
+    continue-on-error: ${{ matrix.checks == 'advisories' && github.event_name == 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check ${{ matrix.checks }}
