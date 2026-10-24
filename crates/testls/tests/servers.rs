@@ -72,6 +72,12 @@ fn legacy_server() {
     assert!(s.has("critical TLSv1.2 TLS_DH_anon_WITH_AES_128_CBC_SHA: anonymous"));
     assert!(s.has("medium   TLSv1.0 offered: deprecated (RFC 8996)"));
     assert!(s.has("info     TLSv1.2: server follows the client's cipher order"));
+    assert_eq!(
+        s.line("Key exchange TLSv1.2"),
+        "Key exchange TLSv1.2 client order"
+    );
+    assert!(s.has("0x001d  x25519"));
+    assert!(s.has("DH      2048 bits"));
     assert_eq!(s.line("Certificate"), "Certificate (TLSv1.2)");
     assert_eq!(s.line("#0"), "#0 CN=localhost");
     assert_eq!(s.line("names"), "names   localhost, 127.0.0.1");
@@ -99,6 +105,11 @@ fn modern_server() {
     assert_eq!(s.line("Ciphers TLSv1.3"), "Ciphers TLSv1.3 server order");
     assert!(s.has("0x1302  TLS_AES_256_GCM_SHA384"));
     assert!(s.has("0xcca8  TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256"));
+    assert_eq!(
+        s.line("Key exchange TLSv1.3"),
+        "Key exchange TLSv1.3 server order"
+    );
+    assert!(s.has("0x11ec  X25519MLKEM768"));
     assert_eq!(s.line("Certificate"), "Certificate (TLSv1.3)");
     assert_eq!(s.line("key"), "key     RSA 2048 bits");
     assert_eq!(s.line("Findings"), "Findings");
@@ -162,6 +173,21 @@ fn json_report() {
             .unwrap()
             .iter()
             .any(|c| c["protocol"] == "TLSv1.2" && c["order"] == "client")
+    );
+    let kx = v["key_exchange"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|k| k["protocol"] == "TLSv1.2")
+        .unwrap();
+    assert_eq!(kx["group_order"], "client");
+    assert_eq!(kx["dh_bits"], 2048);
+    assert!(
+        kx["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|g| g["name"] == "x25519" && g["severity"] == "ok")
     );
     assert_eq!(v["certificate"]["chain"][0]["subject"], "CN=localhost");
     assert_eq!(v["findings"][0]["severity"], "critical");

@@ -7,9 +7,10 @@ use std::fmt::Write as _;
 use std::net::SocketAddr;
 
 use testls_checks::{
-    CertificateInfo, Finding, Severity, cipher_name, cipher_severity, protocol_severity,
+    CertificateInfo, Finding, Severity, cipher_name, cipher_severity, dh_severity, group_name,
+    group_severity, protocol_severity,
 };
-use testls_probe::{CipherOrder, CipherResult, ProtocolResult, ProtocolSupport};
+use testls_probe::{CipherOrder, CipherResult, KeyExchangeResult, ProtocolResult, ProtocolSupport};
 use testls_wire::ProtocolVersion;
 
 use crate::Painter;
@@ -22,6 +23,16 @@ pub struct CipherSection {
     pub version: ProtocolVersion,
     /// Enumeration result, or the error message.
     pub outcome: Result<CipherResult, String>,
+}
+
+/// Key exchange groups and DH parameter size for one protocol version, or
+/// why they could not be probed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyExchangeSection {
+    /// Protocol version the key exchange was probed for.
+    pub version: ProtocolVersion,
+    /// Probe result, or the error message.
+    pub outcome: Result<KeyExchangeResult, String>,
 }
 
 /// The certificate chain presented in a full handshake.
@@ -78,6 +89,34 @@ pub fn ciphers(section: &CipherSection, paint: Painter) -> String {
             "  {}",
             paint.severity(severity, &cipher_label(version, id))
         );
+    }
+    out
+}
+
+/// Renders the supported groups and DH parameter size of one protocol
+/// version, coloured by severity.
+#[must_use]
+pub fn key_exchange(section: &KeyExchangeSection, paint: Painter) -> String {
+    let heading = paint.heading(&format!("Key exchange {}", section.version));
+    let k = match &section.outcome {
+        Ok(k) => k,
+        Err(e) => return format!("{heading}: error: {e}\n"),
+    };
+    let mut out = match k.group_order {
+        CipherOrder::Server => format!("{heading} server order\n"),
+        CipherOrder::Client => format!("{heading} client order\n"),
+        CipherOrder::NotApplicable => format!("{heading}\n"),
+    };
+    for &id in &k.groups {
+        let label = format!("0x{id:04x}  {}", group_name(id));
+        let _ = writeln!(out, "  {}", paint.severity(group_severity(id).0, &label));
+    }
+    if let Some(bits) = k.dh_bits {
+        let label = format!("DH      {bits} bits");
+        let _ = writeln!(out, "  {}", paint.severity(dh_severity(bits).0, &label));
+    }
+    if k.groups.is_empty() && k.dh_bits.is_none() {
+        let _ = writeln!(out, "  no ECDHE or DHE key exchange");
     }
     out
 }
@@ -243,6 +282,50 @@ mod tests {
         assert_eq!(
             ciphers(&section, PLAIN),
             "Ciphers TLSv1.3: error: timed out\n"
+        );
+    }
+
+    /// Key exchange listings show groups in order and the DH prime size.
+    #[test]
+    fn key_exchange_lines() {
+        let section = KeyExchangeSection {
+            version: ProtocolVersion::TLS12,
+            outcome: Ok(KeyExchangeResult {
+                version: ProtocolVersion::TLS12,
+                groups: vec![0x001d, 0x0017],
+                group_order: CipherOrder::Server,
+                dh_bits: Some(2048),
+            }),
+        };
+        assert_eq!(
+            key_exchange(&section, PLAIN),
+            "Key exchange TLSv1.2 server order\n  0x001d  x25519\n  0x0017  secp256r1\n  DH      2048 bits\n"
+        );
+    }
+
+    /// An empty result and a failed probe are both reported.
+    #[test]
+    fn key_exchange_empty_and_error() {
+        let section = KeyExchangeSection {
+            version: ProtocolVersion::SSL3,
+            outcome: Ok(KeyExchangeResult {
+                version: ProtocolVersion::SSL3,
+                groups: vec![],
+                group_order: CipherOrder::NotApplicable,
+                dh_bits: None,
+            }),
+        };
+        assert_eq!(
+            key_exchange(&section, PLAIN),
+            "Key exchange SSLv3\n  no ECDHE or DHE key exchange\n"
+        );
+        let section = KeyExchangeSection {
+            version: ProtocolVersion::TLS13,
+            outcome: Err("timed out".into()),
+        };
+        assert_eq!(
+            key_exchange(&section, PLAIN),
+            "Key exchange TLSv1.3: error: timed out\n"
         );
     }
 
