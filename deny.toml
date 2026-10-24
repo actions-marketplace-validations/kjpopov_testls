@@ -27,6 +27,12 @@ allow = [
 ]
 confidence-threshold = 0.9
 
+# libfuzzer-sys (fuzz/ only) bundles LLVM's libFuzzer under the permissive
+# NCSA licence; it is never linked into testls itself.
+[[licenses.exceptions]]
+crate = "libfuzzer-sys"
+allow = ["NCSA"]
+
 [licenses.private]
 ignore = true
 

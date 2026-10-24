@@ -3,7 +3,8 @@
 version: 2
 updates:
   - package-ecosystem: cargo
-    directory: /
+    # The fuzz crate has its own lockfile outside the workspace.
+    directories: [/, /fuzz]
     schedule:
       interval: weekly
       day: monday

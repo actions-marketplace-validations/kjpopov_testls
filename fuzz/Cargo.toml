@@ -1,0 +1,47 @@
+# Fuzz targets for the wire parsers; see fuzz/README.md. Not a workspace
+# member because cargo-fuzz needs a nightly toolchain.
+[package]
+name = "testls-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+testls-wire = { path = "../crates/testls-wire" }
+
+[[bin]]
+name = "record_stream"
+path = "fuzz_targets/record_stream.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "server_hello"
+path = "fuzz_targets/server_hello.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "certificate_list"
+path = "fuzz_targets/certificate_list.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ssl2_server_hello"
+path = "fuzz_targets/ssl2_server_hello.rs"
+test = false
+doc = false
+bench = false
+
+# Keep the fuzz crate out of the parent workspace.
+[workspace]
+members = ["."]

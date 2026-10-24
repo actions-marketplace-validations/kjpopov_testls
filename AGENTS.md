@@ -40,6 +40,8 @@ podman compose -f tests/servers/compose.yaml down
 
 To see coverage locally, run `cargo llvm-cov --workspace -- --include-ignored`
 while the servers are up (CI publishes the same report in the job summary).
+Parser changes in `testls-wire` should also survive a short fuzz run; see
+[fuzz/README.md](fuzz/README.md).
 
 ## Code requirements
 
