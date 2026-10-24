@@ -10,9 +10,9 @@
 TLS/SSL scanner for the web era, written in Rust and inspired by
 [testssl.sh](https://testssl.sh). Single static binary. No bash. No subprocess.
 
-> **Status: early development (alpha).** Protocol detection and cipher suite
-> enumeration work today; everything else in the feature list is planned. See
-> [docs/PLAN.md](docs/PLAN.md).
+> **Status: v0.1.** The command-line scanner checks protocols, cipher suites
+> and certificates; the features marked v0.2 and later are planned. See
+> [docs/PLAN.md](docs/PLAN.md) and [CHANGELOG.md](CHANGELOG.md).
 
 ## Why
 
@@ -30,24 +30,35 @@ Download a prebuilt binary for Linux (static musl, x86_64/aarch64), macOS
 `SHA256SUMS`, and put `testls` on your `PATH`:
 
 ```bash
-tar xzf testls-v0.1.0-alpha.1-x86_64-unknown-linux-musl.tar.gz
-./testls-v0.1.0-alpha.1-x86_64-unknown-linux-musl/testls example.com
+tar xzf testls-v0.1.0-x86_64-unknown-linux-musl.tar.gz
+./testls-v0.1.0-x86_64-unknown-linux-musl/testls example.com
 ```
 
 On macOS the binaries are not notarized yet; clear the quarantine flag with
 `xattr -d com.apple.quarantine testls` if Gatekeeper blocks them.
 
-## Quick Start (planned)
+## Quick Start
 
 ```bash
-# CLI
+# Scan a host (port 443 by default)
 testls example.com
 
-# Web service (UI + API, binds to localhost by default)
-testls serve --port 8080
+# JSON output for scripts; exit status 1 if any finding is medium or worse
+testls --format json --fail-on medium example.com:8443
+
+# Trust the operating system's roots or a private CA instead of Mozilla's
+testls --system-roots intranet.example
+testls --ca-file my-ca.pem 10.0.0.5 --sni intranet.example
 ```
 
-## Planned Features
+Exit status is `0` when no finding reaches `--fail-on` (default `high`), `1`
+when one does, and `2` when the scan itself fails. Run `testls --help` for all
+options; the JSON format is described in
+[docs/json-schema.md](docs/json-schema.md).
+
+A web service (`testls serve`, REST API and browser UI) is planned for v0.4.
+
+## Features
 
 | Area | Details | Target |
 | --- | --- | --- |
