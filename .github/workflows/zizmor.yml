@@ -1,0 +1,24 @@
+name: zizmor
+
+on:
+  push:
+    branches: [main, develop]
+    paths: [".github/**"]
+  pull_request:
+    paths: [".github/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  zizmor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      # Findings fail the job directly; no SARIF upload, so no
+      # security-events permission is needed.
+      - uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
+        with:
+          advanced-security: false

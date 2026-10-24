@@ -39,6 +39,7 @@ Two connection paths:
 ### v0.1 — Core scanner CLI
 - [x] Workspace skeleton, CI (fmt, clippy, test, MSRV), static musl build
 - [x] Dependency audit in CI: `cargo deny` (RustSec advisories, licences, sources)
+- [x] Workflow audit in CI: `zizmor` (pinned actions, least-privilege tokens)
 - [x] Release workflow (cross-platform binaries on tag)
 - [x] `testls-data`: IANA cipher suite, group, sig-scheme registries → generated Rust tables
 - [x] `testls-wire`: ClientHello builder (SSLv2-compat, SSLv3, TLS1.0–1.3),
@@ -114,3 +115,4 @@ Two connection paths:
 | 17 | Colour defaults to `--color auto`: on for terminals, off when piped or `NO_COLOR` is set; hand-written ANSI codes, no colour crate; on Windows `auto` also requires enabling virtual terminal processing (via `anstyle-query`, already pulled in by clap) | Same convention as cargo/git/ripgrep; logs and files stay clean; legacy Windows consoles would print raw escape codes |
 | 18 | JSON output (`--format json`) is one document printed at the end, built with serde from dedicated schema structs; `schema_version` bumps only on breaking changes; times are Unix seconds | Internal types can change without breaking consumers; additive fields stay compatible; integers avoid date-format parsing |
 | 19 | `cargo deny` checks advisories daily and on every push; on pull requests only licences, bans and sources block the merge | New advisories should be fixed promptly, but must not fail unrelated PRs |
+| 21 | Actions are pinned to full commit SHAs with the tag in a comment; workflows default to `contents: read` and checkout does not persist credentials; `zizmor` gates workflow changes | A moved tag or compromised action cannot change what CI runs; jobs cannot push with the token they were given |
