@@ -5,9 +5,12 @@ use testls_wire::ProtocolVersion;
 
 use crate::{Finding, Severity};
 
-/// Hybrid post-quantum groups, from the IANA TLS Supported Groups registry
-/// (draft-ietf-tls-ecdhe-mlkem).
-const PQ_HYBRID_GROUPS: [u16; 3] = [0x11eb, 0x11ec, 0x11ed];
+/// Whether group `id` is post-quantum: a pure ML-KEM group
+/// (draft-ietf-tls-mlkem) or an ML-KEM hybrid (draft-ietf-tls-ecdhe-mlkem),
+/// as named in the IANA TLS Supported Groups registry.
+fn is_post_quantum(id: u16) -> bool {
+    testls_data::group(id).is_some_and(|g| g.name.contains("MLKEM"))
+}
 
 /// IANA name of group `id`, or `"unknown"`.
 #[must_use]
@@ -46,7 +49,7 @@ pub fn dh_severity(bits: usize) -> (Severity, &'static str) {
 /// Findings for the key exchange result of one protocol version.
 ///
 /// Emits one finding per weak group, one for a weak DH prime, and a note
-/// when TLSv1.3 offers no hybrid post-quantum group.
+/// when TLSv1.3 offers no post-quantum group.
 #[must_use]
 pub fn key_exchange_findings(result: &KeyExchangeResult) -> Vec<Finding> {
     let v = result.version;
@@ -76,12 +79,12 @@ pub fn key_exchange_findings(result: &KeyExchangeResult) -> Vec<Finding> {
     }
     if v == ProtocolVersion::TLS13
         && !result.groups.is_empty()
-        && !result.groups.iter().any(|g| PQ_HYBRID_GROUPS.contains(g))
+        && !result.groups.iter().any(|&g| is_post_quantum(g))
     {
         out.push(Finding::new(
             "group.no_post_quantum",
             Severity::Info,
-            format!("{v}: no hybrid post-quantum group such as X25519MLKEM768"),
+            format!("{v}: no post-quantum group such as X25519MLKEM768"),
         ));
     }
     out
@@ -145,7 +148,21 @@ mod tests {
         assert_eq!(crate::max_severity(&f), Some(Severity::Medium));
     }
 
-    /// TLSv1.3 without a hybrid group gets an informational note.
+    /// Every registered ML-KEM group counts as post-quantum; draft Kyber
+    /// code points and classical groups do not.
+    #[test]
+    fn post_quantum_groups() {
+        for id in [
+            0x0200, 0x0201, 0x0202, 0x11e9, 0x11ea, 0x11eb, 0x11ec, 0x11ed, 0x11ee,
+        ] {
+            assert!(is_post_quantum(id), "{id:#06x}");
+        }
+        for id in [0x001d, 0x0100, 0x6399, 0xfafa] {
+            assert!(!is_post_quantum(id), "{id:#06x}");
+        }
+    }
+
+    /// TLSv1.3 without a post-quantum group gets an informational note.
     #[test]
     fn tls13_post_quantum() {
         let f = key_exchange_findings(&result(ProtocolVersion::TLS13, &[0x001d, 0x0017], None));
