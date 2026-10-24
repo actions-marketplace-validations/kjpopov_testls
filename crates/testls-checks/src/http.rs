@@ -248,6 +248,7 @@ fn header_findings(response: &HttpResponse) -> Vec<Finding> {
 fn framing_protected(response: &HttpResponse) -> bool {
     let ancestors: Vec<&str> = response
         .header_values("content-security-policy")
+        .flat_map(|v| v.split(','))
         .filter_map(frame_ancestors)
         .collect();
     if !ancestors.is_empty() {
@@ -271,12 +272,18 @@ fn frame_ancestors(policy: &str) -> Option<&str> {
     })
 }
 
-/// Whether a `frame-ancestors` source list limits embedding: `*` and bare
-/// scheme sources such as `https:` allow any site.
+/// Whether a `frame-ancestors` source list limits embedding: `*`, bare
+/// scheme sources such as `https:`, and wildcard hosts such as `https://*`
+/// allow any site (CSP Level 3 §2.3.1 source expressions).
 fn restricts_ancestors(sources: &str) -> bool {
-    !sources
-        .split_ascii_whitespace()
-        .any(|s| s == "*" || (s.ends_with(':') && !s.starts_with('\'')))
+    !sources.split_ascii_whitespace().any(|s| {
+        if s.starts_with('\'') {
+            return false;
+        }
+        let host = s.split_once("://").map_or(s, |(_, rest)| rest);
+        let host = host.split('/').next().unwrap_or_default();
+        host == "*" || host.starts_with("*:") || (s.ends_with(':') && !s.contains('/'))
+    })
 }
 
 #[cfg(test)]
@@ -460,6 +467,13 @@ mod tests {
         assert!(!protected(&[(csp, "default-src 'self'")]));
         assert!(!protected(&[(csp, "frame-ancestors *")]));
         assert!(!protected(&[(csp, "frame-ancestors 'self' https:")]));
+        assert!(!protected(&[(csp, "frame-ancestors https://*")]));
+        assert!(!protected(&[(csp, "frame-ancestors *:443/")]));
+        assert!(protected(&[(csp, "frame-ancestors https://*.example.com")]));
+        assert!(protected(&[(
+            csp,
+            "default-src 'self', frame-ancestors 'none'"
+        )]));
         // frame-ancestors overrides X-Frame-Options, even when permissive.
         assert!(!protected(&[(csp, "frame-ancestors *"), (xfo, "DENY")]));
     }
