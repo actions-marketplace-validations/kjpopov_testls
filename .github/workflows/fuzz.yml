@@ -45,7 +45,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
         run: |
-          if [ "$EVENT" != pull_request ] || git diff --name-only "origin/$BASE_REF...HEAD" | grep -Eq '^(Cargo\.toml|crates/testls-wire/|fuzz/|\.github/workflows/fuzz\.yml)'; then
+          if [ "$EVENT" != pull_request ] || ! git diff --quiet "origin/$BASE_REF...HEAD" -- Cargo.toml crates/testls-wire/ fuzz/ .github/workflows/fuzz.yml; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
