@@ -33,8 +33,9 @@ impl Hsts {
 
 /// Parses a `Strict-Transport-Security` value (RFC 6797 §6.1).
 ///
-/// Directive names are case-insensitive, values may be quoted, unknown
-/// directives are ignored, and a repeated directive invalidates the header.
+/// Directive names are case-insensitive, values may be tokens or quoted
+/// strings, unknown directives are ignored, and a repeated directive or any
+/// value outside the grammar invalidates the header (RFC 6797 §6.1 items 2-5).
 ///
 /// # Errors
 /// Returns a short reason when the value is not a valid policy.
@@ -43,23 +44,12 @@ pub fn parse_hsts(value: &str) -> Result<Hsts, String> {
     let mut include_subdomains = false;
     let mut preload = false;
     let mut seen: Vec<String> = Vec::new();
-    for directive in value.split(';') {
-        let directive = directive.trim_matches([' ', '\t']);
-        if directive.is_empty() {
-            continue;
-        }
-        let (name, arg) = match directive.split_once('=') {
-            Some((n, v)) => (
-                n.trim_matches([' ', '\t']),
-                Some(unquote(v.trim_matches([' ', '\t']))),
-            ),
-            None => (directive, None),
-        };
+    for (name, arg) in directives(value)? {
         let name = name.to_ascii_lowercase();
         if seen.contains(&name) {
             return Err(format!("directive {name} repeated"));
         }
-        match (name.as_str(), arg) {
+        match (name.as_str(), arg.as_deref()) {
             ("max-age", Some(v)) if !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()) => {
                 // Values beyond u64 are clamped; they are "forever" in practice.
                 max_age = Some(v.parse().unwrap_or(u64::MAX));
@@ -82,12 +72,70 @@ pub fn parse_hsts(value: &str) -> Result<Hsts, String> {
     })
 }
 
-/// Strips one pair of surrounding double quotes (a `quoted-string` without
-/// escapes, which is all `max-age` can hold).
-fn unquote(v: &str) -> &str {
-    v.strip_prefix('"')
-        .and_then(|v| v.strip_suffix('"'))
-        .unwrap_or(v)
+/// Splits an STS value into `(name, value)` directives following the grammar
+/// `[ directive ] *( ";" [ directive ] )` with
+/// `directive = token [ "=" ( token / quoted-string ) ]` (RFC 6797 §6.1).
+/// Quoted values are returned unescaped.
+fn directives(value: &str) -> Result<Vec<(&str, Option<String>)>, String> {
+    let invalid = || "invalid directive syntax".to_owned();
+    let mut out = Vec::new();
+    let mut rest = value;
+    loop {
+        rest = skip_ows(rest);
+        if let Some(r) = rest.strip_prefix(';') {
+            rest = r;
+            continue;
+        }
+        if rest.is_empty() {
+            return Ok(out);
+        }
+        let (name, r) = token(rest).ok_or_else(invalid)?;
+        rest = skip_ows(r);
+        let mut arg = None;
+        if let Some(r) = rest.strip_prefix('=') {
+            let r = skip_ows(r);
+            let (v, r) = if r.starts_with('"') {
+                quoted_string(r).ok_or_else(invalid)?
+            } else {
+                let (v, r) = token(r).ok_or_else(invalid)?;
+                (v.to_owned(), r)
+            };
+            arg = Some(v);
+            rest = skip_ows(r);
+        }
+        if !(rest.is_empty() || rest.starts_with(';')) {
+            return Err(invalid());
+        }
+        out.push((name, arg));
+    }
+}
+
+/// Skips optional whitespace (spaces and tabs).
+fn skip_ows(s: &str) -> &str {
+    s.trim_start_matches([' ', '\t'])
+}
+
+/// Splits a non-empty leading `token` (RFC 9110 §5.6.2) off `s`.
+fn token(s: &str) -> Option<(&str, &str)> {
+    let end = s
+        .find(|c: char| !(c.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~".contains(c)))
+        .unwrap_or(s.len());
+    (end > 0).then(|| s.split_at(end))
+}
+
+/// Splits a leading `quoted-string` (RFC 9110 §5.6.4) off `s`, returning its
+/// unescaped content and the remainder.
+fn quoted_string(s: &str) -> Option<(String, &str)> {
+    let mut chars = s.strip_prefix('"')?.char_indices();
+    let mut content = String::new();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '"' => return Some((content, &s[i + 2..])),
+            '\\' => content.push(chars.next()?.1),
+            c => content.push(c),
+        }
+    }
+    None
 }
 
 /// HSTS and security header findings for the reply to `GET /`.
@@ -166,19 +214,11 @@ fn header_findings(response: &HttpResponse) -> Vec<Finding> {
             "no X-Content-Type-Options: nosniff header",
         ));
     }
-    let frame_ancestors = csp.is_some_and(|v| {
-        v.split(';').any(|d| {
-            d.trim()
-                .split_ascii_whitespace()
-                .next()
-                .is_some_and(|n| n.eq_ignore_ascii_case("frame-ancestors"))
-        })
-    });
-    if response.header("x-frame-options").is_none() && !frame_ancestors {
+    if !framing_protected(response) {
         findings.push(Finding::new(
             "header.framing",
             Severity::Info,
-            "no X-Frame-Options header or CSP frame-ancestors directive",
+            "no restrictive X-Frame-Options header or CSP frame-ancestors directive",
         ));
     }
     if csp.is_none() {
@@ -196,6 +236,47 @@ fn header_findings(response: &HttpResponse) -> Vec<Finding> {
         ));
     }
     findings
+}
+
+/// Whether browsers would refuse to embed the page in a cross-origin frame.
+///
+/// Every `Content-Security-Policy` field is enforced, so one restrictive
+/// `frame-ancestors` directive suffices; when any `frame-ancestors` is present
+/// `X-Frame-Options` is ignored (CSP Level 3 §6.4.2). Otherwise the combined
+/// `X-Frame-Options` values must include `DENY` or `SAMEORIGIN` (HTML
+/// standard, "check a navigation response's adherence to X-Frame-Options").
+fn framing_protected(response: &HttpResponse) -> bool {
+    let ancestors: Vec<&str> = response
+        .header_values("content-security-policy")
+        .filter_map(frame_ancestors)
+        .collect();
+    if !ancestors.is_empty() {
+        return ancestors.into_iter().any(restricts_ancestors);
+    }
+    response
+        .header_values("x-frame-options")
+        .flat_map(|v| v.split(','))
+        .map(str::trim)
+        .any(|v| v.eq_ignore_ascii_case("deny") || v.eq_ignore_ascii_case("sameorigin"))
+}
+
+/// Source list of the first `frame-ancestors` directive in one policy.
+fn frame_ancestors(policy: &str) -> Option<&str> {
+    policy.split(';').find_map(|d| {
+        let d = d.trim_matches([' ', '\t']);
+        let end = d.find([' ', '\t']).unwrap_or(d.len());
+        let (name, sources) = d.split_at(end);
+        name.eq_ignore_ascii_case("frame-ancestors")
+            .then_some(sources)
+    })
+}
+
+/// Whether a `frame-ancestors` source list limits embedding: `*` and bare
+/// scheme sources such as `https:` allow any site.
+fn restricts_ancestors(sources: &str) -> bool {
+    !sources
+        .split_ascii_whitespace()
+        .any(|s| s == "*" || (s.ends_with(':') && !s.starts_with('\'')))
 }
 
 #[cfg(test)]
@@ -246,6 +327,14 @@ mod tests {
             parse_hsts("max-age=99999999999999999999999").map(|h| h.max_age),
             Ok(u64::MAX)
         );
+        for value in [
+            "max-age=1; future=\"@\"",
+            "max-age=1; future = x",
+            "max-age=1; future=\"a\\\"b; c\"",
+            "max-age=\"1\"; future",
+        ] {
+            assert_eq!(parse_hsts(value).map(|h| h.max_age), Ok(1), "{value}");
+        }
     }
 
     /// Invalid policies are rejected with a reason.
@@ -260,6 +349,11 @@ mod tests {
             "max-age=1; max-age=2",
             "max-age=1; preload=yes",
             "max-age=1; includesubdomains; IncludeSubDomains",
+            "max-age=1; future=@",
+            "max-age=1; future=a b",
+            "max-age=1; future=\"open",
+            "max-age=1 x",
+            "@; max-age=1",
         ] {
             assert!(parse_hsts(value).is_err(), "{value}");
         }
@@ -342,5 +436,31 @@ mod tests {
         let found = ids(&findings);
         assert!(found.contains(&("header.x_content_type_options", Severity::Info)));
         assert!(!found.iter().any(|(id, _)| *id == "header.framing"));
+    }
+
+    /// Framing protection depends on the effective header values, and every
+    /// CSP field is considered.
+    #[test]
+    fn effective_framing_protection() {
+        let protected = |headers: &[(&str, &str)]| framing_protected(&response(headers));
+        let csp = "Content-Security-Policy";
+        let xfo = "X-Frame-Options";
+        assert!(protected(&[(xfo, "deny")]));
+        assert!(protected(&[(
+            csp,
+            "default-src 'self'; frame-ancestors 'none'"
+        )]));
+        assert!(protected(&[(csp, "frame-ancestors")]));
+        assert!(protected(&[
+            (csp, "default-src 'self'"),
+            (csp, "frame-ancestors https://example.com"),
+        ]));
+        assert!(!protected(&[]));
+        assert!(!protected(&[(xfo, "ALLOWALL")]));
+        assert!(!protected(&[(csp, "default-src 'self'")]));
+        assert!(!protected(&[(csp, "frame-ancestors *")]));
+        assert!(!protected(&[(csp, "frame-ancestors 'self' https:")]));
+        // frame-ancestors overrides X-Frame-Options, even when permissive.
+        assert!(!protected(&[(csp, "frame-ancestors *"), (xfo, "DENY")]));
     }
 }
