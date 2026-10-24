@@ -124,16 +124,21 @@ fn token(s: &str) -> Option<(&str, &str)> {
 }
 
 /// Splits a leading `quoted-string` (RFC 9110 §5.6.4) off `s`, returning its
-/// unescaped content and the remainder.
+/// unescaped content and the remainder. Control characters other than HTAB
+/// are rejected, escaped or not.
 fn quoted_string(s: &str) -> Option<(String, &str)> {
     let mut chars = s.strip_prefix('"')?.char_indices();
     let mut content = String::new();
     while let Some((i, c)) = chars.next() {
-        match c {
+        let c = match c {
             '"' => return Some((content, &s[i + 2..])),
-            '\\' => content.push(chars.next()?.1),
-            c => content.push(c),
+            '\\' => chars.next()?.1,
+            c => c,
+        };
+        if c.is_ascii_control() && c != '\t' {
+            return None;
         }
+        content.push(c);
     }
     None
 }
@@ -359,6 +364,8 @@ mod tests {
             "max-age=1; future=@",
             "max-age=1; future=a b",
             "max-age=1; future=\"open",
+            "max-age=1; future=\"\n\"",
+            "max-age=1; future=\"\\\0\"",
             "max-age=1 x",
             "@; max-age=1",
         ] {
@@ -457,6 +464,8 @@ mod tests {
             csp,
             "default-src 'self'; frame-ancestors 'none'"
         )]));
+        // An empty source list matches nothing, like 'none' (CSP Level 3,
+        // "Does url match source list").
         assert!(protected(&[(csp, "frame-ancestors")]));
         assert!(protected(&[
             (csp, "default-src 'self'"),
