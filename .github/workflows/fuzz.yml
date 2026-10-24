@@ -3,9 +3,13 @@ name: Fuzz
 on:
   push:
     branches: [main, develop]
-    paths: ["crates/testls-wire/**", "fuzz/**", ".github/workflows/fuzz.yml"]
+    paths:
+      # The root manifest supplies testls-wire's version, edition and lints.
+      - Cargo.toml
+      - crates/testls-wire/**
+      - fuzz/**
+      - .github/workflows/fuzz.yml
   pull_request:
-    paths: ["crates/testls-wire/**", "fuzz/**", ".github/workflows/fuzz.yml"]
   schedule:
     - cron: "41 4 * * 1"
 
@@ -29,18 +33,38 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+      - name: Check for relevant changes
+        id: changes
+        # Pull requests always run this job so it can be a required check, but
+        # skip fuzzing unless they touch the root manifest (testls-wire's
+        # version, edition and lints), testls-wire, fuzz/ or this workflow.
+        # Pushes and scheduled runs always fuzz.
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ "$EVENT" != pull_request ] || ! git diff --quiet "origin/$BASE_REF...HEAD" -- Cargo.toml crates/testls-wire/ fuzz/ .github/workflows/fuzz.yml; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.changes.outputs.run == 'true'
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: nightly
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      - if: steps.changes.outputs.run == 'true'
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: cargo-fuzz@0.13.2
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - if: steps.changes.outputs.run == 'true'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: fuzz
           key: ${{ matrix.target }}
       - name: Fuzz
+        if: steps.changes.outputs.run == 'true'
         working-directory: fuzz
         # The prebuilt cargo-fuzz is a musl binary and would default to the
         # musl target, which AddressSanitizer does not support.
