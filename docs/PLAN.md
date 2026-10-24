@@ -43,6 +43,7 @@ Two connection paths:
 - [x] Workflow audit in CI: `zizmor` (pinned actions, least-privilege tokens)
 - [x] Coverage in CI: `cargo llvm-cov` over unit and integration tests
       (job summary + lcov artifact, informational)
+- [x] Fuzzing: `cargo fuzz` targets for the `testls-wire` parsers, run in CI
 - [x] Release workflow (cross-platform binaries on tag)
 - [x] `testls-data`: IANA cipher suite, group, sig-scheme registries → generated Rust tables
 - [x] `testls-wire`: ClientHello builder (SSLv2-compat, SSLv3, TLS1.0–1.3),
@@ -80,7 +81,9 @@ Two connection paths:
 ## Testing strategy
 
 - Unit tests + `proptest` round-trips for the wire codec
-- `cargo-fuzz` targets for all parsers (ServerHello, Certificate, Alert)
+- `cargo-fuzz` targets for the wire parsers in `fuzz/` (record framing,
+  handshake reassembly, ServerHello, Certificate, Alert, SSLv2): one minute
+  per target on PRs that touch `testls-wire`, ten minutes weekly
 - Integration: `tests/servers/compose.yaml` runs `openssl s_server`
   containers with specific protocol/cipher sets (podman or docker);
   `crates/testls/tests/servers.rs` scans them (`--ignored`, own CI job).
@@ -123,3 +126,4 @@ Two connection paths:
 | 20 | Dependabot groups minor/patch crate and action bumps into one weekly PR each; the test image base is pinned by digest; majors and security fixes get their own PRs; version updates wait 7 days after a release | Few PRs to review, while breaking upgrades stay isolated |
 | 21 | Actions are pinned to full commit SHAs with the tag in a comment; workflows default to `contents: read` and checkout does not persist credentials; `zizmor` gates workflow changes | A moved tag or compromised action cannot change what CI runs; jobs cannot push with the token they were given |
 | 22 | Coverage comes from `cargo llvm-cov` on Linux, including the integration tests; it is published as a job summary and lcov artifact, without a third-party service, token or failing threshold | The CLI is only exercised end to end, so unit tests alone under-report it; a hard threshold would block small PRs for noise |
+| 23 | Fuzz targets live in a standalone `fuzz/` crate (own lockfile, nightly only) and run with libFuzzer for a short time in CI, path-filtered to `testls-wire` changes, plus a longer weekly run; no corpus is committed yet | Parsers of untrusted network input are the riskiest code; keeping nightly out of the workspace leaves the stable and MSRV builds unaffected |
