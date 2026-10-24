@@ -41,6 +41,8 @@ Two connection paths:
 - [x] Dependency audit in CI: `cargo deny` (RustSec advisories, licences, sources)
 - [x] Dependabot: weekly grouped updates for crates, GitHub Actions and test images
 - [x] Workflow audit in CI: `zizmor` (pinned actions, least-privilege tokens)
+- [x] Coverage in CI: `cargo llvm-cov` over unit and integration tests
+      (job summary + lcov artifact, informational)
 - [x] Release workflow (cross-platform binaries on tag)
 - [x] `testls-data`: IANA cipher suite, group, sig-scheme registries → generated Rust tables
 - [x] `testls-wire`: ClientHello builder (SSLv2-compat, SSLv3, TLS1.0–1.3),
@@ -82,6 +84,8 @@ Two connection paths:
 - Integration: `tests/servers/compose.yaml` runs `openssl s_server`
   containers with specific protocol/cipher sets (podman or docker);
   `crates/testls/tests/servers.rs` scans them (`--ignored`, own CI job).
+- Coverage: `cargo llvm-cov --workspace -- --include-ignored` with the
+  test servers running; reported in the job summary, no threshold
   The JSON renderer is checked field by field against expected documents
 - Opt-in live tests against badssl.com (not in default CI)
 
@@ -118,3 +122,4 @@ Two connection paths:
 | 19 | `cargo deny` checks advisories daily and on every push; on pull requests only licences, bans and sources block the merge | New advisories should be fixed promptly, but must not fail unrelated PRs |
 | 20 | Dependabot groups minor/patch crate and action bumps into one weekly PR each; the test image base is pinned by digest; majors and security fixes get their own PRs; version updates wait 7 days after a release | Few PRs to review, while breaking upgrades stay isolated |
 | 21 | Actions are pinned to full commit SHAs with the tag in a comment; workflows default to `contents: read` and checkout does not persist credentials; `zizmor` gates workflow changes | A moved tag or compromised action cannot change what CI runs; jobs cannot push with the token they were given |
+| 22 | Coverage comes from `cargo llvm-cov` on Linux, including the integration tests; it is published as a job summary and lcov artifact, without a third-party service, token or failing threshold | The CLI is only exercised end to end, so unit tests alone under-report it; a hard threshold would block small PRs for noise |
