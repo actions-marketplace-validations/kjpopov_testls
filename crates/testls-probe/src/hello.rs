@@ -134,6 +134,30 @@ pub fn client_hello(version: ProtocolVersion, suites: Vec<u16>, sni: Option<&str
     }
 }
 
+/// Like [`client_hello`], but offering exactly `groups` in
+/// `supported_groups`.
+///
+/// TLS 1.3 hellos carry an empty `key_share` list, which RFC 8446 §4.2.8
+/// allows: a server that supports one of `groups` must answer with a
+/// `HelloRetryRequest` naming its choice, so no key material is needed.
+#[must_use]
+pub fn group_hello(
+    version: ProtocolVersion,
+    suites: Vec<u16>,
+    groups: &[u16],
+    sni: Option<&str>,
+) -> ClientHello {
+    let mut hello = client_hello(version, suites, sni);
+    for ext in &mut hello.extensions {
+        match ext {
+            Extension::SupportedGroups(g) => *g = groups.to_vec(),
+            Extension::KeyShare(shares) => shares.clear(),
+            _ => {}
+        }
+    }
+    hello
+}
+
 /// An SSLv2 `CLIENT-HELLO` offering every SSLv2 cipher spec.
 ///
 /// # Errors
@@ -180,6 +204,23 @@ mod tests {
                 .contains(&Extension::SupportedVersions(vec![ProtocolVersion::TLS13]))
         );
         assert!(h.encode().is_ok());
+    }
+
+    /// `group_hello` replaces the group list and empties the key shares.
+    #[test]
+    fn group_hello_shape() {
+        let h = group_hello(ProtocolVersion::TLS13, tls13_suites(), &[0x11ec], None);
+        assert!(
+            h.extensions
+                .contains(&Extension::SupportedGroups(vec![0x11ec]))
+        );
+        assert!(h.extensions.contains(&Extension::KeyShare(vec![])));
+        assert!(h.encode().is_ok());
+        let h = group_hello(ProtocolVersion::TLS12, vec![0xc02f], &[0x0017], None);
+        assert!(
+            h.extensions
+                .contains(&Extension::SupportedGroups(vec![0x0017]))
+        );
     }
 
     #[test]

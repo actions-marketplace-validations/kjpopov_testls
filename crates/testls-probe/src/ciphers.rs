@@ -183,6 +183,7 @@ mod tests {
                 extensions: exts,
             },
             certificates: vec![],
+            server_key_exchange: None,
         }
     }
 
