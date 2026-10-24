@@ -137,11 +137,16 @@ pub fn findings(findings: &[Finding], paint: Painter) -> String {
 
 /// Formats a cipher suite id and name for the cipher listing.
 fn cipher_label(version: ProtocolVersion, id: u32) -> String {
-    let name = cipher_name(version, id);
+    format!("{}  {}", suite_id(version, id), cipher_name(version, id))
+}
+
+/// Formats a cipher suite id as hex: six digits for SSLv2 cipher specs,
+/// four otherwise.
+pub(crate) fn suite_id(version: ProtocolVersion, id: u32) -> String {
     if version == ProtocolVersion::SSL2 {
-        format!("0x{id:06x}  {name}")
+        format!("0x{id:06x}")
     } else {
-        format!("0x{id:04x}  {name}")
+        format!("0x{id:04x}")
     }
 }
 
@@ -252,6 +257,8 @@ mod tests {
                     issuer: "CN=test CA".into(),
                     not_before: "A".into(),
                     not_after: "B".into(),
+                    not_before_unix: 0,
+                    not_after_unix: 0,
                     names: vec!["localhost".into(), "127.0.0.1".into()],
                     key: "EC 256 bits".into(),
                 }),

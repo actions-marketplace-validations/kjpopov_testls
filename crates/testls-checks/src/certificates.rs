@@ -79,6 +79,10 @@ pub struct CertificateInfo {
     pub not_before: String,
     /// End of the validity period.
     pub not_after: String,
+    /// Start of the validity period as a Unix timestamp.
+    pub not_before_unix: i64,
+    /// End of the validity period as a Unix timestamp.
+    pub not_after_unix: i64,
     /// DNS names and IP addresses from the subject alternative names.
     pub names: Vec<String>,
     /// Public key algorithm and size, e.g. `RSA 2048 bits`.
@@ -123,6 +127,8 @@ pub fn describe_certificate(der: &[u8]) -> Result<CertificateInfo, String> {
         issuer: printable(&cert.issuer().to_string()),
         not_before: validity.not_before.to_string(),
         not_after: validity.not_after.to_string(),
+        not_before_unix: validity.not_before.timestamp(),
+        not_after_unix: validity.not_after.timestamp(),
         names,
         key,
     })
@@ -537,6 +543,8 @@ mod tests {
         assert!(info.subject.contains("localhost"), "{}", info.subject);
         assert!(info.not_before.contains("2026"), "{}", info.not_before);
         assert!(info.not_after.contains("2027"), "{}", info.not_after);
+        assert_eq!(info.not_before_unix, NOT_AFTER - 365 * DAY);
+        assert_eq!(info.not_after_unix, NOT_AFTER);
         assert_eq!(info.names, ["localhost", "127.0.0.1"]);
         assert_eq!(info.key, "EC 256 bits");
 
