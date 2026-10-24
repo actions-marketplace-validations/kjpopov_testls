@@ -73,11 +73,8 @@ pub async fn fetch_http_headers(
         let mut head = Vec::new();
         let mut buf = [0; 4096];
         loop {
-            if let Some(end) = find_header_end(&head) {
+            if let Some(end) = complete_head(&head)? {
                 return parse_head(&head[..end]);
-            }
-            if head.len() > MAX_HEADER_BYTES {
-                return Err(ProbeError::Unexpected("HTTP header section too large"));
             }
             let n = match tls.read(&mut buf).await {
                 Ok(n) => n,
@@ -125,13 +122,33 @@ fn find_header_end(buf: &[u8]) -> Option<usize> {
     buf.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4)
 }
 
+/// Length of the received header section, `None` while it is incomplete, or
+/// an error once it exceeds [`MAX_HEADER_BYTES`] (complete or not).
+fn complete_head(buf: &[u8]) -> Result<Option<usize>, ProbeError> {
+    let too_large = || ProbeError::Unexpected("HTTP header section too large");
+    match find_header_end(buf) {
+        Some(end) if end > MAX_HEADER_BYTES => Err(too_large()),
+        Some(end) => Ok(Some(end)),
+        None if buf.len() > MAX_HEADER_BYTES => Err(too_large()),
+        None => Ok(None),
+    }
+}
+
+/// Whether `name` is a non-empty `token` (RFC 9110 §5.1, §5.6.2).
+fn is_token(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
+}
+
 /// Parses an HTTP/1.x status line and header fields (RFC 9112 §4, §5).
 ///
 /// Obsolete line folding (RFC 9112 §5.2) is rejected, as are field lines
-/// without a colon.
+/// without a colon or with a name that is not a token. Field values may
+/// carry `obs-text` (RFC 9110 §5.5); bytes that are not UTF-8 become U+FFFD.
 fn parse_head(head: &[u8]) -> Result<HttpResponse, ProbeError> {
-    let text = std::str::from_utf8(head)
-        .map_err(|_| ProbeError::Unexpected("HTTP headers are not valid UTF-8"))?;
+    let text = String::from_utf8_lossy(head);
     let mut lines = text.split("\r\n");
     let status_line = lines.next().unwrap_or_default();
     let status = parse_status_line(status_line)
@@ -144,7 +161,7 @@ fn parse_head(head: &[u8]) -> Result<HttpResponse, ProbeError> {
         let (name, value) = line
             .split_once(':')
             .ok_or(ProbeError::Unexpected("malformed HTTP header line"))?;
-        if name.is_empty() || name.ends_with([' ', '\t']) {
+        if !is_token(name) {
             return Err(ProbeError::Unexpected("malformed HTTP header name"));
         }
         headers.push((
@@ -155,7 +172,8 @@ fn parse_head(head: &[u8]) -> Result<HttpResponse, ProbeError> {
     Ok(HttpResponse { status, headers })
 }
 
-/// Status code from `HTTP/1.x SP 3DIGIT SP reason` (RFC 9112 §4).
+/// Status code from `HTTP/1.x SP 3DIGIT SP reason` (RFC 9112 §4), limited
+/// to the 100-599 range defined by RFC 9110 §15.
 fn parse_status_line(line: &str) -> Option<u16> {
     let rest = line
         .strip_prefix("HTTP/1.1 ")
@@ -166,7 +184,7 @@ fn parse_status_line(line: &str) -> Option<u16> {
     {
         return None;
     }
-    code.parse().ok()
+    code.parse().ok().filter(|c| (100..=599).contains(c))
 }
 
 #[cfg(test)]
@@ -285,11 +303,47 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nName : v\r\n\r\n",
             b"HTTP/1.1 200 OK\r\nA: b\r\n continued\r\n\r\n",
             b"HTTP/1.1 200 OK\r\n: v\r\n\r\n",
-            b"HTTP/1.1 200 \xff\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nBad Name: v\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nBad\"Name: v\r\n\r\n",
         ] {
             assert!(parse_head(head).is_err(), "{head:?}");
         }
+    }
+
+    /// Status codes outside 100-599 are rejected.
+    #[test]
+    fn status_code_range() {
+        assert_eq!(parse_status_line("HTTP/1.1 100 Continue"), Some(100));
+        assert_eq!(parse_status_line("HTTP/1.1 599"), Some(599));
         assert_eq!(parse_status_line("HTTP/1.1 204"), Some(204));
+        assert_eq!(parse_status_line("HTTP/1.1 000 Zero"), None);
+        assert_eq!(parse_status_line("HTTP/1.1 600 Big"), None);
+    }
+
+    /// Non-UTF-8 `obs-text` in a value keeps the response and its headers.
+    #[test]
+    fn obs_text_values_are_kept() {
+        let r = parse_head(b"HTTP/1.1 200 \xff\r\nX-A: a\xffb\r\nX-B: c\r\n\r\n").unwrap();
+        assert_eq!(r.header("x-a"), Some("a\u{fffd}b"));
+        assert_eq!(r.header("x-b"), Some("c"));
+    }
+
+    /// The size limit applies whether or not the terminator has arrived.
+    #[test]
+    fn header_size_limit() {
+        let head = |len: usize| {
+            let mut h = b"HTTP/1.1 200 OK\r\nX: ".to_vec();
+            h.resize(len - 4, b'a');
+            h.extend_from_slice(b"\r\n\r\n");
+            h
+        };
+        assert_eq!(
+            complete_head(&head(MAX_HEADER_BYTES)).unwrap(),
+            Some(MAX_HEADER_BYTES)
+        );
+        assert!(complete_head(&head(MAX_HEADER_BYTES + 1)).is_err());
+        assert_eq!(complete_head(&vec![b'a'; MAX_HEADER_BYTES]).unwrap(), None);
+        assert!(complete_head(&vec![b'a'; MAX_HEADER_BYTES + 1]).is_err());
     }
 
     /// The `Host` header brackets IPv6 and omits the default port.
