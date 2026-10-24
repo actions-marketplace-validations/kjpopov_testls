@@ -8,6 +8,7 @@
 | `record_stream` | A raw server response: record framing, handshake reassembly, then every message parser |
 | `server_hello` | A `ServerHello` / `HelloRetryRequest` body |
 | `certificate_list` | A TLS 1.2 `Certificate` body |
+| `server_key_exchange` | ECDHE and DHE `ServerKeyExchange` parameters |
 | `ssl2_server_hello` | An SSLv2 `SERVER-HELLO` record body |
 
 The crate is not a workspace member and needs a nightly toolchain:
