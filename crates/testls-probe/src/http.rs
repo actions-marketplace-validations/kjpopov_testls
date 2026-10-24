@@ -50,8 +50,9 @@ impl HttpResponse {
 /// headers.
 ///
 /// The `Host` header is `sni`, or the target IP without it; the port is
-/// added when it is not 443. Redirects are not followed: the headers of the
-/// first response are what a browser sees for this origin.
+/// added when it is not 443. Interim 1xx responses are skipped. Redirects are
+/// not followed: the headers of the first final response are what a browser
+/// sees for this origin.
 ///
 /// # Errors
 /// Returns a [`ProbeError`] on connect/I/O failure, timeout, a failed
@@ -74,7 +75,13 @@ pub async fn fetch_http_headers(
         let mut buf = [0; 4096];
         loop {
             if let Some(end) = complete_head(&head)? {
-                return parse_head(&head[..end]);
+                let response = parse_head(&head[..end])?;
+                // Interim 1xx responses precede the final one (RFC 9110 §15.2).
+                if !(100..200).contains(&response.status) {
+                    return Ok(response);
+                }
+                head.drain(..end);
+                continue;
             }
             let n = match tls.read(&mut buf).await {
                 Ok(n) => n,
@@ -273,6 +280,22 @@ mod tests {
             request.contains(&format!("\r\nHost: localhost:{}\r\n", addr.port())),
             "{request}"
         );
+    }
+
+    /// Interim 1xx responses are skipped; the final response is reported.
+    #[tokio::test]
+    async fn skips_interim_responses() {
+        let (addr, _task) = serve(
+            b"HTTP/1.1 103 Early Hints\r\nLink: </a.css>; rel=preload\r\n\r\n\
+              HTTP/1.1 200 OK\r\nX-Frame-Options: DENY\r\nContent-Length: 0\r\n\r\n",
+        )
+        .await;
+        let r = fetch_http_headers(&Transport::new(addr), None)
+            .await
+            .unwrap();
+        assert_eq!(r.status, 200);
+        assert_eq!(r.header("x-frame-options"), Some("DENY"));
+        assert_eq!(r.header("link"), None);
     }
 
     /// A TLS server that does not speak HTTP is an error.
