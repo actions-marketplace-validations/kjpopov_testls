@@ -124,7 +124,7 @@ fn modern_server() {
         [
             "low      no Strict-Transport-Security header",
             "info     no X-Content-Type-Options: nosniff header",
-            "info     no X-Frame-Options header or CSP frame-ancestors directive",
+            "info     no restrictive X-Frame-Options header or CSP frame-ancestors directive",
             "info     no Content-Security-Policy header",
             "info     no Referrer-Policy header",
         ],
