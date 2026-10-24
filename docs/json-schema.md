@@ -26,6 +26,7 @@ finishes. This page describes schema version **1**.
 | `started_at` | integer | Scan start, Unix time in seconds |
 | `protocols` | array | One [protocol](#protocol) per probed version, oldest first |
 | `ciphers` | array | One [cipher list](#cipher-list) per offered version |
+| `key_exchange` | array | One [key exchange](#key-exchange) per offered version |
 | `certificate` | object | The [certificate chain](#certificate-chain) |
 | `findings` | array | [Findings](#finding), most severe first |
 
@@ -48,6 +49,19 @@ finishes. This page describes schema version **1**.
 | `suites[].name` | string | IANA name |
 | `suites[].severity` | string | Severity of the suite, see [Finding](#finding) |
 | `error` | string | Only when enumeration failed; `suites` is then empty |
+
+### Key exchange
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `protocol` | string | Protocol version, as above |
+| `group_order` | string or null | `"server"` or `"client"` preference; `null` if fewer than two groups were accepted or the probe failed |
+| `groups` | array | Supported groups (named curves, FFDHE, ML-KEM) in the server's order of choice; empty when no ECDHE suite is accepted |
+| `groups[].id` | string | Hex code point, e.g. `"0x11ec"` |
+| `groups[].name` | string | IANA name, e.g. `"X25519MLKEM768"` |
+| `groups[].severity` | string | Severity of the group, see [Finding](#finding) |
+| `dh_bits` | integer or null | Size of the ephemeral DH prime offered with DHE suites (TLSv1.2 and older); `null` without DHE |
+| `error` | string | Only when the probe failed; `groups` is then empty |
 
 ### Certificate chain
 
@@ -72,7 +86,7 @@ finishes. This page describes schema version **1**.
 | `severity` | string | `"info"`, `"low"`, `"medium"`, `"high"`, or `"critical"` |
 | `message` | string | Human-readable description; wording may change |
 
-Suite severities can also be `"ok"`. Findings with severity `ok` are not
+Suite and group severities can also be `"ok"`. Findings with severity `ok` are not
 reported.
 
 ## Example
@@ -96,6 +110,17 @@ Abbreviated:
       "suites": [
         { "id": "0x1302", "name": "TLS_AES_256_GCM_SHA384", "severity": "ok" }
       ]
+    }
+  ],
+  "key_exchange": [
+    {
+      "protocol": "TLSv1.3",
+      "group_order": "server",
+      "groups": [
+        { "id": "0x11ec", "name": "X25519MLKEM768", "severity": "ok" },
+        { "id": "0x001d", "name": "x25519", "severity": "ok" }
+      ],
+      "dh_bits": null
     }
   ],
   "certificate": {

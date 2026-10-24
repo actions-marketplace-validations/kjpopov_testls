@@ -6,10 +6,10 @@
 use std::net::SocketAddr;
 
 use serde::Serialize;
-use testls_checks::{Finding, cipher_name, cipher_severity};
+use testls_checks::{Finding, cipher_name, cipher_severity, group_name, group_severity};
 use testls_probe::{CipherOrder, ProtocolResult, ProtocolSupport};
 
-use crate::text::{CertificateSection, CipherSection, suite_id};
+use crate::text::{CertificateSection, CipherSection, KeyExchangeSection, suite_id};
 
 /// Version of the JSON schema. Bumped on any change that is not a pure
 /// addition of fields.
@@ -30,6 +30,8 @@ pub struct Report<'a> {
     pub protocols: &'a [ProtocolResult],
     /// Cipher enumeration per offered protocol.
     pub ciphers: &'a [CipherSection],
+    /// Key exchange probe per offered protocol.
+    pub key_exchange: &'a [KeyExchangeSection],
     /// Certificate chain, or why it could not be retrieved.
     pub certificate: &'a Result<CertificateSection, String>,
     /// Findings, most severe first.
@@ -51,6 +53,8 @@ struct Document<'a> {
     protocols: Vec<ProtocolJson>,
     /// One entry per offered protocol version.
     ciphers: Vec<CiphersJson>,
+    /// One entry per offered protocol version.
+    key_exchange: Vec<KeyExchangeJson>,
     /// Certificate chain result.
     certificate: CertificateJson<'a>,
     /// Findings, most severe first.
@@ -111,6 +115,33 @@ struct SuiteJson {
     /// IANA name.
     name: &'static str,
     /// Severity of the suite.
+    severity: &'static str,
+}
+
+/// Key exchange groups and DH parameter size of one protocol version.
+#[derive(Debug, Serialize)]
+struct KeyExchangeJson {
+    /// Version name, e.g. `TLSv1.2`.
+    protocol: String,
+    /// `server`, `client`, or `null` when not applicable or unknown.
+    group_order: Option<&'static str>,
+    /// Supported groups in the order the server chose them.
+    groups: Vec<GroupJson>,
+    /// Size of the ephemeral DH prime in bits, or `null` without DHE.
+    dh_bits: Option<usize>,
+    /// Error message when the probe failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// One supported group.
+#[derive(Debug, Serialize)]
+struct GroupJson {
+    /// Hex code point, e.g. `0x001d`.
+    id: String,
+    /// IANA name.
+    name: &'static str,
+    /// Severity of the group.
     severity: &'static str,
 }
 
@@ -185,6 +216,7 @@ pub fn render(report: &Report<'_>) -> String {
         started_at: report.started_at,
         protocols: report.protocols.iter().map(protocol).collect(),
         ciphers: report.ciphers.iter().map(ciphers).collect(),
+        key_exchange: report.key_exchange.iter().map(key_exchange).collect(),
         certificate: certificate(report.certificate),
         findings: report
             .findings
@@ -221,11 +253,7 @@ fn ciphers(section: &CipherSection) -> CiphersJson {
     match &section.outcome {
         Ok(c) => CiphersJson {
             protocol: version.to_string(),
-            order: match c.order {
-                CipherOrder::Server => Some("server"),
-                CipherOrder::Client => Some("client"),
-                CipherOrder::NotApplicable => None,
-            },
+            order: order(c.order),
             suites: c
                 .suites
                 .iter()
@@ -241,6 +269,45 @@ fn ciphers(section: &CipherSection) -> CiphersJson {
             protocol: version.to_string(),
             order: None,
             suites: Vec::new(),
+            error: Some(e.clone()),
+        },
+    }
+}
+
+/// Maps a preference order onto its JSON label.
+fn order(order: CipherOrder) -> Option<&'static str> {
+    match order {
+        CipherOrder::Server => Some("server"),
+        CipherOrder::Client => Some("client"),
+        CipherOrder::NotApplicable => None,
+    }
+}
+
+/// Converts one key exchange section, labelling each group with its
+/// severity.
+fn key_exchange(section: &KeyExchangeSection) -> KeyExchangeJson {
+    let protocol = section.version.to_string();
+    match &section.outcome {
+        Ok(k) => KeyExchangeJson {
+            protocol,
+            group_order: order(k.group_order),
+            groups: k
+                .groups
+                .iter()
+                .map(|&id| GroupJson {
+                    id: format!("0x{id:04x}"),
+                    name: group_name(id),
+                    severity: group_severity(id).0.as_str(),
+                })
+                .collect(),
+            dh_bits: k.dh_bits,
+            error: None,
+        },
+        Err(e) => KeyExchangeJson {
+            protocol,
+            group_order: None,
+            groups: Vec::new(),
+            dh_bits: None,
             error: Some(e.clone()),
         },
     }
@@ -289,7 +356,7 @@ fn certificate(section: &Result<CertificateSection, String>) -> CertificateJson<
 mod tests {
     use serde_json::{Value, json};
     use testls_checks::{CertificateInfo, Severity};
-    use testls_probe::CipherResult;
+    use testls_probe::{CipherResult, KeyExchangeResult};
     use testls_wire::ProtocolVersion;
 
     use super::*;
@@ -360,6 +427,7 @@ mod tests {
             started_at: 1_700_000_000,
             protocols: &protocols,
             ciphers: &ciphers,
+            key_exchange: &[],
             certificate: &certificate,
             findings: &findings,
         };
@@ -383,6 +451,7 @@ mod tests {
                     },
                     {"protocol": "TLSv1.2", "order": null, "suites": [], "error": "reset"},
                 ],
+                "key_exchange": [],
                 "certificate": {
                     "protocol": "TLSv1.3",
                     "chain": [
@@ -404,6 +473,68 @@ mod tests {
         );
     }
 
+    /// Key exchange sections list groups with severity, DH size, or the error.
+    #[test]
+    fn key_exchange_sections() {
+        let sections = [
+            KeyExchangeSection {
+                version: ProtocolVersion::TLS13,
+                outcome: Ok(KeyExchangeResult {
+                    version: ProtocolVersion::TLS13,
+                    groups: vec![0x11ec, 0x001d],
+                    group_order: CipherOrder::Client,
+                    dh_bits: None,
+                }),
+            },
+            KeyExchangeSection {
+                version: ProtocolVersion::TLS12,
+                outcome: Ok(KeyExchangeResult {
+                    version: ProtocolVersion::TLS12,
+                    groups: vec![0x0015],
+                    group_order: CipherOrder::NotApplicable,
+                    dh_bits: Some(1024),
+                }),
+            },
+            KeyExchangeSection {
+                version: ProtocolVersion::TLS11,
+                outcome: Err("reset".into()),
+            },
+        ];
+        let certificate = Err("refused".into());
+        let report = Report {
+            target: "127.0.0.1",
+            addr: "127.0.0.1:443".parse().unwrap(),
+            sni: None,
+            started_at: 0,
+            protocols: &[],
+            ciphers: &[],
+            key_exchange: &sections,
+            certificate: &certificate,
+            findings: &[],
+        };
+        assert_eq!(
+            value(&report)["key_exchange"],
+            json!([
+                {
+                    "protocol": "TLSv1.3",
+                    "group_order": "client",
+                    "groups": [
+                        {"id": "0x11ec", "name": "X25519MLKEM768", "severity": "ok"},
+                        {"id": "0x001d", "name": "x25519", "severity": "ok"},
+                    ],
+                    "dh_bits": null,
+                },
+                {
+                    "protocol": "TLSv1.2",
+                    "group_order": null,
+                    "groups": [{"id": "0x0015", "name": "secp224r1", "severity": "medium"}],
+                    "dh_bits": 1024,
+                },
+                {"protocol": "TLSv1.1", "group_order": null, "groups": [], "dh_bits": null, "error": "reset"},
+            ])
+        );
+    }
+
     /// Missing SNI is `null` and a failed certificate fetch carries the error.
     #[test]
     fn errors_and_nulls() {
@@ -415,6 +546,7 @@ mod tests {
             started_at: 0,
             protocols: &[],
             ciphers: &[],
+            key_exchange: &[],
             certificate: &certificate,
             findings: &[],
         };

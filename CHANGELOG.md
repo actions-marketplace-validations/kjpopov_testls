@@ -6,6 +6,15 @@ All notable changes to `testls` are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Key exchange section per offered protocol: supported groups in the
+  server's order (including X25519MLKEM768 and other ML-KEM hybrids for
+  TLSv1.3) and the DH prime size for DHE suites.
+- Findings for deprecated curves (RFC 8422), DH primes below 2048 bits, and
+  TLSv1.3 without a post-quantum (ML-KEM) group.
+- `key_exchange` array in the JSON report (additive; schema version stays 1).
+
 ## [0.1.0] - 2026-10-24
 
 First stable release of the command-line scanner.

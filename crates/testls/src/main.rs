@@ -12,12 +12,13 @@ use clap::Parser;
 use clap::builder::TypedValueParser as _;
 use testls_checks::{
     Finding, Severity, TrustStore, certificate_findings, cipher_findings, describe_certificate,
-    protocol_findings, trust_findings,
+    key_exchange_findings, protocol_findings, trust_findings,
 };
 use testls_probe::{
     ProtocolSupport, Transport, detect_protocols, enumerate_ciphers, fetch_certificates,
+    probe_key_exchange,
 };
-use testls_report::text::{self, CertificateSection, CipherSection};
+use testls_report::text::{self, CertificateSection, CipherSection, KeyExchangeSection};
 use testls_report::{ColorChoice, Format, Painter, json};
 use testls_wire::ProtocolVersion;
 
@@ -144,6 +145,7 @@ async fn main() -> ExitCode {
     let mut findings = protocol_findings(&protocols);
 
     let mut ciphers = Vec::new();
+    let mut key_exchange = Vec::new();
     for r in &protocols {
         if r.support != ProtocolSupport::Supported {
             continue;
@@ -151,7 +153,12 @@ async fn main() -> ExitCode {
         let section = cipher_section(&transport, r.version, sni).await;
         show(format!("\n{}", text::ciphers(&section, paint)));
         findings.extend(section_findings(&section));
+        let accepted = section.outcome.as_ref().map_or(&[][..], |c| &c.suites[..]);
+        let kx = key_exchange_section(&transport, r.version, accepted, sni).await;
+        show(format!("\n{}", text::key_exchange(&kx, paint)));
+        findings.extend(kx_findings(&kx));
         ciphers.push(section);
+        key_exchange.push(kx);
     }
 
     let host = sni.map_or_else(|| addr.ip().to_string(), str::to_owned);
@@ -173,6 +180,7 @@ async fn main() -> ExitCode {
                 started_at,
                 protocols: &protocols,
                 ciphers: &ciphers,
+                key_exchange: &key_exchange,
                 certificate: &certificate,
                 findings: &findings,
             })
@@ -238,6 +246,34 @@ fn section_findings(section: &CipherSection) -> Vec<Finding> {
             "cipher.error",
             Severity::Info,
             format!("{} ciphers could not be enumerated: {e}", section.version),
+        )],
+    }
+}
+
+/// Probes the supported groups and DH parameter size of one protocol
+/// `version`, using the `accepted` suites from cipher enumeration.
+async fn key_exchange_section(
+    transport: &Transport,
+    version: ProtocolVersion,
+    accepted: &[u32],
+    sni: Option<&str>,
+) -> KeyExchangeSection {
+    KeyExchangeSection {
+        version,
+        outcome: probe_key_exchange(transport, version, accepted, sni)
+            .await
+            .map_err(|e| e.to_string()),
+    }
+}
+
+/// Findings for one key exchange section; a failed probe is informational.
+fn kx_findings(section: &KeyExchangeSection) -> Vec<Finding> {
+    match &section.outcome {
+        Ok(k) => key_exchange_findings(k),
+        Err(e) => vec![Finding::new(
+            "group.error",
+            Severity::Info,
+            format!("{} key exchange could not be probed: {e}", section.version),
         )],
     }
 }
