@@ -38,6 +38,9 @@ cargo test -p testls --test servers -- --ignored
 podman compose -f tests/servers/compose.yaml down
 ```
 
+To see coverage locally, run `cargo llvm-cov --workspace -- --include-ignored`
+while the servers are up (CI publishes the same report in the job summary).
+
 ## Code requirements
 
 - **Edition 2024, MSRV 1.97.** Don't use newer features without bumping the
