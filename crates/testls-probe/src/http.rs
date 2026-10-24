@@ -145,9 +145,9 @@ fn is_token(name: &str) -> bool {
 /// Parses an HTTP/1.x status line and header fields (RFC 9112 §4, §5).
 ///
 /// Obsolete line folding (RFC 9112 §5.2) is rejected, as are field lines
-/// without a colon, with a name that is not a token, or with CR, LF or NUL
-/// in the value. Field values may
-/// carry `obs-text` (RFC 9110 §5.5); bytes that are not UTF-8 become U+FFFD.
+/// without a colon, with a name that is not a token, or with control
+/// characters other than HTAB in the value. Field values may carry
+/// `obs-text` (RFC 9110 §5.5); bytes that are not UTF-8 become U+FFFD.
 fn parse_head(head: &[u8]) -> Result<HttpResponse, ProbeError> {
     let text = String::from_utf8_lossy(head);
     let mut lines = text.split("\r\n");
@@ -165,8 +165,7 @@ fn parse_head(head: &[u8]) -> Result<HttpResponse, ProbeError> {
         if !is_token(name) {
             return Err(ProbeError::Unexpected("malformed HTTP header name"));
         }
-        // RFC 9110 §5.5: CR, LF and NUL are never valid in a field value.
-        if value.contains(['\r', '\n', '\0']) {
+        if !is_field_text(value) {
             return Err(ProbeError::Unexpected("malformed HTTP header value"));
         }
         headers.push((
@@ -184,12 +183,22 @@ fn parse_status_line(line: &str) -> Option<u16> {
         .strip_prefix("HTTP/1.1 ")
         .or_else(|| line.strip_prefix("HTTP/1.0 "))?;
     let code = rest.get(..3)?;
-    if !code.bytes().all(|b| b.is_ascii_digit())
-        || !matches!(rest.as_bytes().get(3), None | Some(b' '))
-    {
+    let reason = match rest.get(3..)? {
+        "" => "",
+        tail => tail.strip_prefix(' ')?,
+    };
+    if !code.bytes().all(|b| b.is_ascii_digit()) || !is_field_text(reason) {
         return None;
     }
     code.parse().ok().filter(|c| (100..=599).contains(c))
+}
+
+/// Whether `text` holds only HTAB, SP, VCHAR and `obs-text`, the characters
+/// allowed in field values (RFC 9110 §5.5) and reason phrases (RFC 9112 §4).
+/// Non-ASCII characters, including U+FFFD from lossy decoding, are `obs-text`.
+fn is_field_text(text: &str) -> bool {
+    text.chars()
+        .all(|c| matches!(c, '\t' | ' '..='~') || !c.is_ascii())
 }
 
 #[cfg(test)]
@@ -313,6 +322,9 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nX-A: a\0b\r\n\r\n",
             b"HTTP/1.1 200 OK\r\nX-A: a\rb\r\n\r\n",
             b"HTTP/1.1 200 OK\r\nX-A: a\nb\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nX-A: ok\x0bbad\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nX-A: a\x7fb\r\n\r\n",
+            b"HTTP/1.1 200 \x0b\r\n\r\n",
         ] {
             assert!(parse_head(head).is_err(), "{head:?}");
         }
@@ -331,9 +343,9 @@ mod tests {
     /// Non-UTF-8 `obs-text` in a value keeps the response and its headers.
     #[test]
     fn obs_text_values_are_kept() {
-        let r = parse_head(b"HTTP/1.1 200 \xff\r\nX-A: a\xffb\r\nX-B: c\r\n\r\n").unwrap();
+        let r = parse_head(b"HTTP/1.1 200 \xff\r\nX-A: a\xffb\r\nX-B: c\td\r\n\r\n").unwrap();
         assert_eq!(r.header("x-a"), Some("a\u{fffd}b"));
-        assert_eq!(r.header("x-b"), Some("c"));
+        assert_eq!(r.header("x-b"), Some("c\td"));
     }
 
     /// The size limit applies whether or not the terminator has arrived.
