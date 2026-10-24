@@ -251,7 +251,7 @@ fn system_roots_conflicts_with_ca_file() {
 /// With no `SSL_CERT_*` override the platform store itself must load; the
 /// closed port then yields the usual scan error rather than a store error.
 /// A machine without any CA bundle (a minimal container) may report an empty
-/// store, but no other loader error is accepted.
+/// store; a loader error (`no usable root certificates: <error>`) still fails.
 #[test]
 fn platform_system_roots_load() {
     let out = Command::new(env!("CARGO_BIN_EXE_testls"))
@@ -262,7 +262,7 @@ fn platform_system_roots_load() {
         .expect("run testls");
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8(out.stderr).expect("utf-8 output");
-    let empty_store = stderr.contains("cannot load system roots: no usable root certificates");
+    let empty_store = stderr.contains("no usable root certificates found");
     assert!(
         empty_store || !stderr.contains("cannot load system roots"),
         "{stderr}"
