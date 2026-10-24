@@ -153,8 +153,7 @@ async fn main() -> ExitCode {
         let section = cipher_section(&transport, r.version, sni).await;
         show(format!("\n{}", text::ciphers(&section, paint)));
         findings.extend(section_findings(&section));
-        let accepted = section.outcome.as_ref().map_or(&[][..], |c| &c.suites[..]);
-        let kx = key_exchange_section(&transport, r.version, accepted, sni).await;
+        let kx = key_exchange_section(&transport, &section, sni).await;
         show(format!("\n{}", text::key_exchange(&kx, paint)));
         findings.extend(kx_findings(&kx));
         ciphers.push(section);
@@ -251,18 +250,24 @@ fn section_findings(section: &CipherSection) -> Vec<Finding> {
 }
 
 /// Probes the supported groups and DH parameter size of one protocol
-/// `version`, using the `accepted` suites from cipher enumeration.
+/// `version`, using the suites accepted in the cipher `section`.
+///
+/// When cipher enumeration failed the accepted suites are unknown, so the
+/// key exchange section reports that instead of probing.
 async fn key_exchange_section(
     transport: &Transport,
-    version: ProtocolVersion,
-    accepted: &[u32],
+    section: &CipherSection,
     sni: Option<&str>,
 ) -> KeyExchangeSection {
-    KeyExchangeSection {
-        version,
-        outcome: probe_key_exchange(transport, version, accepted, sni)
+    let outcome = match &section.outcome {
+        Ok(c) => probe_key_exchange(transport, section.version, &c.suites, sni)
             .await
             .map_err(|e| e.to_string()),
+        Err(_) => Err("cipher enumeration failed".to_owned()),
+    };
+    KeyExchangeSection {
+        version: section.version,
+        outcome,
     }
 }
 
@@ -311,4 +316,30 @@ async fn certificate_section(
             .collect(),
     };
     (Ok(section), findings)
+}
+
+#[cfg(test)]
+mod tests {
+    //! Unit tests for the scan helpers.
+
+    use super::*;
+
+    /// A failed cipher enumeration is reported in the key exchange section
+    /// without probing the server.
+    #[tokio::test]
+    async fn key_exchange_after_cipher_error() {
+        // Nothing listens on port 9 of the discard address; no probe is sent.
+        let transport = Transport::new(SocketAddr::from(([127, 0, 0, 1], 9)));
+        let ciphers = CipherSection {
+            version: ProtocolVersion::TLS12,
+            outcome: Err("timed out".to_owned()),
+        };
+        let kx = key_exchange_section(&transport, &ciphers, None).await;
+        assert_eq!(kx.version, ProtocolVersion::TLS12);
+        assert_eq!(
+            kx.outcome.as_ref().unwrap_err(),
+            "cipher enumeration failed"
+        );
+        assert_eq!(kx_findings(&kx)[0].id, "group.error");
+    }
 }
