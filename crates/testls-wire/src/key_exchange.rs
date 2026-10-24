@@ -23,8 +23,8 @@ impl EcdheParams {
     /// Parse the parameters at the start of a `ServerKeyExchange` body.
     ///
     /// # Errors
-    /// Returns a [`DecodeError`] if the parameters are truncated or use an
-    /// explicit curve, which RFC 8422 removed.
+    /// Returns a [`DecodeError`] if the parameters are truncated, the public
+    /// key is empty, or they use an explicit curve, which RFC 8422 removed.
     pub fn parse(body: &[u8]) -> Result<Self, DecodeError> {
         let mut r = Reader::new(body);
         if r.u8("curve_type")? != NAMED_CURVE {
@@ -33,7 +33,13 @@ impl EcdheParams {
             });
         }
         let group = r.u16("named_curve")?;
+        // `ECPoint.point<1..2^8-1>`: at least one byte (RFC 8422, section 5.4).
         let public_key = r.prefixed(1, "ecdh_public")?.rest().to_vec();
+        if public_key.is_empty() {
+            return Err(DecodeError::Invalid {
+                field: "ecdh_public",
+            });
+        }
         Ok(Self { group, public_key })
     }
 }
@@ -94,9 +100,15 @@ mod tests {
         assert_eq!(p.public_key, [0xaa, 0xbb]);
     }
 
-    /// Explicit curves and truncated points are rejected.
+    /// Explicit curves, empty points and truncated points are rejected.
     #[test]
     fn ecdhe_invalid() {
+        assert_eq!(
+            EcdheParams::parse(&[3, 0, 29, 0]),
+            Err(DecodeError::Invalid {
+                field: "ecdh_public"
+            })
+        );
         assert_eq!(
             EcdheParams::parse(&[1, 0, 23, 0]),
             Err(DecodeError::Invalid {
