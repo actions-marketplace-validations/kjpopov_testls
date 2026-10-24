@@ -7,9 +7,17 @@ on:
   schedule:
     # New RustSec advisories appear without code changes; check daily.
     - cron: "17 5 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: deny-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  # Only superseded pull request runs are cancelled; scheduled and branch runs
+  # always finish. The event name keeps scheduled and push runs on main from
+  # queueing behind each other.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   deny:
@@ -18,20 +26,55 @@ jobs:
       fail-fast: false
       matrix:
         checks: [advisories, bans licenses sources]
-    # A freshly published advisory should not block unrelated pull requests;
-    # it still fails the scheduled and main-branch runs.
-    continue-on-error: ${{ matrix.checks == 'advisories' && github.event_name == 'pull_request' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+      - name: Check for dependency changes
+        id: deps
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if git diff --name-only "origin/$BASE_REF...HEAD" | grep -Eq '(^|/)Cargo\.(toml|lock)$'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+      # The action's image pins the cargo-deny binary (0.20.2 for v2.1.1), so
+      # the commit SHA pins the cargo-deny version too.
+      - name: cargo deny check ${{ matrix.checks }}
+        id: deny
+        # A freshly published advisory should not block pull requests that do
+        # not touch dependencies; it still fails scheduled and branch runs, and
+        # pull requests that change Cargo.toml or Cargo.lock.
+        continue-on-error: ${{ matrix.checks == 'advisories' && github.event_name == 'pull_request' && steps.deps.outputs.changed != 'true' }}
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check ${{ matrix.checks }}
       # The fuzz crate is a separate workspace with its own lockfile. It is a
       # second step rather than a matrix entry so the required check names stay.
-      - if: ${{ !cancelled() }}
+      # The `deps` filter above already matches fuzz/Cargo.toml and fuzz/Cargo.lock.
+      - name: cargo deny check ${{ matrix.checks }} (fuzz)
+        id: deny_fuzz
+        if: ${{ !cancelled() }}
+        continue-on-error: ${{ matrix.checks == 'advisories' && github.event_name == 'pull_request' && steps.deps.outputs.changed != 'true' }}
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           manifest-path: fuzz/Cargo.toml
           command: check ${{ matrix.checks }}
+      - name: Report non-blocking advisory failure
+        if: >-
+          ${{ !cancelled() && (
+            (steps.deny.outcome == 'failure' && steps.deny.conclusion == 'success') ||
+            (steps.deny_fuzz.outcome == 'failure' && steps.deny_fuzz.conclusion == 'success')
+          ) }}
+        run: |
+          msg="cargo deny check advisories failed, but did not block this pull request because it changes no Cargo.toml or Cargo.lock. Fix the advisory in a separate PR."
+          echo "::warning title=cargo-deny advisories::$msg"
+          {
+            echo "### :warning: cargo-deny advisories (non-blocking)"
+            echo
+            echo "$msg"
+          } >> "$GITHUB_STEP_SUMMARY"
