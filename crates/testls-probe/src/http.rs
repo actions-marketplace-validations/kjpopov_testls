@@ -145,7 +145,8 @@ fn is_token(name: &str) -> bool {
 /// Parses an HTTP/1.x status line and header fields (RFC 9112 §4, §5).
 ///
 /// Obsolete line folding (RFC 9112 §5.2) is rejected, as are field lines
-/// without a colon or with a name that is not a token. Field values may
+/// without a colon, with a name that is not a token, or with CR, LF or NUL
+/// in the value. Field values may
 /// carry `obs-text` (RFC 9110 §5.5); bytes that are not UTF-8 become U+FFFD.
 fn parse_head(head: &[u8]) -> Result<HttpResponse, ProbeError> {
     let text = String::from_utf8_lossy(head);
@@ -163,6 +164,10 @@ fn parse_head(head: &[u8]) -> Result<HttpResponse, ProbeError> {
             .ok_or(ProbeError::Unexpected("malformed HTTP header line"))?;
         if !is_token(name) {
             return Err(ProbeError::Unexpected("malformed HTTP header name"));
+        }
+        // RFC 9110 §5.5: CR, LF and NUL are never valid in a field value.
+        if value.contains(['\r', '\n', '\0']) {
+            return Err(ProbeError::Unexpected("malformed HTTP header value"));
         }
         headers.push((
             name.to_ascii_lowercase(),
@@ -305,6 +310,9 @@ mod tests {
             b"HTTP/1.1 200 OK\r\n: v\r\n\r\n",
             b"HTTP/1.1 200 OK\r\nBad Name: v\r\n\r\n",
             b"HTTP/1.1 200 OK\r\nBad\"Name: v\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nX-A: a\0b\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nX-A: a\rb\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nX-A: a\nb\r\n\r\n",
         ] {
             assert!(parse_head(head).is_err(), "{head:?}");
         }
