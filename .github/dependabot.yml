@@ -1,5 +1,5 @@
 # Weekly version updates. Security updates are enabled separately in the
-# repository settings and are not limited by this schedule.
+# repository settings and are not limited by this schedule or the cooldown.
 version: 2
 updates:
   - package-ecosystem: cargo
@@ -7,6 +7,9 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    # Wait a week after a release so yanked or compromised versions are caught first.
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     commit-message:
       prefix: "deps"
@@ -20,6 +23,8 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "ci"
     groups:
@@ -31,5 +36,7 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "test"
