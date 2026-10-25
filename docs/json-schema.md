@@ -91,6 +91,7 @@ finishes. This page describes schema version **1**.
 | `chain[].not_after` | integer | End of validity, Unix time |
 | `chain[].names` | array of strings | DNS names and IP addresses from the subject alternative names |
 | `chain[].key` | string | Key algorithm and size, e.g. `"RSA 2048 bits"` |
+| `chain[].scts` | integer | Number of embedded Certificate Transparency timestamps; absent when the SCT list cannot be read |
 | `chain[].error` | string | Only for a certificate that cannot be parsed; the other fields are then absent |
 | `ocsp` | object or null | Stapled OCSP response for the leaf; `null` on error |
 | `ocsp.stapled` | boolean | The server stapled a response |
@@ -242,7 +243,8 @@ Abbreviated:
         "not_before": 1767225600,
         "not_after": 1798761600,
         "names": ["example.com"],
-        "key": "EC 256 bits"
+        "key": "EC 256 bits",
+        "scts": 2
       }
     ],
     "ocsp": {

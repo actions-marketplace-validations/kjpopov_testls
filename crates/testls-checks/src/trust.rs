@@ -21,6 +21,9 @@ use crate::{Finding, Severity};
 pub struct TrustStore {
     /// The root certificates' subject, public key, and name constraints.
     anchors: Vec<TrustAnchor<'static>>,
+    /// Whether the roots are the bundled Mozilla root program rather than
+    /// the system store or a custom bundle.
+    public: bool,
 }
 
 impl TrustStore {
@@ -30,6 +33,7 @@ impl TrustStore {
     pub fn webpki() -> Self {
         Self {
             anchors: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+            public: true,
         }
     }
 
@@ -51,7 +55,10 @@ impl TrustStore {
                     .map_err(|e| format!("root certificate #{index}: {e:?}"))
             })
             .collect::<Result<_, _>>()?;
-        Ok(Self { anchors })
+        Ok(Self {
+            anchors,
+            public: false,
+        })
     }
 
     /// Builds a store from a PEM bundle of root certificates; other PEM
@@ -107,7 +114,11 @@ impl TrustStore {
             })
             .collect();
         if !anchors.is_empty() {
-            return Ok((Self { anchors }, errors));
+            let store = Self {
+                anchors,
+                public: false,
+            };
+            return Ok((store, errors));
         }
         match errors.as_slice() {
             [] => Err("no usable root certificates found".to_owned()),
@@ -129,6 +140,15 @@ impl TrustStore {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.anchors.is_empty()
+    }
+
+    /// Whether the store is the bundled Mozilla root program. Only chains
+    /// to publicly trusted roots are bound by the CA/Browser Forum Baseline
+    /// Requirements; the system store and custom bundles can hold private
+    /// enterprise roots, so they do not count.
+    #[must_use]
+    pub fn is_public(&self) -> bool {
+        self.public
     }
 }
 
@@ -320,7 +340,9 @@ mod tests {
     #[test]
     fn stores() {
         assert!(!TrustStore::webpki().is_empty());
+        assert!(TrustStore::webpki().is_public());
         assert_eq!(test_store().len(), 1);
+        assert!(!test_store().is_public());
         assert!(TrustStore::from_certificates([b"garbage".as_slice()]).is_err());
     }
 
@@ -333,6 +355,7 @@ mod tests {
             TrustStore::from_system_certificates([b"garbage".as_slice(), ROOT], Vec::new())
                 .unwrap();
         assert_eq!(store.len(), 1);
+        assert!(!store.is_public());
         assert_eq!(warnings, Vec::<String>::new());
         assert_eq!(messages(&[LEAF, INTERMEDIATE], MID_2026, &store), NONE);
 

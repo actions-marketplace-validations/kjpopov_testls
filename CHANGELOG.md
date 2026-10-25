@@ -29,6 +29,10 @@ All notable changes to `testls` are listed here. The format follows
   master secret, TLSv1.3 downgrade sentinel, session tickets and 0-RTT,
   with `handshake.no_ems`, `handshake.no_downgrade_sentinel` and
   `handshake.early_data` findings.
+- Leaf certificates show their embedded Certificate Transparency timestamp
+  count (text `SCTs` line, JSON `chain[].scts`). Chains to the bundled
+  Mozilla roots are checked against the Baseline Requirements lifetime limit
+  and for missing SCTs (`cert.too_long`, `cert.no_sct`, `cert.sct_invalid`).
 
 ### Changed
 

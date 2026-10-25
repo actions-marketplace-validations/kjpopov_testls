@@ -87,6 +87,9 @@ pub struct CertificateInfo {
     pub names: Vec<String>,
     /// Public key algorithm and size, e.g. `RSA 2048 bits`.
     pub key: String,
+    /// Number of embedded Certificate Transparency timestamps, or `None`
+    /// if the SCT list cannot be read.
+    pub scts: Option<usize>,
 }
 
 /// Describes a DER certificate for display.
@@ -131,6 +134,7 @@ pub fn describe_certificate(der: &[u8]) -> Result<CertificateInfo, String> {
         not_after_unix: validity.not_after.timestamp(),
         names,
         key,
+        scts: crate::embedded_scts(der).ok().map(|scts| scts.len()),
     })
 }
 
@@ -539,6 +543,7 @@ mod tests {
     #[test]
     fn describe() {
         let info = describe_certificate(EC_LOCALHOST).unwrap();
+        assert_eq!(info.scts, Some(0));
         assert_eq!(info.subject, info.issuer);
         assert!(info.subject.contains("localhost"), "{}", info.subject);
         assert!(info.not_before.contains("2026"), "{}", info.not_before);

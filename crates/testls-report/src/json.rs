@@ -242,6 +242,10 @@ struct CertJson<'a> {
     /// Key algorithm and size, e.g. `RSA 2048 bits`.
     #[serde(skip_serializing_if = "Option::is_none")]
     key: Option<&'a str>,
+    /// Number of embedded Certificate Transparency timestamps; absent when
+    /// the SCT list cannot be read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scts: Option<usize>,
     /// Parse error when the certificate could not be read.
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<&'a str>,
@@ -574,6 +578,7 @@ fn certificate(section: &Result<CertificateSection, String>) -> CertificateJson<
                         not_after: Some(info.not_after_unix),
                         names: Some(&info.names),
                         key: Some(&info.key),
+                        scts: info.scts,
                         error: None,
                     },
                     Err(e) => CertJson {
@@ -583,6 +588,7 @@ fn certificate(section: &Result<CertificateSection, String>) -> CertificateJson<
                         not_after: None,
                         names: None,
                         key: None,
+                        scts: None,
                         error: Some(e),
                     },
                 })
@@ -802,6 +808,7 @@ mod tests {
                     not_after_unix: 2,
                     names: vec!["localhost".into()],
                     key: "EC 256 bits".into(),
+                    scts: Some(0),
                 }),
                 Err("bad".into()),
             ],
@@ -846,11 +853,8 @@ mod tests {
                 "key_exchange": [], "post_quantum": {"status": "not tested", "groups": [], "draft_groups": [], "preferred": null},
                 "certificate": {
                     "protocol": "TLSv1.3",
-                    "chain": [
-                        {"subject": "CN=localhost", "issuer": "CN=test CA", "not_before": 1,
-                         "not_after": 2, "names": ["localhost"], "key": "EC 256 bits"},
-                        {"error": "bad"},
-                    ],
+                    "chain": [{"subject": "CN=localhost", "issuer": "CN=test CA", "not_before": 1, "not_after": 2,
+                        "names": ["localhost"], "key": "EC 256 bits", "scts": 0}, {"error": "bad"}],
                     "ocsp": {"stapled": false, "status": null},
                 },
                 "http": {"status": null, "headers": {}, "hsts": null, "error": "reset"},
