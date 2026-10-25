@@ -69,6 +69,7 @@ them in code comments or data files.
 git clone https://github.com/kjpopov/testls
 cd testls
 cargo build
+scripts/gen-ocsp-fixtures.sh   # test fixtures, needs OpenSSL 3 or later
 cargo test
 ```
 
