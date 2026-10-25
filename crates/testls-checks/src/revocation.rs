@@ -28,7 +28,8 @@ pub struct RevocationUrls {
 }
 
 /// Lists the OCSP responder and CRL URLs in a certificate, in the order
-/// they appear. Every URI is returned, whatever its scheme.
+/// they appear. Every URI is returned, whatever its scheme, except those
+/// holding spaces or control characters, which no valid URI contains.
 ///
 /// # Errors
 ///
@@ -45,6 +46,7 @@ pub fn revocation_urls(leaf: &[u8]) -> Result<RevocationUrls, String> {
             for desc in &aia.accessdescs {
                 if desc.access_method == OID_PKIX_ACCESS_DESCRIPTOR_OCSP
                     && let GeneralName::URI(uri) = desc.access_location
+                    && is_uri_text(uri)
                 {
                     urls.ocsp.push(uri.to_owned());
                 }
@@ -60,7 +62,7 @@ pub fn revocation_urls(leaf: &[u8]) -> Result<RevocationUrls, String> {
                 }
                 if let Some(DistributionPointName::FullName(names)) = &point.distribution_point {
                     urls.crl.extend(names.iter().filter_map(|name| match name {
-                        GeneralName::URI(uri) => Some((*uri).to_owned()),
+                        GeneralName::URI(uri) if is_uri_text(uri) => Some((*uri).to_owned()),
                         _ => None,
                     }));
                 }
@@ -68,6 +70,12 @@ pub fn revocation_urls(leaf: &[u8]) -> Result<RevocationUrls, String> {
         }
     }
     Ok(urls)
+}
+
+/// Reports whether `uri` contains only the visible ASCII characters a URI
+/// may hold (RFC 3986 §2), so it is safe to print and to request.
+fn is_uri_text(uri: &str) -> bool {
+    !uri.is_empty() && uri.bytes().all(|b| b.is_ascii_graphic())
 }
 
 /// Revocation status of the leaf according to a verified OCSP response or
@@ -350,6 +358,21 @@ mod tests {
         );
         assert_eq!(revocation_urls(LEAF).unwrap(), RevocationUrls::default());
         assert!(revocation_urls(b"junk").is_err());
+    }
+
+    /// URIs with spaces, control or non-ASCII characters are dropped.
+    #[test]
+    fn uri_text() {
+        assert!(is_uri_text("http://ocsp.example.test/?a=%20&b=\"c\""));
+        for bad in [
+            "",
+            "http://a b/",
+            "http://a/\x1b[2J",
+            "http://a/\n",
+            "http://ä/",
+        ] {
+            assert!(!is_uri_text(bad), "{bad:?}");
+        }
     }
 
     /// The CRL lists the revoked leaf with its reason and not the good one.

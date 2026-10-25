@@ -18,11 +18,16 @@ pub const MAX_OCSP_RESPONSE: usize = 64 * 1024;
 /// Largest accepted CRL; large public CAs publish CRLs of several MiB.
 pub const MAX_CRL: usize = 16 * 1024 * 1024;
 
+/// Most `http://` URLs tried per method, so a certificate listing many
+/// cannot make the scan contact an unbounded number of hosts.
+pub const MAX_URLS: usize = 4;
+
 /// Queries the OCSP responders, then the CRL distribution points, in
 /// `urls` until one gives a verifiable status for the leaf of `chain`.
 ///
 /// Returns every attempt in order; URLs that are not `http://` are
-/// skipped. `now` is the current time as a Unix timestamp.
+/// skipped, and at most [`MAX_URLS`] are tried per method. `now` is the
+/// current time as a Unix timestamp.
 pub async fn check_revocation(
     fetcher: Fetcher,
     chain: &[Vec<u8>],
@@ -34,7 +39,7 @@ pub async fn check_revocation(
         max_body: MAX_OCSP_RESPONSE,
         ..fetcher
     };
-    for url in urls.ocsp.iter().filter(|u| is_http(u)) {
+    for url in urls.ocsp.iter().filter(|u| is_http(u)).take(MAX_URLS) {
         let outcome = match ocsp_request(chain) {
             Ok(request) => ok_body(ocsp.post(url, "application/ocsp-request", &request).await)
                 .and_then(|body| verify_ocsp_response(&body, chain, now).map(Into::into)),
@@ -54,7 +59,7 @@ pub async fn check_revocation(
         max_body: MAX_CRL,
         ..fetcher
     };
-    for url in urls.crl.iter().filter(|u| is_http(u)) {
+    for url in urls.crl.iter().filter(|u| is_http(u)).take(MAX_URLS) {
         let outcome = ok_body(crl.get(url).await).and_then(|body| verify_crl(&body, chain));
         let done = outcome.is_ok();
         checks.push(RevocationCheck {
@@ -216,6 +221,19 @@ mod tests {
             checks[0].outcome.as_ref().unwrap_err(),
             "issuer certificate missing from chain"
         );
+    }
+
+    /// At most [`MAX_URLS`] URLs are tried per method.
+    #[tokio::test]
+    async fn url_limit() {
+        let many: Vec<String> = (0..10).map(|i| format!("http://127.0.0.1:9/{i}")).collect();
+        let urls = RevocationUrls {
+            ocsp: many.clone(),
+            crl: vec![],
+        };
+        let checks = check_revocation(fetcher(), &[LEAF.to_vec()], &urls, now()).await;
+        assert_eq!(checks.len(), MAX_URLS);
+        assert_eq!(checks[MAX_URLS - 1].url, many[MAX_URLS - 1]);
     }
 
     /// Only the `http` scheme is accepted.

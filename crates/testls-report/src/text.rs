@@ -226,10 +226,24 @@ pub fn revocation(section: &Result<Vec<RevocationCheck>, String>, paint: Painter
             out,
             "  {:<4} {}  {result}",
             check.method.as_str(),
-            check.url
+            printable(&check.url)
         );
     }
     out
+}
+
+/// Escapes control characters (e.g. terminal escape sequences) in text
+/// taken from the scanned server's certificate so it is safe to print.
+fn printable(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_control() {
+                c.escape_default().to_string()
+            } else {
+                c.to_string()
+            }
+        })
+        .collect()
 }
 
 /// Security headers listed in the HTTP section, in display order.
@@ -534,6 +548,15 @@ mod tests {
         assert_eq!(
             revocation(&checks, PLAIN),
             "Revocation\n  OCSP http://ocsp.test/  error: HTTP status 500\n  CRL  http://crl.test/ca.crl  good, next update Nov  2 00:00:00 2026 +00:00\n  CRL  http://crl.test/b.crl  revoked on Oct  1 00:00:00 2026 +00:00 (no reason given)\n"
+        );
+        let hostile = Ok(vec![RevocationCheck {
+            method: RevocationMethod::Ocsp,
+            url: "http://a/\x1b[2J".into(),
+            outcome: Err("timeout".into()),
+        }]);
+        assert_eq!(
+            revocation(&hostile, PLAIN),
+            "Revocation\n  OCSP http://a/\\u{1b}[2J  error: timeout\n"
         );
         assert_eq!(
             revocation(&Ok(vec![]), PLAIN),
