@@ -5,6 +5,7 @@ mod ciphers;
 mod der;
 mod explain;
 mod http;
+mod intolerance;
 mod key_exchange;
 mod ocsp;
 mod protocols;
@@ -18,6 +19,7 @@ pub use certificates::{CertificateInfo, certificate_findings, describe_certifica
 pub use ciphers::{cipher_findings, cipher_name, cipher_severity};
 pub use explain::{Explanation, explain, explanations};
 pub use http::{Hsts, http_findings, parse_hsts};
+pub use intolerance::intolerance_findings;
 pub use key_exchange::{dh_severity, group_name, group_severity, key_exchange_findings};
 pub use ocsp::{
     CertStatus, OcspStatus, display_time, ocsp_findings, ocsp_request, revocation_reason_name,
