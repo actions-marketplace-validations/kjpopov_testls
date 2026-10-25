@@ -460,6 +460,36 @@ const EXPLANATIONS: &[Explanation] = &[
         "A server that reuses its DHE secret across handshakes exposes a timing side channel on the shared secret; use fresh keys or ECDHE.",
         "RFC 7919 §8.3, raccoon-attack.com",
     ),
+    entry(
+        "intolerance.unknown_version",
+        "Server rejects an unknown protocol version",
+        "A server must negotiate the highest version both sides support; failing on a newer version offer breaks future clients and invites insecure fallback.",
+        "RFC 8446 §4.1.2, §4.2.1",
+    ),
+    entry(
+        "intolerance.unknown_extension",
+        "Server rejects an unknown extension",
+        "Servers must ignore extensions they do not recognise; rejecting them blocks clients from deploying new extensions.",
+        "RFC 8446 §4.2, RFC 5246 §7.4.1.4",
+    ),
+    entry(
+        "intolerance.grease",
+        "Server rejects GREASE values",
+        "Clients send reserved GREASE values to keep the ecosystem extensible; servers must ignore them like any unknown value.",
+        "RFC 8701 §3",
+    ),
+    entry(
+        "intolerance.oversized",
+        "Server rejects a large ClientHello",
+        "ClientHellos grow with post-quantum key shares and padding; a server must accept a hello that fills a whole record.",
+        "RFC 8446 §5.1, RFC 7685",
+    ),
+    entry(
+        "intolerance.fragmented",
+        "Server rejects a fragmented ClientHello",
+        "Handshake messages may span several records; a server that requires the ClientHello in one record breaks large hellos.",
+        "RFC 8446 §5.1, RFC 5246 §6.2.1",
+    ),
 ];
 
 /// All finding explanations, grouped by area.
@@ -485,7 +515,7 @@ mod tests {
     use super::*;
 
     /// Area prefixes that finding ids start with.
-    const AREAS: [&str; 11] = [
+    const AREAS: [&str; 12] = [
         "cert",
         "cipher",
         "dh",
@@ -493,6 +523,7 @@ mod tests {
         "header",
         "hsts",
         "http",
+        "intolerance",
         "ocsp",
         "protocol",
         "revocation",
@@ -530,6 +561,7 @@ mod tests {
             include_str!("certificates.rs"),
             include_str!("ciphers.rs"),
             include_str!("http.rs"),
+            include_str!("intolerance.rs"),
             include_str!("key_exchange.rs"),
             include_str!("ocsp.rs"),
             include_str!("protocols.rs"),
