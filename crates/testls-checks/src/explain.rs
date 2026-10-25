@@ -425,6 +425,12 @@ const EXPLANATIONS: &[Explanation] = &[
         "testls",
     ),
     entry(
+        "intolerance.error",
+        "ClientHello tolerance could not be tested",
+        "The probe that sends unusual but valid ClientHellos failed, so tolerance was not checked.",
+        "testls",
+    ),
+    entry(
         "vuln.beast",
         "BEAST: CBC suites with SSLv3 or TLSv1.0",
         "SSLv3 and TLSv1.0 chain CBC record IVs, which lets an attacker who can inject chosen plaintext recover secrets; current clients mitigate it with record splitting.",
@@ -531,12 +537,13 @@ mod tests {
     ];
 
     /// Ids emitted by the CLI itself for scan errors.
-    const CLI_IDS: [&str; 5] = [
+    const CLI_IDS: [&str; 6] = [
         "cipher.error",
         "group.error",
         "cert.error",
         "revocation.error",
         "http.error",
+        "intolerance.error",
     ];
 
     /// Whether a string literal looks like a finding id.

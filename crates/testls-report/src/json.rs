@@ -11,10 +11,11 @@ use testls_checks::{
     CertStatus, Finding, OcspStatus, RevocationCheck, RevocationMethod, Vulnerability, cipher_name,
     cipher_severity, group_name, group_severity, parse_hsts, revocation_reason_name,
 };
-use testls_probe::{CipherOrder, HttpResponse, ProtocolResult, ProtocolSupport};
+use testls_probe::{CipherOrder, HttpResponse, Intolerance, ProtocolResult, ProtocolSupport};
 
 use crate::text::{
-    CertificateSection, CipherSection, KeyExchangeSection, SECURITY_HEADERS, suite_id,
+    CertificateSection, CipherSection, INTOLERANCE_TESTS, KeyExchangeSection, SECURITY_HEADERS,
+    suite_id,
 };
 
 /// Version of the JSON schema. Bumped on any change that is not a pure
@@ -47,6 +48,8 @@ pub struct Report<'a> {
     pub revocation: Option<&'a Result<Vec<RevocationCheck>, String>>,
     /// Named vulnerabilities derived from the scan data.
     pub vulnerabilities: &'a [Vulnerability],
+    /// `ClientHello` tolerance tests, or why they could not run.
+    pub intolerance: &'a Result<Intolerance, String>,
     /// Findings, most severe first.
     pub findings: &'a [Finding],
 }
@@ -76,6 +79,8 @@ struct Document<'a> {
     revocation: Option<RevocationJson<'a>>,
     /// Named vulnerabilities.
     vulnerabilities: Vec<VulnerabilityJson<'a>>,
+    /// `ClientHello` tolerance result.
+    intolerance: IntoleranceJson<'a>,
     /// Findings, most severe first.
     findings: Vec<FindingJson<'a>>,
 }
@@ -311,6 +316,18 @@ struct VulnerabilityJson<'a> {
     finding: Option<&'static str>,
 }
 
+/// `ClientHello` tolerance verdicts: `tolerated`, `rejected`, or `null` when
+/// not tested.
+#[derive(Debug, Serialize)]
+struct IntoleranceJson<'a> {
+    /// Protocol version the tests used, e.g. `TLSv1.3`.
+    protocol: Option<String>,
+    /// Verdict per test, keyed by test name.
+    tests: BTreeMap<&'static str, Option<&'static str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'a str>,
+}
+
 /// One finding.
 #[derive(Debug, Serialize)]
 struct FindingJson<'a> {
@@ -349,6 +366,7 @@ pub fn render(report: &Report<'_>) -> String {
         http: http(report.http),
         revocation: report.revocation.map(revocation),
         vulnerabilities: report.vulnerabilities.iter().map(vulnerability).collect(),
+        intolerance: intolerance(report.intolerance),
         findings: report
             .findings
             .iter()
@@ -362,6 +380,24 @@ pub fn render(report: &Report<'_>) -> String {
     let mut out = serde_json::to_string_pretty(&doc).expect("report serializes");
     out.push('\n');
     out
+}
+
+/// Converts the tolerance tests; on error every verdict is `null`.
+fn intolerance(section: &Result<Intolerance, String>) -> IntoleranceJson<'_> {
+    let result = section.as_ref().ok();
+    IntoleranceJson {
+        protocol: result.and_then(|r| r.version).map(|v| v.to_string()),
+        tests: INTOLERANCE_TESTS
+            .iter()
+            .map(|(key, _, get)| {
+                let verdict = result
+                    .and_then(get)
+                    .map(|ok| if ok { "tolerated" } else { "rejected" });
+                (*key, verdict)
+            })
+            .collect(),
+        error: section.as_ref().err().map(String::as_str),
+    }
 }
 
 /// Converts one vulnerability verdict.
@@ -686,6 +722,7 @@ mod tests {
             http: &Err("reset".into()),
             revocation: None,
             vulnerabilities: &[],
+            intolerance: &Err("skipped".into()),
             findings: &[Finding::new("cert.untrusted", Severity::High, "untrusted")],
         };
         assert_eq!(
@@ -712,20 +749,16 @@ mod tests {
                 "certificate": {
                     "protocol": "TLSv1.3",
                     "chain": [
-                        {
-                            "subject": "CN=localhost",
-                            "issuer": "CN=test CA",
-                            "not_before": 1,
-                            "not_after": 2,
-                            "names": ["localhost"],
-                            "key": "EC 256 bits",
-                        },
+                        {"subject": "CN=localhost", "issuer": "CN=test CA", "not_before": 1,
+                         "not_after": 2, "names": ["localhost"], "key": "EC 256 bits"},
                         {"error": "bad"},
                     ],
                     "ocsp": {"stapled": false, "status": null},
                 },
                 "http": {"status": null, "headers": {}, "hsts": null, "error": "reset"},
                 "revocation": null, "vulnerabilities": [],
+                "intolerance": {"protocol": null, "error": "skipped", "tests": {
+                    "fragmented": null, "grease": null, "oversized": null, "unknown_extension": null, "unknown_version": null}},
                 "findings": [{"id": "cert.untrusted", "severity": "high", "message": "untrusted"}],
             })
         );
@@ -776,6 +809,7 @@ mod tests {
             http: &http,
             revocation: None,
             vulnerabilities: &[],
+            intolerance: &Err("skipped".into()),
             findings: &[],
         };
         assert_eq!(
@@ -818,6 +852,7 @@ mod tests {
             http: &http,
             revocation: None,
             vulnerabilities: &[],
+            intolerance: &Err("skipped".into()),
             findings: &[],
         };
         let v = value(&report);
@@ -857,6 +892,7 @@ mod tests {
             http: &http,
             revocation: None,
             vulnerabilities: &[],
+            intolerance: &Err("skipped".into()),
             findings: &[],
         };
         assert_eq!(
@@ -961,6 +997,32 @@ mod tests {
         assert_eq!(
             serde_json::to_value(revocation(&Err("refused".into()))).unwrap(),
             json!({"checks": [], "error": "refused"})
+        );
+    }
+
+    /// Tolerance verdicts map to `tolerated`, `rejected`, or `null`.
+    #[test]
+    fn intolerance_object() {
+        let result = Intolerance {
+            version: Some(ProtocolVersion::TLS12),
+            unknown_version: Some(true),
+            unknown_extension: Some(false),
+            grease: None,
+            oversized: Some(true),
+            fragmented: Some(false),
+        };
+        assert_eq!(
+            serde_json::to_value(intolerance(&Ok(result))).unwrap(),
+            json!({
+                "protocol": "TLSv1.2",
+                "tests": {
+                    "unknown_version": "tolerated",
+                    "unknown_extension": "rejected",
+                    "grease": null,
+                    "oversized": "tolerated",
+                    "fragmented": "rejected",
+                },
+            })
         );
     }
 

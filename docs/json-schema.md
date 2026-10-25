@@ -32,6 +32,7 @@ finishes. This page describes schema version **1**.
 | `http` | object | [HTTP headers](#http-headers) of the reply to `GET /` |
 | `revocation` | object or null | [Revocation](#revocation) check with `--revocation`; `null` without it |
 | `vulnerabilities` | array | [Vulnerabilities](#vulnerability) derived from the scan data |
+| `intolerance` | object | [ClientHello tolerance](#clienthello-tolerance) tests |
 | `findings` | array | [Findings](#finding), most severe first |
 
 ### Protocol
@@ -139,6 +140,22 @@ the same twelve entries in a fixed order.
 | `detail` | string | Short reason for the verdict; wording may change |
 | `finding` | string or null | Only when `vulnerable`: id of the [finding](#finding) that reports it |
 
+### ClientHello tolerance
+
+Unusual but valid ClientHellos sent at the best offered version. Each test
+is `"tolerated"`, `"rejected"`, or `null` when not tested (no usable
+version, the plain handshake failed, or the server was unreachable).
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `protocol` | string or null | Version the tests used, e.g. `"TLSv1.3"` |
+| `tests.unknown_version` | string or null | A future version (0x0305) is offered |
+| `tests.unknown_extension` | string or null | An unassigned extension type is added |
+| `tests.grease` | string or null | GREASE values (RFC 8701) in suites, extensions, groups, signature algorithms and versions |
+| `tests.oversized` | string or null | The handshake message fills a whole 16 KiB record |
+| `tests.fragmented` | string or null | The ClientHello is split across 16-byte records |
+| `error` | string | Only when the probe failed |
+
 ### Finding
 
 | Field | Type | Description |
@@ -224,6 +241,10 @@ Abbreviated:
     { "id": "poodle", "name": "POODLE", "status": "not vulnerable", "detail": "SSLv3 not offered", "finding": null },
     { "id": "beast", "name": "BEAST", "status": "vulnerable", "detail": "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA", "finding": "vuln.beast" }
   ],
+  "intolerance": {
+    "protocol": "TLSv1.3",
+    "tests": { "fragmented": "tolerated", "grease": "tolerated", "oversized": "rejected", "unknown_extension": "tolerated", "unknown_version": "tolerated" }
+  },
   "findings": [
     { "id": "protocol.no_tls13", "severity": "info", "message": "..." }
   ]
