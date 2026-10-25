@@ -63,7 +63,8 @@ Two connection paths:
 ### v0.2 — Key exchange, headers, revocation
 - [x] Supported groups incl. X25519MLKEM768, ECDHE curve list, DH param size
 - [x] HSTS / preload / security headers via full-handshake path
-- OCSP stapling, OCSP responder, CRL
+- [x] OCSP stapling
+- OCSP responder, CRL
 
 ### v0.3 — Protocols & vulnerabilities
 - STARTTLS (SMTP, IMAP, POP3, FTP, XMPP, LDAP, PostgreSQL, MySQL)
@@ -132,3 +133,4 @@ Two connection paths:
 | 26 | Releases are cut from `main` by a version-bump PR that updates `Cargo.toml` and `CHANGELOG.md` (Keep a Changelog); the `v*` tag is pushed after it merges, and the release workflow publishes binaries with generated notes; tags with a `-` suffix are pre-releases | The changelog is curated for users, while generated notes still credit every PR; the workflow refuses tags that don't match `Cargo.toml` |
 | 27 | Supported groups are enumerated per offered version by offering a shrinking group list and removing each selected group: TLSv1.3 sends an empty `key_share` so the server names its choice in a HelloRetryRequest, while TLSv1.0–1.2 read the named curve from the ECDHE ServerKeyExchange. The DH prime size comes from a DHE ServerKeyExchange. Curves below `secp256r1` rate medium (RFC 8422 §5.1.1), DH primes below 1024 bits high and below 2048 medium; TLSv1.3 without an ML-KEM group is info | No key shares need computing, so no crypto dependency is added and every registered group, including ML-KEM hybrids, can be probed |
 | 28 | HTTP headers come from one `GET /` (HTTP/1.1, ALPN `http/1.1`, `Connection: close`) over the rustls full handshake; only the status line and header section are read (64 KiB cap) and redirects are not followed. A missing, invalid, disabled, or short (under 180 days) HSTS policy is low; missing CSP, framing protection, `nosniff`, and Referrer-Policy are info; a failed fetch is info because many TLS services do not speak HTTP | The headers of the first response are what a browser applies to this origin; reusing rustls avoids a new HTTP dependency, and low/info severities keep `--fail-on high` usable for non-web endpoints |
+| 29 | The stapled OCSP response is parsed with a small DER reader (RFC 6960) and verified against the chain's issuer or a delegated responder carrying the OCSPSigning EKU; the `CertID` may use SHA-1 or SHA-2. Revoked is critical, unknown, invalid, or stale (outside `thisUpdate`/`nextUpdate`, or older than one day without `nextUpdate`, with 5 minutes of clock skew) is medium, a Must-Staple certificate (RFC 7633) without a staple is high, and no staple at all is info | No OCSP crate is mature and permissively licensed; `ring` is already in the tree for the digests and `x509-parser` verifies the signature. Not stapling is common and only costs privacy and latency, while a broken staple makes browsers that honour it fail |

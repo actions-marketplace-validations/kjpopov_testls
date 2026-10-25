@@ -77,6 +77,15 @@ finishes. This page describes schema version **1**.
 | `chain[].names` | array of strings | DNS names and IP addresses from the subject alternative names |
 | `chain[].key` | string | Key algorithm and size, e.g. `"RSA 2048 bits"` |
 | `chain[].error` | string | Only for a certificate that cannot be parsed; the other fields are then absent |
+| `ocsp` | object or null | Stapled OCSP response for the leaf; `null` on error |
+| `ocsp.stapled` | boolean | The server stapled a response |
+| `ocsp.status` | string or null | `good`, `revoked`, `unknown`, or `invalid`; `null` when not stapled |
+| `ocsp.produced_at` | integer | When the response was signed, Unix time; only for a verified response |
+| `ocsp.this_update` | integer | Start of the validity interval, Unix time; only for a verified response |
+| `ocsp.next_update` | integer | End of the validity interval, Unix time; absent when the responder gave none |
+| `ocsp.revocation_time` | integer | Only when `revoked`: revocation time, Unix time |
+| `ocsp.revocation_reason` | string | Only when `revoked` with a reason: RFC 5280 `CRLReason` name, e.g. `"keyCompromise"` |
+| `ocsp.error` | string | Only when `invalid`: why the response failed to parse or verify |
 | `error` | string | Only when the chain could not be retrieved; `chain` is then empty |
 
 ### HTTP headers
@@ -150,7 +159,14 @@ Abbreviated:
         "names": ["example.com"],
         "key": "EC 256 bits"
       }
-    ]
+    ],
+    "ocsp": {
+      "stapled": true,
+      "status": "good",
+      "produced_at": 1792918114,
+      "this_update": 1792918114,
+      "next_update": 1793522914
+    }
   },
   "http": {
     "status": 200,

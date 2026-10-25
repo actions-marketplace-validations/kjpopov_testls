@@ -21,6 +21,11 @@ All notable changes to `testls` are listed here. The format follows
   policy, a preload request that does not meet the preload list's
   requirements, and missing security headers (info).
 - `http` object in the JSON report (additive).
+- Stapled OCSP response check (RFC 6960): the response is verified against
+  the issuer or a delegated responder and shown in the certificate section.
+- Findings for a revoked, unknown, invalid, or stale OCSP response, a
+  Must-Staple certificate (RFC 7633) without a staple, and no staple (info).
+- `certificate.ocsp` object in the JSON report (additive).
 
 ## [0.1.0] - 2026-10-24
 

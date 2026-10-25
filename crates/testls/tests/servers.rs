@@ -112,6 +112,7 @@ fn modern_server() {
     assert!(s.has("0x11ec  X25519MLKEM768"));
     assert_eq!(s.line("Certificate"), "Certificate (TLSv1.3)");
     assert_eq!(s.line("key"), "key     RSA 2048 bits");
+    assert_eq!(s.line("OCSP"), "OCSP     not stapled");
     assert_eq!(s.line("HTTP headers"), "HTTP headers (status 200)");
     assert_eq!(
         s.line("Strict-Transport-Security"),
@@ -123,6 +124,7 @@ fn modern_server() {
         lines,
         [
             "low      no Strict-Transport-Security header",
+            "info     no OCSP response stapled",
             "info     no X-Content-Type-Options: nosniff header",
             "info     no restrictive X-Frame-Options header or CSP frame-ancestors directive",
             "info     no Content-Security-Policy header",
@@ -207,6 +209,10 @@ fn json_report() {
             .any(|g| g["name"] == "x25519" && g["severity"] == "ok")
     );
     assert_eq!(v["certificate"]["chain"][0]["subject"], "CN=localhost");
+    assert_eq!(
+        v["certificate"]["ocsp"],
+        serde_json::json!({"stapled": false, "status": null})
+    );
     assert_eq!(v["http"]["status"], 200);
     assert_eq!(
         v["http"]["headers"]["strict-transport-security"],

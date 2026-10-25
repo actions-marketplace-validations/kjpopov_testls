@@ -7,8 +7,9 @@ use std::fmt::Write as _;
 use std::net::SocketAddr;
 
 use testls_checks::{
-    CertificateInfo, Finding, Severity, cipher_name, cipher_severity, dh_severity, group_name,
-    group_severity, protocol_severity,
+    CertStatus, CertificateInfo, Finding, OcspStatus, Severity, cipher_name, cipher_severity,
+    dh_severity, display_time, group_name, group_severity, protocol_severity,
+    revocation_reason_name,
 };
 use testls_probe::{
     CipherOrder, CipherResult, HttpResponse, KeyExchangeResult, ProtocolResult, ProtocolSupport,
@@ -44,6 +45,9 @@ pub struct CertificateSection {
     pub version: ProtocolVersion,
     /// Details of each certificate, leaf first, or why it cannot be parsed.
     pub certificates: Vec<Result<CertificateInfo, String>>,
+    /// Stapled OCSP response: `None` when nothing was stapled, otherwise the
+    /// verified status or why the response is invalid.
+    pub ocsp: Option<Result<OcspStatus, String>>,
 }
 
 /// Renders the target, resolved address, and SNI name.
@@ -154,7 +158,35 @@ pub fn certificate(section: &Result<CertificateSection, String>, paint: Painter)
             }
         }
     }
+    let _ = writeln!(out, "  OCSP     {}", ocsp_line(chain.ocsp.as_ref(), paint));
     out
+}
+
+/// Describes the stapled OCSP response, painted by how bad it is.
+fn ocsp_line(ocsp: Option<&Result<OcspStatus, String>>, paint: Painter) -> String {
+    let Some(ocsp) = ocsp else {
+        return "not stapled".into();
+    };
+    match ocsp {
+        Ok(status) => match status.status {
+            CertStatus::Good => {
+                let next = status
+                    .next_update
+                    .map_or_else(|| "none".into(), display_time);
+                format!("good, next update {next}")
+            }
+            CertStatus::Revoked { time, reason } => paint.severity(
+                Severity::Critical,
+                &format!(
+                    "revoked on {} ({})",
+                    display_time(time),
+                    reason.map_or("no reason given", revocation_reason_name)
+                ),
+            ),
+            CertStatus::Unknown => paint.severity(Severity::Medium, "unknown to the responder"),
+        },
+        Err(e) => paint.severity(Severity::Medium, &format!("invalid: {e}")),
+    }
 }
 
 /// Security headers listed in the HTTP section, in display order.
@@ -383,15 +415,47 @@ mod tests {
                 }),
                 Err("bad".into()),
             ],
+            ocsp: None,
         });
         assert_eq!(
             certificate(&section, PLAIN),
-            "Certificate (TLSv1.3)\n  #0 CN=localhost\n     issuer  CN=test CA\n     valid   A to B\n     names   localhost, 127.0.0.1\n     key     EC 256 bits\n  #1 cannot be parsed: bad\n"
+            "Certificate (TLSv1.3)\n  #0 CN=localhost\n     issuer  CN=test CA\n     valid   A to B\n     names   localhost, 127.0.0.1\n     key     EC 256 bits\n  #1 cannot be parsed: bad\n  OCSP     not stapled\n"
         );
         assert_eq!(
             certificate(&Err("refused".into()), PLAIN),
             "Certificate: error: refused\n"
         );
+    }
+
+    /// The OCSP line shows the stapled status, revocation, or the error.
+    #[test]
+    fn ocsp_lines() {
+        let status = |status| OcspStatus {
+            status,
+            produced_at: 0,
+            this_update: 0,
+            next_update: Some(1_793_577_600),
+        };
+        let good = Ok(status(CertStatus::Good));
+        assert_eq!(
+            ocsp_line(Some(&good), PLAIN),
+            "good, next update Nov  2 00:00:00 2026 +00:00"
+        );
+        let revoked = Ok(status(CertStatus::Revoked {
+            time: 1_790_812_800,
+            reason: Some(1),
+        }));
+        assert_eq!(
+            ocsp_line(Some(&revoked), PLAIN),
+            "revoked on Oct  1 00:00:00 2026 +00:00 (keyCompromise)"
+        );
+        let unknown = Ok(status(CertStatus::Unknown));
+        assert_eq!(ocsp_line(Some(&unknown), PLAIN), "unknown to the responder");
+        assert_eq!(
+            ocsp_line(Some(&Err("bad signature".into())), PLAIN),
+            "invalid: bad signature"
+        );
+        assert_eq!(ocsp_line(None, PLAIN), "not stapled");
     }
 
     /// The HTTP section lists each security header or `not set`, and a
