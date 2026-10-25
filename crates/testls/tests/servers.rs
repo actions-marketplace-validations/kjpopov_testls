@@ -102,6 +102,14 @@ fn legacy_server() {
     );
     assert!(!s.has("intolerance."), "{}", s.stdout);
     assert_eq!(
+        s.line("extended master secret"),
+        "extended master secret  yes (TLSv1.2)"
+    );
+    assert_eq!(
+        s.line("downgrade sentinel"),
+        "downgrade sentinel      not tested"
+    );
+    assert_eq!(
         s.code, 1,
         "critical findings must fail the default threshold"
     );
@@ -154,6 +162,21 @@ fn modern_server() {
     assert!(
         tolerance.lines().all(|l| l.ends_with(" tolerated")),
         "{tolerance}"
+    );
+    let details = s
+        .stdout
+        .split_once("\nHandshake details\n")
+        .expect("details")
+        .1;
+    let details = details.split_once("\n\n").expect("section end").0;
+    assert_eq!(
+        details.lines().map(str::trim).collect::<Vec<_>>(),
+        [
+            "extended master secret  yes (TLSv1.2)",
+            "downgrade sentinel      yes (TLSv1.2)",
+            "session tickets         yes (TLSv1.3)",
+            "0-RTT early data        no",
+        ]
     );
     let findings = s.stdout.split_once("\nFindings\n").expect("findings").1;
     let lines: Vec<&str> = findings.lines().map(str::trim).collect();
@@ -267,6 +290,9 @@ fn json_report() {
     assert_eq!(beast["finding"], "vuln.beast");
     assert_eq!(v["intolerance"]["protocol"], "TLSv1.2");
     assert_eq!(v["intolerance"]["tests"]["grease"], "tolerated");
+    assert_eq!(v["details"]["protocol"], "TLSv1.2");
+    assert_eq!(v["details"]["extended_master_secret"], true);
+    assert_eq!(v["details"]["downgrade_sentinel"], serde_json::Value::Null);
     assert_eq!(v["findings"][0]["severity"], "critical");
     assert!(
         v["findings"]

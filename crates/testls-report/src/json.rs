@@ -11,7 +11,9 @@ use testls_checks::{
     CertStatus, Finding, OcspStatus, RevocationCheck, RevocationMethod, Vulnerability, cipher_name,
     cipher_severity, group_name, group_severity, parse_hsts, revocation_reason_name,
 };
-use testls_probe::{CipherOrder, HttpResponse, Intolerance, ProtocolResult, ProtocolSupport};
+use testls_probe::{
+    CipherOrder, HandshakeDetails, HttpResponse, Intolerance, ProtocolResult, ProtocolSupport,
+};
 
 use crate::text::{
     CertificateSection, CipherSection, INTOLERANCE_TESTS, KeyExchangeSection, SECURITY_HEADERS,
@@ -50,6 +52,8 @@ pub struct Report<'a> {
     pub vulnerabilities: &'a [Vulnerability],
     /// `ClientHello` tolerance tests, or why they could not run.
     pub intolerance: &'a Result<Intolerance, String>,
+    /// Handshake details, or why they could not be probed.
+    pub details: &'a Result<HandshakeDetails, String>,
     /// Findings, most severe first.
     pub findings: &'a [Finding],
 }
@@ -81,6 +85,8 @@ struct Document<'a> {
     vulnerabilities: Vec<VulnerabilityJson<'a>>,
     /// `ClientHello` tolerance result.
     intolerance: IntoleranceJson<'a>,
+    /// Handshake details result.
+    details: DetailsJson<'a>,
     /// Findings, most severe first.
     findings: Vec<FindingJson<'a>>,
 }
@@ -328,6 +334,24 @@ struct IntoleranceJson<'a> {
     error: Option<&'a str>,
 }
 
+/// Handshake details; each field is `null` when not tested.
+#[derive(Debug, Serialize)]
+struct DetailsJson<'a> {
+    /// TLSv1.2 or older version used for the extended master secret and
+    /// downgrade sentinel probes.
+    protocol: Option<String>,
+    /// Server negotiates the extended master secret (RFC 7627).
+    extended_master_secret: Option<bool>,
+    /// TLSv1.3 server sets the downgrade sentinel (RFC 8446 §4.1.3).
+    downgrade_sentinel: Option<bool>,
+    /// Server issues TLSv1.3 session tickets.
+    session_tickets: Option<bool>,
+    /// Largest 0-RTT early data size offered in a ticket; 0 = none.
+    max_early_data: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'a str>,
+}
+
 /// One finding.
 #[derive(Debug, Serialize)]
 struct FindingJson<'a> {
@@ -367,6 +391,7 @@ pub fn render(report: &Report<'_>) -> String {
         revocation: report.revocation.map(revocation),
         vulnerabilities: report.vulnerabilities.iter().map(vulnerability).collect(),
         intolerance: intolerance(report.intolerance),
+        details: details(report.details),
         findings: report
             .findings
             .iter()
@@ -396,6 +421,19 @@ fn intolerance(section: &Result<Intolerance, String>) -> IntoleranceJson<'_> {
                 (*key, verdict)
             })
             .collect(),
+        error: section.as_ref().err().map(String::as_str),
+    }
+}
+
+/// Converts the handshake details; on error every field is `null`.
+fn details(section: &Result<HandshakeDetails, String>) -> DetailsJson<'_> {
+    let result = section.as_ref().ok();
+    DetailsJson {
+        protocol: result.and_then(|r| r.legacy_version).map(|v| v.to_string()),
+        extended_master_secret: result.and_then(|r| r.extended_master_secret),
+        downgrade_sentinel: result.and_then(|r| r.downgrade_sentinel),
+        session_tickets: result.and_then(|r| r.session_tickets),
+        max_early_data: result.and_then(|r| r.max_early_data),
         error: section.as_ref().err().map(String::as_str),
     }
 }
@@ -723,6 +761,7 @@ mod tests {
             revocation: None,
             vulnerabilities: &[],
             intolerance: &Err("skipped".into()),
+            details: &Err("skipped".into()),
             findings: &[Finding::new("cert.untrusted", Severity::High, "untrusted")],
         };
         assert_eq!(
@@ -733,8 +772,7 @@ mod tests {
                 "target": {"input": "localhost:443", "address": "127.0.0.1:443", "sni": "localhost"},
                 "started_at": 1_700_000_000,
                 "protocols": [
-                    {"version": "TLSv1.3", "status": "offered"},
-                    {"version": "TLSv1.0", "status": "not_offered"},
+                    {"version": "TLSv1.3", "status": "offered"}, {"version": "TLSv1.0", "status": "not_offered"},
                     {"version": "SSLv3", "status": "error", "error": "timed out"},
                 ],
                 "ciphers": [
@@ -759,6 +797,8 @@ mod tests {
                 "revocation": null, "vulnerabilities": [],
                 "intolerance": {"protocol": null, "error": "skipped", "tests": {
                     "fragmented": null, "grease": null, "oversized": null, "unknown_extension": null, "unknown_version": null}},
+                "details": {"protocol": null, "extended_master_secret": null, "downgrade_sentinel": null,
+                    "session_tickets": null, "max_early_data": null, "error": "skipped"},
                 "findings": [{"id": "cert.untrusted", "severity": "high", "message": "untrusted"}],
             })
         );
@@ -810,6 +850,7 @@ mod tests {
             revocation: None,
             vulnerabilities: &[],
             intolerance: &Err("skipped".into()),
+            details: &Err("skipped".into()),
             findings: &[],
         };
         assert_eq!(
@@ -853,6 +894,7 @@ mod tests {
             revocation: None,
             vulnerabilities: &[],
             intolerance: &Err("skipped".into()),
+            details: &Err("skipped".into()),
             findings: &[],
         };
         let v = value(&report);
@@ -893,6 +935,7 @@ mod tests {
             revocation: None,
             vulnerabilities: &[],
             intolerance: &Err("skipped".into()),
+            details: &Err("skipped".into()),
             findings: &[],
         };
         assert_eq!(
@@ -1022,6 +1065,28 @@ mod tests {
                     "oversized": "tolerated",
                     "fragmented": "rejected",
                 },
+            })
+        );
+    }
+
+    /// Handshake details keep every flag and the probed legacy version.
+    #[test]
+    fn details_object() {
+        let result = HandshakeDetails {
+            legacy_version: Some(ProtocolVersion::TLS12),
+            extended_master_secret: Some(true),
+            downgrade_sentinel: Some(false),
+            session_tickets: None,
+            max_early_data: Some(0),
+        };
+        assert_eq!(
+            serde_json::to_value(details(&Ok(result))).unwrap(),
+            json!({
+                "protocol": "TLSv1.2",
+                "extended_master_secret": true,
+                "downgrade_sentinel": false,
+                "session_tickets": null,
+                "max_early_data": 0,
             })
         );
     }
