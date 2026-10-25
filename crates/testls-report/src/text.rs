@@ -7,9 +7,9 @@ use std::fmt::Write as _;
 use std::net::SocketAddr;
 
 use testls_checks::{
-    CertStatus, CertificateInfo, Finding, OcspStatus, RevocationCheck, Severity, VulnStatus,
-    Vulnerability, cipher_name, cipher_severity, dh_severity, display_time, group_name,
-    group_severity, protocol_severity, revocation_reason_name,
+    CertStatus, CertificateInfo, Finding, OcspStatus, PostQuantum, PqStatus, RevocationCheck,
+    Severity, VulnStatus, Vulnerability, cipher_name, cipher_severity, dh_severity, display_time,
+    group_name, group_severity, protocol_severity, revocation_reason_name,
 };
 use testls_probe::{
     CipherOrder, CipherResult, HandshakeDetails, HttpResponse, Intolerance, KeyExchangeResult,
@@ -380,6 +380,45 @@ pub fn details(section: &Result<HandshakeDetails, String>, paint: Painter) -> St
     out
 }
 
+/// Lists groups as `name (0xNNNN)`, or `none`.
+fn group_list(groups: &[u16]) -> String {
+    if groups.is_empty() {
+        return "none".to_owned();
+    }
+    groups
+        .iter()
+        .map(|&id| format!("{} (0x{id:04x})", group_name(id)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Renders the post-quantum readiness summary of the TLSv1.3 key exchange.
+#[must_use]
+pub fn post_quantum(pq: &PostQuantum, paint: Painter) -> String {
+    let status = match pq.status {
+        PqStatus::Ready => paint.severity(Severity::Ok, pq.status.as_str()),
+        PqStatus::DraftOnly => paint.severity(Severity::Low, pq.status.as_str()),
+        PqStatus::NotReady => paint.severity(Severity::Info, pq.status.as_str()),
+        PqStatus::NotTested => pq.status.as_str().to_owned(),
+    };
+    let preferred = match pq.preferred {
+        Some(true) => paint.severity(Severity::Ok, "yes"),
+        Some(false) => paint.severity(Severity::Info, "no"),
+        None => "not tested".to_owned(),
+    };
+    let mut out = format!("{}\n", paint.heading("Post-quantum readiness"));
+    let rows = [
+        ("status", status),
+        ("ML-KEM groups", group_list(&pq.groups)),
+        ("draft Kyber groups", group_list(&pq.draft_groups)),
+        ("server prefers ML-KEM", preferred),
+    ];
+    for (label, value) in rows {
+        let _ = writeln!(out, "  {label:<22} {value}");
+    }
+    out
+}
+
 /// Renders findings in the given order with coloured severity labels and
 /// their ids, which `testls explain` describes.
 #[must_use]
@@ -727,6 +766,39 @@ mod tests {
         assert_eq!(
             intolerance(&Err("timed out".into()), PLAIN),
             "ClientHello tolerance: error: timed out\n"
+        );
+    }
+
+    /// The post-quantum summary lists ML-KEM and draft groups and the verdict.
+    #[test]
+    fn post_quantum_lines() {
+        let pq = PostQuantum {
+            status: PqStatus::Ready,
+            groups: vec![0x11ec, 0x11eb],
+            draft_groups: vec![0x6399],
+            preferred: Some(true),
+        };
+        assert_eq!(
+            post_quantum(&pq, PLAIN),
+            "Post-quantum readiness\n  \
+             status                 ready\n  \
+             ML-KEM groups          X25519MLKEM768 (0x11ec), SecP256r1MLKEM768 (0x11eb)\n  \
+             draft Kyber groups     X25519Kyber768Draft00 (OBSOLETE) (0x6399)\n  \
+             server prefers ML-KEM  yes\n"
+        );
+        let untested = PostQuantum {
+            status: PqStatus::NotTested,
+            groups: vec![],
+            draft_groups: vec![],
+            preferred: None,
+        };
+        assert_eq!(
+            post_quantum(&untested, PLAIN),
+            "Post-quantum readiness\n  \
+             status                 not tested\n  \
+             ML-KEM groups          none\n  \
+             draft Kyber groups     none\n  \
+             server prefers ML-KEM  not tested\n"
         );
     }
 

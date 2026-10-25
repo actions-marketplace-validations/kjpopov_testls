@@ -137,6 +137,9 @@ fn modern_server() {
         "Key exchange TLSv1.3 server order"
     );
     assert!(s.has("0x11ec  X25519MLKEM768"));
+    assert_eq!(s.line("status "), "status                 ready");
+    assert!(s.has("ML-KEM groups          X25519MLKEM768 (0x11ec)"));
+    assert_eq!(s.line("draft Kyber groups"), "draft Kyber groups     none");
     assert_eq!(s.line("Certificate"), "Certificate (TLSv1.3)");
     assert_eq!(s.line("key"), "key     RSA 2048 bits");
     assert_eq!(s.line("OCSP"), "OCSP     not stapled");
@@ -291,6 +294,7 @@ fn json_report() {
     assert_eq!(v["intolerance"]["protocol"], "TLSv1.2");
     assert_eq!(v["intolerance"]["tests"]["grease"], "tolerated");
     assert_eq!(v["details"]["protocol"], "TLSv1.2");
+    assert_eq!(v["post_quantum"]["status"], "not tested");
     assert_eq!(v["details"]["extended_master_secret"], true);
     assert_eq!(v["details"]["downgrade_sentinel"], serde_json::Value::Null);
     assert_eq!(v["findings"][0]["severity"], "critical");

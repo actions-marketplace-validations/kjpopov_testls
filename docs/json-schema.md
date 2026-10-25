@@ -28,6 +28,7 @@ finishes. This page describes schema version **1**.
 | `protocols` | array | One [protocol](#protocol) per probed version, oldest first |
 | `ciphers` | array | One [cipher list](#cipher-list) per offered version |
 | `key_exchange` | array | One [key exchange](#key-exchange) per offered version |
+| `post_quantum` | object | [Post-quantum readiness](#post-quantum-readiness) of TLSv1.3 |
 | `certificate` | object | The [certificate chain](#certificate-chain) |
 | `http` | object | [HTTP headers](#http-headers) of the reply to `GET /` |
 | `revocation` | object or null | [Revocation](#revocation) check with `--revocation`; `null` without it |
@@ -68,6 +69,15 @@ finishes. This page describes schema version **1**.
 | `groups[].severity` | string | Severity of the group, see [Finding](#finding) |
 | `dh_bits` | integer or null | Size of the ephemeral DH prime offered with DHE suites (TLSv1.2 and older); `null` without DHE |
 | `error` | string | Only when the probe failed; `groups` is then empty |
+
+### Post-quantum readiness
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `status` | string | `"ready"` (an ML-KEM group), `"draft only"` (only obsolete draft Kyber code points), `"not ready"`, or `"not tested"` (no TLSv1.3 groups measured) |
+| `groups` | array | Accepted ML-KEM groups (pure or hybrid), same fields as `key_exchange[].groups` |
+| `draft_groups` | array | Accepted draft Kyber code points, same fields |
+| `preferred` | bool or null | Server picks an ML-KEM group over every classical group; `null` without a server group order or ML-KEM group |
 
 ### Certificate chain
 
@@ -215,6 +225,14 @@ Abbreviated:
       "dh_bits": null
     }
   ],
+  "post_quantum": {
+    "status": "ready",
+    "groups": [
+      { "id": "0x11ec", "name": "X25519MLKEM768", "severity": "ok" }
+    ],
+    "draft_groups": [],
+    "preferred": true
+  },
   "certificate": {
     "protocol": "TLSv1.3",
     "chain": [

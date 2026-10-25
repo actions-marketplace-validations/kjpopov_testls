@@ -16,8 +16,8 @@ use testls_checks::{
     Finding, RevocationCheck, Severity, TrustStore, Vulnerability, assess_vulnerabilities,
     certificate_findings, cipher_findings, describe_certificate, details_findings, explain,
     explanations, http_findings, intolerance_findings, key_exchange_findings, ocsp_findings,
-    protocol_findings, revocation_findings, revocation_urls, trust_findings, verify_ocsp_response,
-    vulnerability_findings,
+    post_quantum_readiness, protocol_findings, revocation_findings, revocation_urls,
+    trust_findings, verify_ocsp_response, vulnerability_findings,
 };
 use testls_probe::{
     CipherResult, Fetcher, HandshakeDetails, HttpResponse, Intolerance, KeyExchangeResult,
@@ -238,6 +238,8 @@ async fn scan(cli: &Cli, scan_target: &Target) -> ExitCode {
         ciphers.push(section);
         key_exchange.push(kx);
     }
+    let post_quantum = post_quantum_readiness(&measured(&key_exchange));
+    show(format!("\n{}", text::post_quantum(&post_quantum, paint)));
 
     let host = sni.map_or_else(|| addr.ip().to_string(), str::to_owned);
     let (certificate, cert_findings, chain) =
@@ -285,6 +287,7 @@ async fn scan(cli: &Cli, scan_target: &Target) -> ExitCode {
                 protocols: &protocols,
                 ciphers: &ciphers,
                 key_exchange: &key_exchange,
+                post_quantum: &post_quantum,
                 certificate: &certificate,
                 http: &http,
                 revocation: revocation.as_ref(),
@@ -522,10 +525,7 @@ async fn vulnerability_section(
         .iter()
         .filter_map(|s| s.outcome.as_ref().ok().cloned())
         .collect();
-    let key_exchange: Vec<KeyExchangeResult> = key_exchange
-        .iter()
-        .filter_map(|s| s.outcome.as_ref().ok().cloned())
-        .collect();
+    let key_exchange = measured(key_exchange);
     let features = probe_features(transport, &ciphers, sni).await.ok();
     assess_vulnerabilities(protocols, &ciphers, &key_exchange, features.as_ref())
 }
@@ -556,6 +556,14 @@ async fn intolerance_section(
             (Err(e.to_string()), vec![finding])
         }
     }
+}
+
+/// The key exchange results that were measured without error.
+fn measured(sections: &[KeyExchangeSection]) -> Vec<KeyExchangeResult> {
+    sections
+        .iter()
+        .filter_map(|s| s.outcome.as_ref().ok().cloned())
+        .collect()
 }
 
 /// Probes extended master secret, the downgrade sentinel, session tickets
