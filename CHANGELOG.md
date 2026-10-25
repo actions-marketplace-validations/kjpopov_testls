@@ -26,6 +26,12 @@ All notable changes to `testls` are listed here. The format follows
 - Findings for a revoked, unknown, invalid, or stale OCSP response, a
   Must-Staple certificate (RFC 7633) without a staple, and no staple (info).
 - `certificate.ocsp` object in the JSON report (additive).
+- `--revocation`: ask the issuer's OCSP responder, falling back to its CRLs,
+  whether the leaf certificate is revoked. Off by default because it
+  contacts servers other than the target.
+- Findings for a revoked certificate, an unknown or stale answer, and no
+  usable OCSP responder or CRL (info); `revocation` object in the JSON
+  report (additive).
 
 ## [0.1.0] - 2026-10-24
 

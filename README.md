@@ -49,6 +49,9 @@ testls --format json --fail-on medium example.com:8443
 # Trust the operating system's roots or a private CA instead of Mozilla's
 testls --system-roots intranet.example
 testls --ca-file my-ca.pem 10.0.0.5 --sni intranet.example
+
+# Also ask the CA's OCSP responder or CRL whether the certificate is revoked
+testls --revocation example.com
 ```
 
 Exit status is `0` when no finding reaches `--fail-on` (default `high`), `1`

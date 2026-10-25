@@ -8,8 +8,8 @@ use std::net::SocketAddr;
 
 use serde::Serialize;
 use testls_checks::{
-    CertStatus, Finding, OcspStatus, cipher_name, cipher_severity, group_name, group_severity,
-    parse_hsts, revocation_reason_name,
+    CertStatus, Finding, OcspStatus, RevocationCheck, RevocationMethod, cipher_name,
+    cipher_severity, group_name, group_severity, parse_hsts, revocation_reason_name,
 };
 use testls_probe::{CipherOrder, HttpResponse, ProtocolResult, ProtocolSupport};
 
@@ -42,6 +42,9 @@ pub struct Report<'a> {
     pub certificate: &'a Result<CertificateSection, String>,
     /// Reply to `GET /`, or why it could not be fetched.
     pub http: &'a Result<HttpResponse, String>,
+    /// Revocation checks against the issuer's services, or why they could
+    /// not run; `None` when not requested.
+    pub revocation: Option<&'a Result<Vec<RevocationCheck>, String>>,
     /// Findings, most severe first.
     pub findings: &'a [Finding],
 }
@@ -67,6 +70,8 @@ struct Document<'a> {
     certificate: CertificateJson<'a>,
     /// HTTP security headers result.
     http: HttpJson<'a>,
+    /// Revocation check result, or `null` when not requested.
+    revocation: Option<RevocationJson<'a>>,
     /// Findings, most severe first.
     findings: Vec<FindingJson<'a>>,
 }
@@ -251,6 +256,42 @@ struct HstsJson {
     preload_eligible: bool,
 }
 
+/// Opt-in revocation check against the issuer's services.
+#[derive(Debug, Serialize)]
+struct RevocationJson<'a> {
+    /// Each OCSP query or CRL download, in the order made.
+    checks: Vec<RevocationCheckJson<'a>>,
+    /// Why no check could be made, e.g. the chain could not be retrieved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'a str>,
+}
+
+/// One OCSP query or CRL download.
+#[derive(Debug, Serialize)]
+struct RevocationCheckJson<'a> {
+    /// `ocsp` or `crl`.
+    method: &'static str,
+    /// URL that was used.
+    url: &'a str,
+    /// `good`, `revoked`, `unknown`, or `error`.
+    status: &'static str,
+    /// Start of the validity interval, Unix time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    this_update: Option<i64>,
+    /// End of the validity interval, Unix time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_update: Option<i64>,
+    /// Revocation time, Unix time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revocation_time: Option<i64>,
+    /// RFC 5280 `CRLReason` name, when revoked with a reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revocation_reason: Option<&'static str>,
+    /// Why fetching or verification failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'a str>,
+}
+
 /// One finding.
 #[derive(Debug, Serialize)]
 struct FindingJson<'a> {
@@ -287,6 +328,7 @@ pub fn render(report: &Report<'_>) -> String {
         key_exchange: report.key_exchange.iter().map(key_exchange).collect(),
         certificate: certificate(report.certificate),
         http: http(report.http),
+        revocation: report.revocation.map(revocation),
         findings: report
             .findings
             .iter()
@@ -489,10 +531,58 @@ fn http(section: &Result<HttpResponse, String>) -> HttpJson<'_> {
     }
 }
 
+/// Converts the revocation checks.
+fn revocation(section: &Result<Vec<RevocationCheck>, String>) -> RevocationJson<'_> {
+    match section {
+        Ok(checks) => RevocationJson {
+            checks: checks.iter().map(revocation_check).collect(),
+            error: None,
+        },
+        Err(e) => RevocationJson {
+            checks: Vec::new(),
+            error: Some(e),
+        },
+    }
+}
+
+/// Converts one revocation attempt.
+fn revocation_check(check: &RevocationCheck) -> RevocationCheckJson<'_> {
+    let mut json = RevocationCheckJson {
+        method: match check.method {
+            RevocationMethod::Ocsp => "ocsp",
+            RevocationMethod::Crl => "crl",
+        },
+        url: &check.url,
+        status: "error",
+        this_update: None,
+        next_update: None,
+        revocation_time: None,
+        revocation_reason: None,
+        error: None,
+    };
+    match &check.outcome {
+        Err(e) => json.error = Some(e),
+        Ok(status) => {
+            json.this_update = Some(status.this_update);
+            json.next_update = status.next_update;
+            json.status = match status.status {
+                CertStatus::Good => "good",
+                CertStatus::Revoked { time, reason } => {
+                    json.revocation_time = Some(time);
+                    json.revocation_reason = reason.map(revocation_reason_name);
+                    "revoked"
+                }
+                CertStatus::Unknown => "unknown",
+            };
+        }
+    }
+    json
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
-    use testls_checks::{CertificateInfo, Severity};
+    use testls_checks::{CertificateInfo, RevocationStatus, Severity};
     use testls_probe::{CipherResult, KeyExchangeResult};
     use testls_wire::ProtocolVersion;
 
@@ -565,6 +655,7 @@ mod tests {
             key_exchange: &[],
             certificate: &certificate,
             http: &http,
+            revocation: None,
             findings: &findings,
         };
         assert_eq!(
@@ -603,7 +694,7 @@ mod tests {
                     ],
                     "ocsp": {"stapled": false, "status": null},
                 },
-                "http": {"status": null, "headers": {}, "hsts": null, "error": "reset"},
+                "http": {"status": null, "headers": {}, "hsts": null, "error": "reset"}, "revocation": null,
                 "findings": [{"id": "cert.untrusted", "severity": "high", "message": "untrusted"}],
             })
         );
@@ -648,6 +739,7 @@ mod tests {
             key_exchange: &sections,
             certificate: &certificate,
             http: &http,
+            revocation: None,
             findings: &[],
         };
         assert_eq!(
@@ -688,6 +780,7 @@ mod tests {
             key_exchange: &[],
             certificate: &certificate,
             http: &http,
+            revocation: None,
             findings: &[],
         };
         let v = value(&report);
@@ -725,6 +818,7 @@ mod tests {
             key_exchange: &[],
             certificate: &certificate,
             http: &http,
+            revocation: None,
             findings: &[],
         };
         assert_eq!(
@@ -786,6 +880,49 @@ mod tests {
         assert_eq!(
             serde_json::to_value(ocsp(Some(&invalid))).unwrap(),
             json!({"stapled": true, "status": "invalid", "error": "bad signature"})
+        );
+    }
+
+    /// Revocation checks list each attempt with its status, or the reason
+    /// none could be made.
+    #[test]
+    fn revocation_object() {
+        let checks = Ok(vec![
+            RevocationCheck {
+                method: RevocationMethod::Ocsp,
+                url: "http://ocsp.test/".into(),
+                outcome: Err("HTTP status 500".into()),
+            },
+            RevocationCheck {
+                method: RevocationMethod::Crl,
+                url: "http://crl.test/ca.crl".into(),
+                outcome: Ok(RevocationStatus {
+                    status: CertStatus::Revoked {
+                        time: 5,
+                        reason: Some(1),
+                    },
+                    this_update: 3,
+                    next_update: None,
+                }),
+            },
+        ]);
+        assert_eq!(
+            serde_json::to_value(revocation(&checks)).unwrap(),
+            json!({"checks": [
+                {"method": "ocsp", "url": "http://ocsp.test/", "status": "error", "error": "HTTP status 500"},
+                {
+                    "method": "crl",
+                    "url": "http://crl.test/ca.crl",
+                    "status": "revoked",
+                    "this_update": 3,
+                    "revocation_time": 5,
+                    "revocation_reason": "keyCompromise",
+                },
+            ]})
+        );
+        assert_eq!(
+            serde_json::to_value(revocation(&Err("refused".into()))).unwrap(),
+            json!({"checks": [], "error": "refused"})
         );
     }
 }

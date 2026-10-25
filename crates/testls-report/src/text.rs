@@ -7,8 +7,8 @@ use std::fmt::Write as _;
 use std::net::SocketAddr;
 
 use testls_checks::{
-    CertStatus, CertificateInfo, Finding, OcspStatus, Severity, cipher_name, cipher_severity,
-    dh_severity, display_time, group_name, group_severity, protocol_severity,
+    CertStatus, CertificateInfo, Finding, OcspStatus, RevocationCheck, Severity, cipher_name,
+    cipher_severity, dh_severity, display_time, group_name, group_severity, protocol_severity,
     revocation_reason_name,
 };
 use testls_probe::{
@@ -189,6 +189,63 @@ fn ocsp_line(ocsp: Option<&Result<OcspStatus, String>>, paint: Painter) -> Strin
     }
 }
 
+/// Renders the opt-in revocation check: one line per OCSP query or CRL
+/// download in the order they were made, or why no check was possible.
+#[must_use]
+pub fn revocation(section: &Result<Vec<RevocationCheck>, String>, paint: Painter) -> String {
+    let checks = match section {
+        Ok(checks) => checks,
+        Err(e) => return format!("{}: error: {e}\n", paint.heading("Revocation")),
+    };
+    let mut out = format!("{}\n", paint.heading("Revocation"));
+    if checks.is_empty() {
+        let _ = writeln!(out, "  no HTTP OCSP responder or CRL named");
+    }
+    for check in checks {
+        let result = match &check.outcome {
+            Ok(status) => match status.status {
+                CertStatus::Good => {
+                    let next = status
+                        .next_update
+                        .map_or_else(|| "none".into(), display_time);
+                    format!("good, next update {next}")
+                }
+                CertStatus::Revoked { time, reason } => paint.severity(
+                    Severity::Critical,
+                    &format!(
+                        "revoked on {} ({})",
+                        display_time(time),
+                        reason.map_or("no reason given", revocation_reason_name)
+                    ),
+                ),
+                CertStatus::Unknown => paint.severity(Severity::Medium, "unknown"),
+            },
+            Err(e) => format!("error: {e}"),
+        };
+        let _ = writeln!(
+            out,
+            "  {:<4} {}  {result}",
+            check.method.as_str(),
+            printable(&check.url)
+        );
+    }
+    out
+}
+
+/// Escapes control characters (e.g. terminal escape sequences) in text
+/// taken from the scanned server's certificate so it is safe to print.
+fn printable(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_control() {
+                c.escape_default().to_string()
+            } else {
+                c.to_string()
+            }
+        })
+        .collect()
+}
+
 /// Security headers listed in the HTTP section, in display order.
 pub(crate) const SECURITY_HEADERS: [&str; 5] = [
     "Strict-Transport-Security",
@@ -259,6 +316,8 @@ pub(crate) fn suite_id(version: ProtocolVersion, id: u32) -> String {
 
 #[cfg(test)]
 mod tests {
+    use testls_checks::{RevocationMethod, RevocationStatus};
+
     use super::*;
 
     /// Painter without colour, for exact text comparisons.
@@ -456,6 +515,57 @@ mod tests {
             "invalid: bad signature"
         );
         assert_eq!(ocsp_line(None, PLAIN), "not stapled");
+    }
+
+    /// The revocation section lists each attempt with its result.
+    #[test]
+    fn revocation_lines() {
+        let status = |status| RevocationStatus {
+            status,
+            this_update: 0,
+            next_update: Some(1_793_577_600),
+        };
+        let checks = Ok(vec![
+            RevocationCheck {
+                method: RevocationMethod::Ocsp,
+                url: "http://ocsp.test/".into(),
+                outcome: Err("HTTP status 500".into()),
+            },
+            RevocationCheck {
+                method: RevocationMethod::Crl,
+                url: "http://crl.test/ca.crl".into(),
+                outcome: Ok(status(CertStatus::Good)),
+            },
+            RevocationCheck {
+                method: RevocationMethod::Crl,
+                url: "http://crl.test/b.crl".into(),
+                outcome: Ok(status(CertStatus::Revoked {
+                    time: 1_790_812_800,
+                    reason: None,
+                })),
+            },
+        ]);
+        assert_eq!(
+            revocation(&checks, PLAIN),
+            "Revocation\n  OCSP http://ocsp.test/  error: HTTP status 500\n  CRL  http://crl.test/ca.crl  good, next update Nov  2 00:00:00 2026 +00:00\n  CRL  http://crl.test/b.crl  revoked on Oct  1 00:00:00 2026 +00:00 (no reason given)\n"
+        );
+        let hostile = Ok(vec![RevocationCheck {
+            method: RevocationMethod::Ocsp,
+            url: "http://a/\x1b[2J".into(),
+            outcome: Err("timeout".into()),
+        }]);
+        assert_eq!(
+            revocation(&hostile, PLAIN),
+            "Revocation\n  OCSP http://a/\\u{1b}[2J  error: timeout\n"
+        );
+        assert_eq!(
+            revocation(&Ok(vec![]), PLAIN),
+            "Revocation\n  no HTTP OCSP responder or CRL named\n"
+        );
+        assert_eq!(
+            revocation(&Err("no chain".into()), PLAIN),
+            "Revocation: error: no chain\n"
+        );
     }
 
     /// The HTTP section lists each security header or `not set`, and a

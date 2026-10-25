@@ -29,6 +29,7 @@ finishes. This page describes schema version **1**.
 | `key_exchange` | array | One [key exchange](#key-exchange) per offered version |
 | `certificate` | object | The [certificate chain](#certificate-chain) |
 | `http` | object | [HTTP headers](#http-headers) of the reply to `GET /` |
+| `revocation` | object or null | [Revocation](#revocation) check with `--revocation`; `null` without it |
 | `findings` | array | [Findings](#finding), most severe first |
 
 ### Protocol
@@ -102,6 +103,25 @@ One `GET /` request is sent over a full handshake; redirects are not followed.
 | `hsts.preload` | boolean | `preload` is present |
 | `hsts.preload_eligible` | boolean | `max-age` is at least one year and both `includeSubDomains` and `preload` are present |
 | `error` | string | Only when the headers could not be fetched, e.g. the server does not speak HTTP |
+
+### Revocation
+
+Only with `--revocation`: the OCSP responders named in the leaf certificate
+are queried first, then its CRLs are downloaded, until one gives a verifiable
+answer. Only `http://` URLs are used.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `checks` | array | Each attempt in the order made; empty when the certificate names no HTTP OCSP responder or CRL |
+| `checks[].method` | string | `ocsp` or `crl` |
+| `checks[].url` | string | URL that was queried |
+| `checks[].status` | string | `good`, `revoked`, `unknown`, or `error` |
+| `checks[].this_update` | integer | Start of the validity interval, Unix time; absent on error |
+| `checks[].next_update` | integer | End of the validity interval, Unix time; absent when none was given |
+| `checks[].revocation_time` | integer | Only when `revoked`: revocation time, Unix time |
+| `checks[].revocation_reason` | string | Only when `revoked` with a reason: RFC 5280 `CRLReason` name |
+| `checks[].error` | string | Only on `error`: why fetching or verification failed |
+| `error` | string | Only when no check could be made, e.g. the chain could not be retrieved |
 
 ### Finding
 
@@ -178,6 +198,11 @@ Abbreviated:
       "x-frame-options": "DENY"
     },
     "hsts": { "max_age": 63072000, "include_subdomains": true, "preload": true, "preload_eligible": true }
+  },
+  "revocation": {
+    "checks": [
+      { "method": "ocsp", "url": "http://ocsp.example.net/", "status": "good", "this_update": 1792918114, "next_update": 1793522914 }
+    ]
   },
   "findings": [
     { "id": "protocol.no_tls13", "severity": "info", "message": "..." }
