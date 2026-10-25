@@ -21,7 +21,7 @@ crates/ (Cargo workspace)
 │                  # (protocol support, cipher enumeration, server preference)
 ├─ testls-checks   # Findings: certificate, headers, vulns; severity model
 ├─ testls-report   # Text + JSON renderers, exit-code policy
-├─ testls-server   # axum REST + SSE, embedded UI (v0.4)
+├─ testls-server   # axum REST + SSE, embedded UI (v0.6)
 └─ testls (bin)    # clap CLI, wires everything together
 ```
 
@@ -67,13 +67,43 @@ Two connection paths:
 - [x] OCSP responder, CRL (opt-in `--revocation`)
 - [x] Released as v0.2.0
 
-### v0.3 — Protocols & vulnerabilities
+### v0.3 — Findings & derived vulnerabilities
+- Finding IDs: keep the dotted IDs as a stable contract, show them in text
+  output, and add `testls explain <id>` with a short rationale and reference
+- Derived vulnerability checks from data the scan already collects (no extra
+  attack traffic): POODLE (SSLv3), BEAST, SWEET32, RC4, FREAK (export RSA),
+  Logjam (weak or common DH primes, RFC 7919 groups named), DROWN (SSLv2),
+  CRIME (TLS compression), insecure renegotiation, `TLS_FALLBACK_SCSV`
+  support, no forward secrecy, Raccoon (DH key reuse indicators)
+- ClientHello intolerance probes: oversized hellos, unknown versions and
+  extensions, GREASE (RFC 8701), fragmented records
+- TLSv1.3 details: 0-RTT, session tickets, downgrade sentinel (RFC 8446
+  §4.1.3), Extended Master Secret (RFC 7627) for TLSv1.2
+- Post-quantum readiness summary: label draft Kyber codepoints separately
+  from the standard ML-KEM groups
+- Certificate lifetime against the CA/Browser Forum Baseline Requirements
+  (publicly trusted certificates only) and embedded SCT parsing
+- HTTP extras: `Alt-Svc`, `Server`/`X-Powered-By` banners, cookie flags
+
+### v0.4 — Workflow
+- Multiple targets: `--file`, CIDR ranges, `--mx`; scan every A/AAAA address
+  and report divergence
+- Connection control: `--resolve`, proxy support, `--source-ip`
+- Output formats: SARIF, JUnit, Markdown, HTML, CSV
+- `--baseline` and `.testls.toml` suppressions with expiry dates
+- Scan profiles (`--profile quick|default|full`) and policies (`--policy`:
+  Mozilla, PCI DSS, NIST SP 800-52r2, BSI TR-02102-2, CNSA 2.0)
+- Packaging: Homebrew, Scoop/winget, `cargo binstall`, container image,
+  GitHub Action, shell completions and man page
+
+### v0.5 — STARTTLS, intrusive probes, grading
 - STARTTLS (SMTP, IMAP, POP3, FTP, XMPP, LDAP, PostgreSQL, MySQL)
-- Vulnerability checks (Heartbleed, CCS injection, ROBOT, POODLE, BEAST,
-  SWEET32, LOGJAM, FREAK, DROWN, renegotiation, compression/CRIME, …)
+- Intrusive checks behind `--intrusive`: Heartbleed, CCS injection,
+  Ticketbleed, ROBOT
+- Application-layer checks: BREACH, ALPACA, Opossum
 - Own grading model (documented, not SSL Labs-compatible)
 
-### v0.4 — Web service
+### v0.6 — Web service
 - `testls serve`: axum, binds 127.0.0.1 by default
 - REST: `POST /scans`, `GET /scans/{id}`, `GET /scans/{id}/events` (SSE)
 - Embedded SPA (static assets via `include_bytes!`/rust-embed)
@@ -90,17 +120,27 @@ Two connection paths:
   containers with specific protocol/cipher sets (podman or docker);
   `crates/testls/tests/servers.rs` scans them (`--ignored`, own CI job).
 - Coverage: `cargo llvm-cov --workspace -- --include-ignored` with the
-  test servers running; reported in the job summary, no threshold
+  test servers running; reported in the job summary, no threshold.
   The JSON renderer is checked field by field against expected documents
 - Opt-in live tests against badssl.com (not in default CI)
 
+## Backlog
+
+Not scheduled; pulled into a milestone when someone picks it up.
+
+- PKI: CAA and DANE/TLSA lookups, AIA intermediate fetching, chain order,
+  more trust stores
+- HTTP/3 (QUIC) and Encrypted Client Hello detection; DTLS
+- Library API, pcap import, WASM build
+- Release trust: Sigstore signatures, SLSA provenance, SBOM, macOS
+  notarization
+- Docs: catalogue of checks, mapping from testssl.sh options, threat model
+
 ## Open questions
 
-- Wire codec: hand-rolled vs. building on an existing parser crate
-  (e.g. `tls-parser`) for the read side?
 - Default scan profile: what runs without flags, and how long it may take
 - Rate limiting / politeness defaults towards scanned servers
-- STARTTLS / vulnerability prioritization for v0.3
+- Proxy support: do third-party lookups go through the proxy or get skipped?
 
 ## Decision log
 
@@ -137,3 +177,6 @@ Two connection paths:
 | 29 | The stapled OCSP response is parsed with a small DER reader (RFC 6960) and verified against the chain's issuer or a delegated responder carrying the OCSPSigning EKU; the `CertID` may use SHA-1 or SHA-2. Revoked is critical, unknown, invalid, or stale (outside `thisUpdate`/`nextUpdate`, or older than one day without `nextUpdate`, with 5 minutes of clock skew) is medium, a Must-Staple certificate (RFC 7633) without a staple is high, and no staple at all is info | No OCSP crate is mature and permissively licensed; `ring` is already in the tree for the digests and `x509-parser` verifies the signature. Not stapling is common and only costs privacy and latency, while a broken staple makes browsers that honour it fail |
 | 30 | OCSP test fixtures are generated by `scripts/gen-ocsp-fixtures.sh` (OpenSSL 3+) and gitignored rather than committed; tests take their clock from the generated response's `thisUpdate`. A delegated OCSP responder must also allow `digitalSignature` when it carries a keyUsage extension (RFC 5280 §4.2.1.3) | Committed binary fixtures are opaque to review and expire; a script documents how each certificate and response is built. CI runs the script before the build on every runner |
 | 31 | Revocation checks against the issuer's services are opt-in (`--revocation`). The OCSP responders from Authority Information Access are queried first (`POST`, SHA-1 `CertID`, no nonce, RFC 5019), then the CRLs from CRL Distribution Points (capped at 16 MiB); only `http://` URLs are used, and the first verifiable answer decides. Revoked is critical, unknown or stale is medium, and no source or every attempt failing is info. Indirect and delta CRLs are not supported | Querying the CA leaks which site is scanned to a third party and adds latency, so it is off by default. Responders are cheaper than CRLs; HTTP is what RFC 6960 and RFC 5280 expect and avoids a TLS bootstrap loop |
+| 32 | The wire codec stays hand-rolled instead of building the read side on a parser crate such as `tls-parser` | It already covers every message the probes need, is fuzzed in CI, and accepts the malformed and legacy input a scanner must tolerate without another dependency |
+| 33 | Network policy: apart from the target, DNS lookups (CAA, DANE/TLSA, MX) will be on by default with one opt-out switch, while every other third-party service (OCSP/CRL, AIA fetching, CT logs) is opt-in with its own flag, like `--revocation`; an umbrella flag is added only once two or more such flags exist | DNS reveals little beyond the scanned name, while contacting a CA or log tells a third party what is scanned; per-feature flags keep air-gapped and pentest use explicit |
+| 34 | Roadmap order: v0.3 findings and derived vulnerability checks, v0.4 workflow (targets, formats, policies, packaging), v0.5 STARTTLS, intrusive probes behind `--intrusive` and grading, v0.6 web service | Derived checks reuse data already collected and need no attack traffic; workflow features make the scanner usable in CI before it grows new protocols; intrusive probes stay opt-in |
