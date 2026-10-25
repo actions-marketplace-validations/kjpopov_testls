@@ -58,6 +58,9 @@ const STATUS_REQUEST_FEATURES: [&[u8]; 2] = [&[5], &[17]];
 /// Tolerated clock difference between scanner and responder, in seconds.
 const CLOCK_SKEW: i64 = 5 * 60;
 
+/// Lifetime assumed for a response without `nextUpdate`, in seconds.
+const MAX_AGE_WITHOUT_NEXT_UPDATE: i64 = 24 * 60 * 60;
+
 /// Revocation status of the leaf certificate (RFC 6960 §4.2.1 `CertStatus`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CertStatus {
@@ -206,30 +209,43 @@ pub fn ocsp_findings(chain: &[Vec<u8>], response: Option<&[u8]>, now: i64) -> Ve
         }
         CertStatus::Good => {}
     }
-    if status.this_update > now + CLOCK_SKEW {
-        return vec![Finding::new(
-            "ocsp.not_yet_valid",
-            Severity::Medium,
-            format!(
-                "stapled OCSP response is not valid before {}",
-                display_time(status.this_update)
-            ),
-        )];
-    }
-    if let Some(next) = status.next_update
-        && next + CLOCK_SKEW < now
-    {
-        return vec![Finding::new(
-            "ocsp.expired",
-            Severity::Medium,
-            format!("stapled OCSP response expired {}", display_time(next)),
-        )];
+    if let Some(stale) = stale_finding(&status, now) {
+        return vec![stale];
     }
     vec![Finding::new(
         "ocsp.stapled",
         Severity::Ok,
         "stapled OCSP response reports the certificate as good",
     )]
+}
+
+/// Reports a response used outside its validity interval, allowing for
+/// clock skew. Without `nextUpdate` the response is assumed to be valid for
+/// [`MAX_AGE_WITHOUT_NEXT_UPDATE`] after `thisUpdate`, as clients such as
+/// `mozilla::pkix` do.
+fn stale_finding(status: &OcspStatus, now: i64) -> Option<Finding> {
+    if status.this_update > now + CLOCK_SKEW {
+        return Some(Finding::new(
+            "ocsp.not_yet_valid",
+            Severity::Medium,
+            format!(
+                "stapled OCSP response is not valid before {}",
+                display_time(status.this_update)
+            ),
+        ));
+    }
+    let expiry = status.next_update.unwrap_or(
+        status
+            .this_update
+            .saturating_add(MAX_AGE_WITHOUT_NEXT_UPDATE),
+    );
+    (expiry.saturating_add(CLOCK_SKEW) < now).then(|| {
+        Finding::new(
+            "ocsp.expired",
+            Severity::Medium,
+            format!("stapled OCSP response expired {}", display_time(expiry)),
+        )
+    })
 }
 
 /// Formats a Unix timestamp like certificate validity dates.
@@ -772,6 +788,23 @@ mod tests {
             findings(LEAF, Some(GOOD), AFTER),
             [("ocsp.expired".into(), Severity::Medium)]
         );
+    }
+
+    /// A response without `nextUpdate` goes stale one day after
+    /// `thisUpdate`.
+    #[test]
+    fn missing_next_update() {
+        let status = OcspStatus {
+            status: CertStatus::Good,
+            produced_at: NOW,
+            this_update: NOW,
+            next_update: None,
+        };
+        assert!(stale_finding(&status, NOW + MAX_AGE_WITHOUT_NEXT_UPDATE).is_none());
+        let stale = stale_finding(&status, NOW + MAX_AGE_WITHOUT_NEXT_UPDATE + CLOCK_SKEW + 1)
+            .expect("stale");
+        assert_eq!(stale.id, "ocsp.expired");
+        assert_eq!(stale.severity, Severity::Medium);
     }
 
     /// Missing staples are informational unless the leaf is must-staple.
