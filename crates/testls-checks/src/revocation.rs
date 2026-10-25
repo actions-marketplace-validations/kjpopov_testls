@@ -111,6 +111,9 @@ pub fn verify_crl(crl: &[u8], chain: &[Vec<u8>]) -> Result<RevocationStatus, Str
     };
     let leaf = certificate(leaf)?;
     let issuer = certificate(issuer)?;
+    if leaf.issuer().as_raw() != issuer.subject().as_raw() {
+        return Err("leaf certificate is not issued by the certificate issuer".into());
+    }
     let crl = match parse_x509_crl(crl) {
         Ok(([], crl)) => crl,
         Ok(_) => return Err("CRL has trailing bytes".into()),
@@ -288,6 +291,8 @@ mod tests {
     const OTHER: &[u8] = include_bytes!("testdata/ocsp-other.der");
     /// Leaf with OCSP and CRL URLs.
     const URLS: &[u8] = include_bytes!("testdata/ocsp-urls.der");
+    /// Leaf issued by an unrelated intermediate CA.
+    const FOREIGN: &[u8] = include_bytes!("testdata/trust-leaf.der");
     /// CRL from the test CA listing `OTHER`.
     const CRL: &[u8] = include_bytes!("testdata/ocsp-crl.der");
     /// The same CRL content issued and signed by the OCSP responder.
@@ -363,13 +368,17 @@ mod tests {
         );
     }
 
-    /// CRLs from another issuer, tampered or truncated CRLs and missing
+    /// CRLs from another issuer, leaves from another CA, tampered or truncated CRLs and missing
     /// issuers are rejected.
     #[test]
     fn invalid_crls() {
         assert_eq!(
             verify_crl(CRL_RESPONDER, &chain(LEAF)).unwrap_err(),
             "CRL is not issued by the certificate issuer"
+        );
+        assert_eq!(
+            verify_crl(CRL, &chain(FOREIGN)).unwrap_err(),
+            "leaf certificate is not issued by the certificate issuer"
         );
         let mut tampered = CRL.to_vec();
         // Flip the last digit of thisUpdate (the first UTCTime, tag 0x17).
