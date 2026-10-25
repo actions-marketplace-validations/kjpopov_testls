@@ -84,7 +84,7 @@ Two connection paths:
   from the standard ML-KEM groups
 - [x] Certificate lifetime against the CA/Browser Forum Baseline Requirements
   (publicly trusted certificates only) and embedded SCT parsing
-- HTTP extras: `Alt-Svc`, `Server`/`X-Powered-By` banners, cookie flags
+- [x] HTTP extras: `Alt-Svc`, `Server`/`X-Powered-By` banners, cookie flags
 
 ### v0.4 — Workflow
 - Multiple targets: `--file`, CIDR ranges, `--mx`; scan every A/AAAA address
@@ -187,3 +187,4 @@ Not scheduled; pulled into a milestone when someone picks it up.
 | 38 | A Handshake details section checks extended master secret (RFC 7627) and, when TLSv1.3 is offered, the downgrade sentinel (RFC 8446 §4.1.3) with one raw hello at the best TLSv1.2-or-older version, and session tickets plus their 0-RTT limit with one rustls TLSv1.3 handshake that records tickets but never resumes. Missing EMS is low, a missing sentinel medium, 0-RTT info | Raw hellos read the ServerHello directly; tickets arrive only after the handshake, so a real TLSv1.3 client is needed. Not resuming or sending early data keeps the probe passive |
 | 39 | A Post-quantum readiness section summarises the TLSv1.3 groups already measured: ready (any registered ML-KEM group, pure or hybrid), draft only (only the obsolete draft Kyber code points), not ready or not tested, with the server's preference for ML-KEM. Groups are classified by their IANA name; draft Kyber code points are rated low and surface as `group.weak` | No extra traffic is needed, and naming the draft code points separately shows servers that deployed pre-standard Kyber and never moved to FIPS 203 ML-KEM |
 | 40 | Certificate lifetime is checked against CA/B Forum BR §6.3.2 (398 days before 15 March 2026, then 200, 100 and 47 days by issue date) and embedded SCTs are counted (`cert.too_long`, `cert.no_sct`, `cert.sct_invalid`). These findings apply only when the chain verifies against the bundled Mozilla roots; the system store and `--ca-file` may hold private roots the BR do not bind. SCT signatures are not verified | The BR bind only publicly trusted CAs, so private PKI must not be flagged; verifying SCTs needs a CT log list, a moving data dependency |
+| 41 | HTTP extras reuse the single `GET /` reply: `Server` values with a version and any `X-Powered-By` are info (`header.banner`); cookies lacking `Secure` or using `SameSite=None` without it are low, missing `HttpOnly` or `SameSite` info; a malformed `Alt-Svc` is info. Header text is shown with control characters replaced | No extra requests; banners and cookie flags are hardening hints, while a cookie sent over plain HTTP is a real exposure |

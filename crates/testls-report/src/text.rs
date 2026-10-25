@@ -8,8 +8,9 @@ use std::net::SocketAddr;
 
 use testls_checks::{
     CertStatus, CertificateInfo, Finding, OcspStatus, PostQuantum, PqStatus, RevocationCheck,
-    Severity, VulnStatus, Vulnerability, cipher_name, cipher_severity, dh_severity, display_time,
-    group_name, group_severity, protocol_severity, revocation_reason_name,
+    Severity, VulnStatus, Vulnerability, alt_services, banners, cipher_name, cipher_severity,
+    cookies, dh_severity, display_time, group_name, group_severity, protocol_severity,
+    revocation_reason_name,
 };
 use testls_probe::{
     CipherOrder, CipherResult, HandshakeDetails, HttpResponse, Intolerance, KeyExchangeResult,
@@ -283,6 +284,46 @@ pub fn http(section: &Result<HttpResponse, String>, paint: Painter) -> String {
             None => format!("{name:<26} not set"),
         };
         let _ = writeln!(out, "  {line}");
+    }
+    out.push_str(&http_extras(response));
+    out
+}
+
+/// Banner, `Alt-Svc`, and cookie lines; only headers that are present.
+fn http_extras(response: &HttpResponse) -> String {
+    let mut out = String::new();
+    for (label, value) in banners(response) {
+        let _ = writeln!(out, "  {label:<26} {value}");
+    }
+    let alt = match alt_services(response) {
+        Ok(list) => list
+            .iter()
+            .map(|a| format!("{} {} (ma {})", a.protocol, a.authority, a.max_age))
+            .collect::<Vec<_>>()
+            .join(", "),
+        Err(_) => "invalid".to_owned(),
+    };
+    if !alt.is_empty() {
+        let _ = writeln!(out, "  {:<26} {alt}", "Alt-Svc");
+    }
+    for cookie in cookies(response) {
+        let mut attrs = Vec::new();
+        if cookie.secure {
+            attrs.push("Secure".to_owned());
+        }
+        if cookie.http_only {
+            attrs.push("HttpOnly".to_owned());
+        }
+        if let Some(s) = &cookie.same_site {
+            attrs.push(format!("SameSite={s}"));
+        }
+        let attrs = if attrs.is_empty() {
+            "no attributes".to_owned()
+        } else {
+            attrs.join(" ")
+        };
+        let label = format!("Set-Cookie {}", cookie.name);
+        let _ = writeln!(out, "  {label:<26} {attrs}");
     }
     out
 }
@@ -738,7 +779,8 @@ mod tests {
              Content-Security-Policy    not set\n  \
              X-Frame-Options            not set\n  \
              X-Content-Type-Options     nosniff\n  \
-             Referrer-Policy            not set\n"
+             Referrer-Policy            not set\n  \
+             Server                     test\n"
         );
         assert!(
             http(&response, Painter::new(true))
@@ -747,6 +789,37 @@ mod tests {
         assert_eq!(
             http(&Err("refused".into()), PLAIN),
             "HTTP headers: error: refused\n"
+        );
+    }
+
+    /// Banners, `Alt-Svc`, and cookies follow the security headers when
+    /// present.
+    #[test]
+    fn http_extra_lines() {
+        let header = |n: &str, v: &str| (n.to_owned(), v.to_owned());
+        let response = HttpResponse {
+            status: 200,
+            headers: vec![
+                header("server", "nginx/1.25"),
+                header("alt-svc", "h3=\":443\"; ma=60"),
+                header("set-cookie", "sid=1; Secure; HttpOnly; SameSite=Lax"),
+                header("set-cookie", "theme=dark"),
+            ],
+        };
+        assert_eq!(
+            http_extras(&response),
+            "  Server                     nginx/1.25\n  \
+             Alt-Svc                    h3 :443 (ma 60)\n  \
+             Set-Cookie sid             Secure HttpOnly SameSite=Lax\n  \
+             Set-Cookie theme           no attributes\n"
+        );
+        let invalid = HttpResponse {
+            status: 200,
+            headers: vec![header("alt-svc", "h3")],
+        };
+        assert_eq!(
+            http_extras(&invalid),
+            "  Alt-Svc                    invalid\n"
         );
     }
 
