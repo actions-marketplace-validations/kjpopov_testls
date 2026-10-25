@@ -15,7 +15,7 @@ use clap::{Parser, Subcommand};
 use testls_checks::{
     Finding, RevocationCheck, Severity, TrustStore, Vulnerability, assess_vulnerabilities,
     baseline_findings, certificate_findings, cipher_findings, describe_certificate,
-    details_findings, explain, explanations, http_findings, intolerance_findings,
+    details_findings, explain, explanations, http_findings, intolerance_findings, is_trusted,
     key_exchange_findings, ocsp_findings, post_quantum_readiness, protocol_findings,
     revocation_findings, revocation_urls, trust_findings, verify_ocsp_response,
     vulnerability_findings,
@@ -433,11 +433,10 @@ async fn certificate_section(
     };
     let now = unix_now();
     let mut findings = certificate_findings(&chain.certificates, Some(host), now);
-    let untrusted = trust_findings(&chain.certificates, now, store);
-    if untrusted.is_empty() && store.is_public() {
+    if store.is_public() && is_trusted(&chain.certificates, now, store) {
         findings.extend(baseline_findings(&chain.certificates));
     }
-    findings.extend(untrusted);
+    findings.extend(trust_findings(&chain.certificates, now, store));
     let ocsp_response = chain.ocsp_response.as_deref();
     findings.extend(ocsp_findings(&chain.certificates, ocsp_response, now));
     let ocsp = ocsp_response.map(|der| verify_ocsp_response(der, &chain.certificates, now));

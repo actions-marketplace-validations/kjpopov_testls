@@ -36,7 +36,7 @@ pub use revocation::{
     RevocationCheck, RevocationMethod, RevocationStatus, RevocationUrls, revocation_findings,
     revocation_urls, verify_crl,
 };
-pub use trust::{TrustStore, trust_findings};
+pub use trust::{TrustStore, is_trusted, trust_findings};
 pub use vulnerabilities::{
     VulnStatus, Vulnerability, assess_vulnerabilities, vulnerability_findings,
 };
