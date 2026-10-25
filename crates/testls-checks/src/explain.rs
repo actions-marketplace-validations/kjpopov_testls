@@ -177,20 +177,14 @@ const EXPLANATIONS: &[Explanation] = &[
     entry(
         "group.weak",
         "Deprecated key exchange group",
-        "Binary curves, small prime curves and explicit curve parameters are deprecated. Offer x25519, secp256r1 or secp384r1 instead.",
-        "RFC 8422 §5.1.1",
+        "Binary curves, small prime curves and explicit curve parameters are deprecated, and the pre-standard Kyber code points are obsolete. Offer x25519, secp256r1, secp384r1 or X25519MLKEM768 instead.",
+        "RFC 8422 §5.1.1, IANA TLS Supported Groups",
     ),
     entry(
         "group.no_post_quantum",
         "No post-quantum key exchange in TLSv1.3",
         "Hybrid ML-KEM groups such as X25519MLKEM768 protect recorded traffic against future quantum computers (harvest now, decrypt later).",
         "draft-ietf-tls-ecdhe-mlkem, FIPS 203",
-    ),
-    entry(
-        "group.draft_kyber",
-        "Obsolete draft Kyber group accepted",
-        "Pre-standard Kyber code points predate FIPS 203 and are marked obsolete by IANA; clients are dropping them. Offer X25519MLKEM768 instead.",
-        "IANA TLS Supported Groups, draft-ietf-tls-ecdhe-mlkem",
     ),
     entry(
         "group.error",

@@ -22,7 +22,8 @@ pub fn group_name(id: u16) -> &'static str {
 /// Severity of a server accepting group `id`, with a short reason.
 ///
 /// RFC 8422 §5.1.1 deprecates every elliptic curve below `secp256r1`
-/// (code points `0x0001` to `0x0016`) and the explicit curves.
+/// (code points `0x0001` to `0x0016`) and the explicit curves. The draft
+/// Kyber code points are obsolete in the IANA registry.
 #[must_use]
 pub fn group_severity(id: u16) -> (Severity, &'static str) {
     match id {
@@ -30,6 +31,9 @@ pub fn group_severity(id: u16) -> (Severity, &'static str) {
             (Severity::Medium, "deprecated curve (RFC 8422 §5.1.1)")
         }
         _ if testls_data::group(id).is_none() => (Severity::Info, "unknown group"),
+        _ if group_kind(id) == GroupKind::DraftKyber => {
+            (Severity::Low, "obsolete draft Kyber code point")
+        }
         _ => (Severity::Ok, "current"),
     }
 }
@@ -123,6 +127,7 @@ mod tests {
         assert_eq!(group_severity(0x0015).0, Severity::Medium);
         assert_eq!(group_severity(0x0001).0, Severity::Medium);
         assert_eq!(group_severity(0xfafa).0, Severity::Info);
+        assert_eq!(group_severity(0x6399).0, Severity::Low);
         assert_eq!(group_name(0x11ec), "X25519MLKEM768");
     }
 

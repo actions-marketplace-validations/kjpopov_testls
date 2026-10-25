@@ -5,8 +5,6 @@
 use testls_probe::{CipherOrder, KeyExchangeResult};
 use testls_wire::ProtocolVersion;
 
-use crate::{Finding, Severity};
-
 /// What kind of key exchange a named group provides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GroupKind {
@@ -109,31 +107,6 @@ pub fn post_quantum_readiness(key_exchange: &[KeyExchangeResult]) -> PostQuantum
     }
 }
 
-/// Findings for the post-quantum summary.
-///
-/// `group.draft_kyber` flags obsolete draft code points; a server without
-/// any ML-KEM group already gets `group.no_post_quantum` from the key
-/// exchange checks.
-#[must_use]
-pub fn post_quantum_findings(pq: &PostQuantum) -> Vec<Finding> {
-    if pq.draft_groups.is_empty() {
-        return Vec::new();
-    }
-    let names: Vec<_> = pq
-        .draft_groups
-        .iter()
-        .map(|&id| crate::group_name(id))
-        .collect();
-    vec![Finding::new(
-        "group.draft_kyber",
-        Severity::Low,
-        format!(
-            "TLSv1.3: obsolete draft Kyber group accepted: {}",
-            names.join(", ")
-        ),
-    )]
-}
-
 #[cfg(test)]
 mod tests {
     //! Unit tests for the post-quantum summary.
@@ -173,11 +146,9 @@ mod tests {
         assert_eq!(pq.groups, [0x11ec]);
         assert_eq!(pq.draft_groups, [0x6399]);
         assert_eq!(pq.preferred, Some(true));
-        assert_eq!(post_quantum_findings(&pq)[0].id, "group.draft_kyber");
 
         let pq = post_quantum_readiness(&[tls13(&[0x001d, 0x11ec], CipherOrder::Server)]);
         assert_eq!(pq.preferred, Some(false));
-        assert_eq!(post_quantum_findings(&pq).len(), 0);
         let pq = post_quantum_readiness(&[tls13(&[0x001d, 0x11ec], CipherOrder::Client)]);
         assert_eq!(pq.preferred, None);
     }
@@ -188,16 +159,9 @@ mod tests {
         let pq = post_quantum_readiness(&[tls13(&[0x639a, 0x001d], CipherOrder::Server)]);
         assert_eq!(pq.status, PqStatus::DraftOnly);
         assert_eq!(pq.preferred, None);
-        let f = post_quantum_findings(&pq);
-        assert_eq!(
-            f[0].message,
-            "TLSv1.3: obsolete draft Kyber group accepted: SecP256r1Kyber768Draft00 (OBSOLETE)"
-        );
-        assert_eq!(f[0].severity, Severity::Low);
 
         let pq = post_quantum_readiness(&[tls13(&[0x001d], CipherOrder::Server)]);
         assert_eq!(pq.status, PqStatus::NotReady);
-        assert_eq!(post_quantum_findings(&pq).len(), 0);
 
         let mut tls12 = tls13(&[0x11ec], CipherOrder::Server);
         tls12.version = ProtocolVersion::TLS12;
