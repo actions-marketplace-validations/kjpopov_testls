@@ -82,6 +82,20 @@ fn legacy_server() {
     assert_eq!(s.line("#0"), "#0 CN=localhost");
     assert_eq!(s.line("names"), "names   localhost, 127.0.0.1");
     assert!(s.has("high     certificate chain is not trusted: issuer is not a trusted root"));
+    assert!(s.has("BEAST                          vulnerable     TLS_"));
+    assert!(s.has("[vuln.beast]"));
+    assert_eq!(
+        s.line("Logjam"),
+        "Logjam                         not vulnerable 2048-bit MODP group 14"
+    );
+    assert_eq!(
+        s.line("Downgrade"),
+        "Downgrade (TLS_FALLBACK_SCSV)  not vulnerable TLS_FALLBACK_SCSV honoured"
+    );
+    assert_eq!(
+        s.line("Raccoon"),
+        "Raccoon                        not vulnerable fresh DH public value per handshake"
+    );
     assert_eq!(
         s.code, 1,
         "critical findings must fail the default threshold"
@@ -117,6 +131,13 @@ fn modern_server() {
     assert_eq!(
         s.line("Strict-Transport-Security"),
         "Strict-Transport-Security  not set"
+    );
+    let vulns = s.stdout.split_once("\nVulnerabilities\n").expect("vulns").1;
+    let vulns = vulns.split_once("\n\n").expect("section end").0;
+    assert_eq!(vulns.lines().count(), 12, "{vulns}");
+    assert!(
+        vulns.lines().all(|l| l.contains(" not vulnerable ")),
+        "{vulns}"
     );
     let findings = s.stdout.split_once("\nFindings\n").expect("findings").1;
     let lines: Vec<&str> = findings.lines().map(str::trim).collect();
@@ -220,6 +241,14 @@ fn json_report() {
     );
     assert_eq!(v["http"]["hsts"], serde_json::Value::Null);
     assert_eq!(v["revocation"], serde_json::Value::Null);
+    let beast = v["vulnerabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["id"] == "beast")
+        .unwrap();
+    assert_eq!(beast["status"], "vulnerable");
+    assert_eq!(beast["finding"], "vuln.beast");
     assert_eq!(v["findings"][0]["severity"], "critical");
     assert!(
         v["findings"]

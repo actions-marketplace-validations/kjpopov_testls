@@ -10,6 +10,15 @@ All notable changes to `testls` are listed here. The format follows
 
 - `testls explain [ID]` describes a finding id with its rationale and a
   reference, or lists every id when none is given.
+- Vulnerabilities section (text and JSON `vulnerabilities` array) with
+  POODLE, BEAST, SWEET32, RC4, FREAK, Logjam, DROWN, CRIME, insecure
+  renegotiation, `TLS_FALLBACK_SCSV`, forward secrecy and Raccoon verdicts,
+  derived without attack traffic.
+- Findings `vuln.beast`, `vuln.crime`, `vuln.renegotiation`,
+  `vuln.fallback_scsv`, `vuln.logjam` and `vuln.raccoon`.
+- The Logjam verdict names well-known DH primes (RFC 2409, 3526, 5114,
+  7919), and a second DHE handshake checks whether the server reuses its DH
+  public value.
 
 ### Changed
 
