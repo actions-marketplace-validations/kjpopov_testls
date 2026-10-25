@@ -120,78 +120,73 @@ impl Fetcher {
         let mut data = Vec::new();
         let mut buf = vec![0; 16 * 1024];
         let mut closed = false;
-        loop {
+        let head = loop {
             if let Some(end) = complete_head(&data)? {
                 let head = parse_head(&data[..end])?;
+                data.drain(..end);
                 if (100..200).contains(&head.status) {
-                    data.drain(..end);
                     continue;
                 }
-                if matches!(head.status, 204 | 304) {
-                    return Ok(HttpBody {
-                        status: head.status,
-                        content_type: head.header("content-type").map(str::to_owned),
-                        body: Vec::new(),
-                    });
-                }
-                let codings: Vec<&str> = head
-                    .header_values("transfer-encoding")
-                    .flat_map(|v| v.split(','))
-                    .map(str::trim)
-                    .collect();
-                let chunked = match codings.as_slice() {
-                    [] => false,
-                    [coding] if coding.eq_ignore_ascii_case("chunked") => true,
-                    _ => return Err(ProbeError::Unexpected("unsupported Transfer-Encoding")),
-                };
-                let length = if chunked {
-                    None
-                } else {
-                    content_length(&head)?
-                };
-                if length.is_some_and(|l| l > self.max_body) {
-                    return Err(too_large());
-                }
-                let raw = &data[end..];
-                let body = if chunked {
-                    match dechunk(raw, self.max_body)? {
-                        Some(body) => Some(body),
-                        None if closed => return Err(truncated()),
-                        None => None,
-                    }
-                } else if let Some(length) = length {
-                    match raw.get(..length) {
-                        Some(body) => Some(body.to_vec()),
-                        None if closed => return Err(truncated()),
-                        None => None,
-                    }
-                } else if raw.len() > self.max_body {
-                    return Err(too_large());
-                } else if closed {
-                    Some(raw.to_vec())
-                } else {
-                    None
-                };
-                if let Some(body) = body {
-                    return Ok(HttpBody {
-                        status: head.status,
-                        content_type: head.header("content-type").map(str::to_owned),
-                        body,
-                    });
-                }
-            } else if closed {
+                break head;
+            }
+            if closed {
                 return Err(ProbeError::Unexpected(
                     "connection closed before the HTTP headers ended",
                 ));
+            }
+            closed = read_more(stream, &mut buf, &mut data).await?;
+        };
+        let reply = |body| HttpBody {
+            status: head.status,
+            content_type: head.header("content-type").map(str::to_owned),
+            body,
+        };
+        if matches!(head.status, 204 | 304) {
+            return Ok(reply(Vec::new()));
+        }
+        let codings: Vec<&str> = head
+            .header_values("transfer-encoding")
+            .flat_map(|v| v.split(','))
+            .map(str::trim)
+            .collect();
+        let chunked = match codings.as_slice() {
+            [] => false,
+            [coding] if coding.eq_ignore_ascii_case("chunked") => true,
+            _ => return Err(ProbeError::Unexpected("unsupported Transfer-Encoding")),
+        };
+        let length = if chunked {
+            None
+        } else {
+            content_length(&head)?
+        };
+        if length.is_some_and(|l| l > self.max_body) {
+            return Err(too_large());
+        }
+        let mut decoder = Dechunker::default();
+        loop {
+            if chunked {
+                if decoder.feed(&data, self.max_body)? {
+                    return Ok(reply(decoder.body));
+                }
+            } else if let Some(length) = length {
+                if data.len() >= length {
+                    data.truncate(length);
+                    return Ok(reply(data));
+                }
+            } else if data.len() > self.max_body {
+                return Err(too_large());
+            } else if closed {
+                return Ok(reply(data));
+            }
+            if closed {
+                return Err(truncated());
             }
             // A one-byte chunk ("1\r\nX\r\n") takes six bytes on the wire;
             // this bound only stops a server that streams forever.
             if data.len() > self.max_body.saturating_mul(6).saturating_add(64 * 1024) {
                 return Err(too_large());
             }
-            let n = stream.read(&mut buf).await.map_err(ProbeError::Io)?;
-            closed = n == 0;
-            data.extend_from_slice(&buf[..n]);
+            closed = read_more(stream, &mut buf, &mut data).await?;
         }
     }
 }
@@ -311,46 +306,93 @@ fn encode_request(url: &HttpUrl, post: Option<(&str, &[u8])>) -> Vec<u8> {
     request
 }
 
-/// Removes the chunked transfer coding (RFC 9112 §7.1). Returns `None`
-/// while the last chunk has not arrived; trailer fields are skipped.
-fn dechunk(mut raw: &[u8], max_body: usize) -> Result<Option<Vec<u8>>, ProbeError> {
-    let malformed = || ProbeError::Unexpected("malformed chunked body");
-    let mut body = Vec::new();
-    loop {
-        let Some(eol) = raw.windows(2).position(|w| w == b"\r\n") else {
-            return Ok(None);
-        };
-        let line = std::str::from_utf8(&raw[..eol]).map_err(|_| malformed())?;
-        let size = line.split(';').next().unwrap_or_default().trim_end();
-        if size.is_empty() || !size.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err(malformed());
-        }
-        let size = usize::from_str_radix(size, 16).map_err(|_| too_large())?;
-        raw = &raw[eol + 2..];
-        if size == 0 {
-            // Trailer section: field lines up to an empty line.
-            loop {
-                let Some(eol) = raw.windows(2).position(|w| w == b"\r\n") else {
-                    return Ok(None);
+/// Longest chunk-size or trailer line accepted, so a missing CRLF cannot
+/// make every read rescan an ever-growing line.
+const MAX_CHUNK_LINE: usize = 8 * 1024;
+
+/// Incremental decoder for the chunked transfer coding (RFC 9112 §7.1).
+/// It remembers how much of the raw body it has consumed, so each read
+/// only parses the new bytes.
+#[derive(Debug, Default)]
+struct Dechunker {
+    /// Decoded body so far.
+    body: Vec<u8>,
+    /// Raw bytes already decoded.
+    consumed: usize,
+    /// Whether the last chunk has arrived and trailer lines are being skipped.
+    trailer: bool,
+}
+
+impl Dechunker {
+    /// Decodes the complete units in `raw[self.consumed..]`. `raw` is the
+    /// whole body received so far. Returns `true` once the last chunk and
+    /// the trailer section have arrived.
+    fn feed(&mut self, raw: &[u8], max_body: usize) -> Result<bool, ProbeError> {
+        let malformed = || ProbeError::Unexpected("malformed chunked body");
+        loop {
+            let rest = &raw[self.consumed..];
+            let Some(eol) = rest.windows(2).position(|w| w == b"\r\n") else {
+                return if rest.len() > MAX_CHUNK_LINE {
+                    Err(malformed())
+                } else {
+                    Ok(false)
                 };
-                if eol == 0 {
-                    return Ok(Some(body));
-                }
-                raw = &raw[eol + 2..];
+            };
+            if eol > MAX_CHUNK_LINE {
+                return Err(malformed());
             }
+            if self.trailer {
+                // Trailer section: field lines up to an empty line.
+                self.consumed += eol + 2;
+                if eol == 0 {
+                    return Ok(true);
+                }
+                continue;
+            }
+            let line = std::str::from_utf8(&rest[..eol]).map_err(|_| malformed())?;
+            let size = line.split(';').next().unwrap_or_default().trim_end();
+            if size.is_empty() || !size.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err(malformed());
+            }
+            let size = usize::from_str_radix(size, 16).map_err(|_| too_large())?;
+            if size == 0 {
+                self.consumed += eol + 2;
+                self.trailer = true;
+                continue;
+            }
+            if size > max_body.saturating_sub(self.body.len()) {
+                return Err(too_large());
+            }
+            let Some(chunk) = rest.get(eol + 2..eol + 2 + size + 2) else {
+                return Ok(false);
+            };
+            if &chunk[size..] != b"\r\n" {
+                return Err(malformed());
+            }
+            self.body.extend_from_slice(&chunk[..size]);
+            self.consumed += eol + 2 + size + 2;
         }
-        if size > max_body.saturating_sub(body.len()) {
-            return Err(too_large());
-        }
-        let Some(chunk) = raw.get(..size + 2) else {
-            return Ok(None);
-        };
-        if &chunk[size..] != b"\r\n" {
-            return Err(malformed());
-        }
-        body.extend_from_slice(&chunk[..size]);
-        raw = &raw[size + 2..];
     }
+}
+
+/// Removes the chunked transfer coding from a complete raw body. Returns
+/// `None` while the last chunk has not arrived.
+#[cfg(test)]
+fn dechunk(raw: &[u8], max_body: usize) -> Result<Option<Vec<u8>>, ProbeError> {
+    let mut decoder = Dechunker::default();
+    Ok(decoder.feed(raw, max_body)?.then_some(decoder.body))
+}
+
+/// Appends the next read from `stream` to `data`. Returns `true` when the
+/// peer has closed the connection.
+async fn read_more(
+    stream: &mut TcpStream,
+    buf: &mut [u8],
+    data: &mut Vec<u8>,
+) -> Result<bool, ProbeError> {
+    let n = stream.read(buf).await.map_err(ProbeError::Io)?;
+    data.extend_from_slice(&buf[..n]);
+    Ok(n == 0)
 }
 
 /// Error for replies whose body exceeds the size limit.
@@ -473,14 +515,43 @@ mod tests {
     /// the framing overhead.
     #[tokio::test]
     async fn one_byte_chunks() {
+        // 64 KiB of one-byte chunks is 384 KiB on the wire, well past
+        // twice the body limit plus the 64 KiB allowance.
+        let fetcher = Fetcher {
+            max_body: 64 * 1024,
+            ..fetcher()
+        };
         let mut reply = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
-        for _ in 0..fetcher().max_body {
+        for _ in 0..fetcher.max_body {
             reply.extend_from_slice(b"1\r\nx\r\n");
         }
         reply.extend_from_slice(b"0\r\n\r\n");
         let (addr, _task) = serve(reply).await;
-        let r = fetcher().get(&format!("http://{addr}/")).await.unwrap();
-        assert_eq!(r.body.len(), fetcher().max_body);
+        let r = fetcher.get(&format!("http://{addr}/")).await.unwrap();
+        assert_eq!(r.body.len(), fetcher.max_body);
+    }
+
+    /// Chunk-size lines without an end are rejected instead of buffered.
+    #[test]
+    fn overlong_chunk_line() {
+        let raw = vec![b'1'; MAX_CHUNK_LINE + 1];
+        assert!(dechunk(&raw, 1024).is_err());
+        let mut raw = vec![b'0'; MAX_CHUNK_LINE + 1];
+        raw.extend_from_slice(b"\r\n");
+        assert!(dechunk(&raw, 1024).is_err());
+    }
+
+    /// Feeding a chunked body piecewise gives the same result as feeding
+    /// it whole.
+    #[test]
+    fn incremental_dechunk() {
+        let raw = b"3;ext=1\r\nabc\r\n2\r\nde\r\n0\r\nX-Trailer: t\r\n\r\n";
+        let mut decoder = Dechunker::default();
+        for end in 0..raw.len() {
+            assert!(!decoder.feed(&raw[..end], 1024).unwrap(), "{end}");
+        }
+        assert!(decoder.feed(raw, 1024).unwrap());
+        assert_eq!(decoder.body, b"abcde");
     }
 
     /// Error statuses are returned for the caller to judge.
