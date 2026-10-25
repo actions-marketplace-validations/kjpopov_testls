@@ -3,6 +3,7 @@
 mod certificates;
 mod ciphers;
 mod der;
+mod details;
 mod explain;
 mod http;
 mod intolerance;
@@ -17,6 +18,7 @@ use std::fmt;
 
 pub use certificates::{CertificateInfo, certificate_findings, describe_certificate};
 pub use ciphers::{cipher_findings, cipher_name, cipher_severity};
+pub use details::details_findings;
 pub use explain::{Explanation, explain, explanations};
 pub use http::{Hsts, http_findings, parse_hsts};
 pub use intolerance::intolerance_findings;

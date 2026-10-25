@@ -496,6 +496,24 @@ const EXPLANATIONS: &[Explanation] = &[
         "Handshake messages may span several records; a server that requires the ClientHello in one record breaks large hellos.",
         "RFC 8446 §5.1, RFC 5246 §6.2.1",
     ),
+    entry(
+        "handshake.no_ems",
+        "No extended master secret",
+        "Without the extended master secret a TLS 1.2 session key is not bound to the handshake transcript, enabling triple handshake attacks.",
+        "RFC 7627 §1, §5",
+    ),
+    entry(
+        "handshake.no_downgrade_sentinel",
+        "TLSv1.3 server omits the downgrade sentinel",
+        "A TLS 1.3 server answering an older handshake must mark its random so TLS 1.3 clients detect forced downgrades; without it the protection is lost.",
+        "RFC 8446 §4.1.3",
+    ),
+    entry(
+        "handshake.early_data",
+        "Session tickets allow 0-RTT early data",
+        "Early data is not protected against replay; only enable 0-RTT for idempotent requests and with application-level replay protection.",
+        "RFC 8446 §8, §E.5",
+    ),
 ];
 
 /// All finding explanations, grouped by area.
@@ -521,11 +539,12 @@ mod tests {
     use super::*;
 
     /// Area prefixes that finding ids start with.
-    const AREAS: [&str; 12] = [
+    const AREAS: [&str; 13] = [
         "cert",
         "cipher",
         "dh",
         "group",
+        "handshake",
         "header",
         "hsts",
         "http",
@@ -567,6 +586,7 @@ mod tests {
         let sources = [
             include_str!("certificates.rs"),
             include_str!("ciphers.rs"),
+            include_str!("details.rs"),
             include_str!("http.rs"),
             include_str!("intolerance.rs"),
             include_str!("key_exchange.rs"),
