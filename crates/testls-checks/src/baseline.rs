@@ -8,6 +8,7 @@
 use x509_parser::extensions::ParsedExtension;
 use x509_parser::parse_x509_certificate;
 
+use crate::der::{Der, OCTET_STRING};
 use crate::{Finding, Severity};
 
 /// Seconds in a day.
@@ -17,8 +18,8 @@ const DAY: i64 = 24 * 60 * 60;
 /// §6.3.2 as amended by ballot SC-081v3: `(issued from, limit in days)`,
 /// latest first. 2026-03-15, 2027-03-15 and 2029-03-15 at 00:00 UTC.
 const VALIDITY_LIMITS: [(i64, u32); 3] = [
-    (1_867_795_200, 47),
-    (1_804_982_400, 100),
+    (1_868_227_200, 47),
+    (1_805_068_800, 100),
     (1_773_532_800, 200),
 ];
 
@@ -57,10 +58,15 @@ pub fn embedded_scts(der: &[u8]) -> Result<Vec<Sct>, String> {
     let mut scts = Vec::new();
     for ext in cert.extensions() {
         match ext.parsed_extension() {
-            ParsedExtension::SCT(list) => scts.extend(list.iter().map(|sct| Sct {
-                log_id: *sct.id.key_id,
-                timestamp: sct.timestamp,
-            })),
+            ParsedExtension::SCT(list) => {
+                if sct_count(ext.value) != Some(list.len()) {
+                    return Err("malformed SCT list".to_owned());
+                }
+                scts.extend(list.iter().map(|sct| Sct {
+                    log_id: *sct.id.key_id,
+                    timestamp: sct.timestamp,
+                }));
+            }
             ParsedExtension::UnsupportedExtension { .. } | ParsedExtension::ParseError { .. }
                 if ext.oid.to_id_string() == "1.3.6.1.4.1.11129.2.4.2" =>
             {
@@ -70,6 +76,34 @@ pub fn embedded_scts(der: &[u8]) -> Result<Vec<Sct>, String> {
         }
     }
     Ok(scts)
+}
+
+/// Number of entries in the SCT list extension value `value`, or `None` if
+/// the OCTET STRING or the TLS-encoded list has missing or trailing bytes
+/// (RFC 6962 §3.3).
+fn sct_count(value: &[u8]) -> Option<usize> {
+    let mut der = Der::new(value);
+    let list = der.expect(OCTET_STRING, "SCT list").ok()?;
+    der.finish("SCT list").ok()?;
+    let (len, mut rest) = split_u16(list)?;
+    if rest.len() != len {
+        return None;
+    }
+    let mut count = 0;
+    while !rest.is_empty() {
+        let (len, entries) = split_u16(rest)?;
+        rest = entries.get(len..)?;
+        count += 1;
+    }
+    Some(count)
+}
+
+/// Splits a big-endian `u16` length prefix off `data`.
+fn split_u16(data: &[u8]) -> Option<(usize, &[u8])> {
+    match data {
+        [hi, lo, rest @ ..] => Some((usize::from(u16::from_be_bytes([*hi, *lo])), rest)),
+        _ => None,
+    }
 }
 
 /// Baseline Requirements findings for the leaf of a publicly trusted
@@ -145,9 +179,19 @@ mod tests {
     fn validity_limits() {
         assert_eq!(max_validity_days(1_773_532_799), 398);
         assert_eq!(max_validity_days(1_773_532_800), 200);
-        assert_eq!(max_validity_days(1_804_982_399), 200);
-        assert_eq!(max_validity_days(1_804_982_400), 100);
-        assert_eq!(max_validity_days(1_867_795_200), 47);
+        assert_eq!(max_validity_days(1_805_068_799), 200);
+        assert_eq!(max_validity_days(1_805_068_800), 100);
+        assert_eq!(max_validity_days(1_868_227_199), 100);
+        assert_eq!(max_validity_days(1_868_227_200), 47);
+    }
+
+    /// Each step falls on 15 March at 00:00 UTC (checked by calendar).
+    #[test]
+    fn steps_fall_on_march_15() {
+        for (from, _) in VALIDITY_LIMITS {
+            let date = x509_parser::time::ASN1Time::from_timestamp(from).unwrap();
+            assert!(date.to_string().starts_with("Mar 15 00:00:00 20"), "{date}");
+        }
     }
 
     /// Embedded SCTs are listed with log id and timestamp.
@@ -160,6 +204,18 @@ mod tests {
         assert_eq!(scts[0].timestamp, 1_775_001_600_000);
         assert_eq!(embedded_scts(EC_LOCALHOST).unwrap(), []);
         assert!(embedded_scts(b"junk").is_err());
+    }
+
+    /// The SCT list must be consumed exactly, without trailing bytes.
+    #[test]
+    fn sct_list_framing() {
+        assert_eq!(sct_count(&[4, 2, 0, 0]), Some(0));
+        assert_eq!(sct_count(&[4, 7, 0, 5, 0, 1, 9, 0, 0]), Some(2));
+        assert_eq!(sct_count(&[4, 3, 0, 0, 0]), None);
+        assert_eq!(sct_count(&[4, 2, 0, 0, 0]), None);
+        assert_eq!(sct_count(&[4, 4, 0, 2, 0, 5]), None);
+        assert_eq!(sct_count(&[4, 6, 0, 4, 0, 1, 9, 9]), None);
+        assert_eq!(sct_count(&[2, 2, 0, 0]), None);
     }
 
     /// A one-year certificate is fine before 2026-03-15 and too long after.
