@@ -7,6 +7,7 @@ mod fetch;
 mod groups;
 pub mod hello;
 mod http;
+mod intolerance;
 mod protocols;
 mod response;
 
@@ -25,6 +26,7 @@ pub use features::{HandshakeFeatures, probe_features};
 pub use fetch::{Fetcher, HttpBody};
 pub use groups::{KeyExchangeResult, probe_key_exchange};
 pub use http::{HttpResponse, fetch_http_headers};
+pub use intolerance::{Intolerance, probe_intolerance};
 pub use protocols::{ProtocolResult, ProtocolSupport, classify, detect_protocols, probe_protocol};
 pub use response::HelloResponse;
 use response::ResponseParser;
