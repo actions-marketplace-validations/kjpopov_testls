@@ -60,7 +60,7 @@ when one does, and `2` when the scan itself fails. Run `testls --help` for all
 options; the JSON format is described in
 [docs/json-schema.md](docs/json-schema.md).
 
-A web service (`testls serve`, REST API and browser UI) is planned for v0.4.
+A web service (`testls serve`, REST API and browser UI) is planned for v0.6.
 
 ## Features
 
@@ -73,10 +73,12 @@ A web service (`testls serve`, REST API and browser UI) is planned for v0.4.
 | Key exchange | Supported groups (X25519, ECDHE curves, ML-KEM hybrids) | v0.2 |
 | HTTP headers | HSTS, preload, header hygiene | v0.2 |
 | Revocation | OCSP stapling, OCSP/CRL | v0.2 |
-| STARTTLS | SMTP, IMAP, POP3, … | v0.3 |
-| Vulnerabilities | Heartbleed, ROBOT, POODLE, … | v0.3+ |
-| Grading | Own grading model | v0.3+ |
-| Web service | REST + SSE API and embedded web UI | v0.4 |
+| Vulnerabilities | Derived checks: POODLE, BEAST, SWEET32, Logjam, … | v0.3 |
+| Workflow | Multiple targets, SARIF/JUnit/HTML, baselines, policies | v0.4 |
+| STARTTLS | SMTP, IMAP, POP3, … | v0.5 |
+| Intrusive checks | Heartbleed, CCS injection, Ticketbleed, ROBOT (`--intrusive`) | v0.5 |
+| Grading | Own grading model | v0.5 |
+| Web service | REST + SSE API and embedded web UI | v0.6 |
 
 ## Architecture
 
