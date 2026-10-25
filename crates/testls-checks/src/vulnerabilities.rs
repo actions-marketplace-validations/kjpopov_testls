@@ -371,11 +371,12 @@ fn raccoon(inputs: &Inputs) -> Vulnerability {
 /// Verdict from a handshake feature probe flag.
 ///
 /// `flag` reads the feature; `bad` is the value that means vulnerable.
+/// The probe picks its versions from the cipher enumerations, so a missing
+/// enumeration for a `relevant` version leaves the verdict untested.
 fn feature_vuln(
     inputs: &Inputs,
-    id: &'static str,
-    name: &'static str,
-    finding: &'static str,
+    (id, name, finding): (&'static str, &'static str, &'static str),
+    relevant: fn(ProtocolVersion) -> bool,
     flag: fn(&HandshakeFeatures) -> (bool, Option<bool>),
     bad: bool,
     texts: [&'static str; 3],
@@ -397,6 +398,15 @@ fn feature_vuln(
         Some(_) => (VulnStatus::NotVulnerable, safe),
         None => (VulnStatus::NotTested, "handshake probe failed"),
     };
+    if status == VulnStatus::NotVulnerable && inputs.enumeration_missing(relevant) {
+        return vuln(
+            id,
+            name,
+            VulnStatus::NotTested,
+            "cipher suites not enumerated for every offered version",
+            finding,
+        );
+    }
     vuln(id, name, status, detail, finding)
 }
 
@@ -419,6 +429,7 @@ pub fn assess_vulnerabilities(
     };
     let only_tls13 = "no TLSv1.2 or older protocol";
     let all = |_: ProtocolVersion| true;
+    let legacy = |v: ProtocolVersion| v <= ProtocolVersion::TLS12;
     vec![
         protocol_vuln(
             &inputs,
@@ -447,18 +458,20 @@ pub fn assess_vulnerabilities(
         ),
         feature_vuln(
             &inputs,
-            "crime",
-            "CRIME",
-            "vuln.crime",
+            ("crime", "CRIME", "vuln.crime"),
+            legacy,
             |f| (f.legacy_version.is_some(), f.compression),
             true,
             ["TLS compression enabled", "no TLS compression", only_tls13],
         ),
         feature_vuln(
             &inputs,
-            "renegotiation",
-            "Insecure renegotiation",
-            "vuln.renegotiation",
+            (
+                "renegotiation",
+                "Insecure renegotiation",
+                "vuln.renegotiation",
+            ),
+            legacy,
             |f| (f.legacy_version.is_some(), f.secure_renegotiation),
             false,
             [
@@ -469,9 +482,12 @@ pub fn assess_vulnerabilities(
         ),
         feature_vuln(
             &inputs,
-            "fallback_scsv",
-            "Downgrade (TLS_FALLBACK_SCSV)",
-            "vuln.fallback_scsv",
+            (
+                "fallback_scsv",
+                "Downgrade (TLS_FALLBACK_SCSV)",
+                "vuln.fallback_scsv",
+            ),
+            all,
             |f| (f.fallback_version.is_some(), f.fallback_scsv),
             false,
             [
@@ -781,6 +797,21 @@ mod tests {
         ];
         let list = assess_vulnerabilities(&p, &c, &[], None);
         assert_eq!(status(&list, "beast"), VulnStatus::NotTested);
+        // Feature probes pick versions from the enumerations, so a missing
+        // one leaves clean feature verdicts untested; findings still count.
+        let features = HandshakeFeatures {
+            legacy_version: Some(ProtocolVersion::TLS12),
+            compression: Some(true),
+            secure_renegotiation: Some(true),
+            fallback_version: None,
+            fallback_scsv: None,
+        };
+        let c = [ciphers(ProtocolVersion::TLS12, &[ECDHE_GCM])];
+        let list = assess_vulnerabilities(&p, &c, &[], Some(&features));
+        assert_eq!(status(&list, "crime"), VulnStatus::Vulnerable);
+        for id in ["renegotiation", "fallback_scsv"] {
+            assert_eq!(status(&list, id), VulnStatus::NotTested, "{id}");
+        }
     }
 
     /// Vulnerable verdicts point to the cipher finding that is emitted.

@@ -84,8 +84,9 @@ fn suites_of(result: &CipherResult) -> Vec<u16> {
 /// server supports. Costs at most two connections.
 ///
 /// # Errors
-/// Returns a [`ProbeError`] if a probe fails for reasons other than the
-/// server refusing the hello.
+/// Returns a [`ProbeError`] if the compression and renegotiation probe fails
+/// for reasons other than the server refusing the hello. A failed fallback
+/// probe only leaves `fallback_scsv` unset.
 pub async fn probe_features(
     transport: &Transport,
     ciphers: &[CipherResult],
@@ -130,13 +131,21 @@ pub async fn probe_features(
     if let [_, lower, ..] = supported.as_slice() {
         let mut offered = suites_of(lower);
         offered.push(FALLBACK_SCSV);
-        let response = send(transport, &client_hello(lower.version, offered, sni)).await?;
+        // A failed fallback probe leaves the verdict untested without
+        // discarding the compression and renegotiation results.
+        let response = send(transport, &client_hello(lower.version, offered, sni))
+            .await
+            .ok()
+            .flatten();
         features.fallback_version = Some(lower.version);
         features.fallback_scsv = match &response {
             Some(HelloResponse::Alert(a)) if a.description == Alert::INAPPROPRIATE_FALLBACK => {
                 Some(true)
             }
-            r => accepted(lower.version, &suites_of(lower), r.as_ref())?.map(|_| false),
+            r => accepted(lower.version, &suites_of(lower), r.as_ref())
+                .ok()
+                .flatten()
+                .map(|_| false),
         };
     }
     Ok(features)
@@ -293,6 +302,36 @@ mod tests {
                 .unwrap();
             assert_eq!(f.secure_renegotiation, Some(false), "{info:?}");
         }
+    }
+
+    /// A fallback probe that cannot connect keeps the compression and
+    /// renegotiation results and leaves only the fallback verdict open.
+    #[tokio::test]
+    async fn fallback_failure_keeps_results() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0; 1 << 16];
+            let mut n = 0;
+            while n < 5 || n < 5 + usize::from(u16::from_be_bytes([buf[3], buf[4]])) {
+                n += s.read(&mut buf[n..]).await.unwrap();
+            }
+            let behaviour = Behaviour {
+                deflate: false,
+                renegotiation: Some(&[0]),
+                fallback: true,
+            };
+            s.write_all(&reply(&buf[..n], behaviour)).await.unwrap();
+            // Dropping the listener refuses the fallback connection.
+        });
+        let f = probe_features(&Transport::new(addr), &two_versions(), None)
+            .await
+            .unwrap();
+        assert_eq!(f.compression, Some(false));
+        assert_eq!(f.secure_renegotiation, Some(true));
+        assert_eq!(f.fallback_version, Some(ProtocolVersion::TLS11));
+        assert_eq!(f.fallback_scsv, None);
     }
 
     /// With a single version there is nothing to fall back from, and a
