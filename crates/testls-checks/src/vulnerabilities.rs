@@ -10,7 +10,7 @@ use testls_probe::{
 };
 use testls_wire::ProtocolVersion;
 
-use crate::ciphers::{cipher_name, has_weakness};
+use crate::ciphers::{cipher_name, finding_id, has_weakness};
 use crate::{Finding, Severity};
 
 /// Verdict for one vulnerability.
@@ -101,23 +101,34 @@ impl Inputs<'_> {
         }
     }
 
-    /// Names of accepted SSLv3+ suites that satisfy `pred`, deduplicated.
-    fn suites(&self, pred: impl Fn(ProtocolVersion, &str) -> bool) -> Vec<&'static str> {
-        let mut names: Vec<&'static str> = self
+    /// Accepted SSLv3+ suites that satisfy `pred`, deduplicated by name,
+    /// with the finding id the cipher check emits for each.
+    fn suites(
+        &self,
+        pred: impl Fn(ProtocolVersion, &str) -> bool,
+    ) -> Vec<(&'static str, Option<&'static str>)> {
+        let mut found: Vec<(&'static str, Option<&'static str>)> = self
             .ciphers
             .iter()
             .filter(|c| c.version >= ProtocolVersion::SSL3)
-            .flat_map(|c| {
-                c.suites
-                    .iter()
-                    .map(|&id| (c.version, cipher_name(c.version, id)))
-            })
-            .filter(|&(v, name)| pred(v, name))
-            .map(|(_, name)| name)
+            .flat_map(|c| c.suites.iter().map(move |&id| (c.version, id)))
+            .filter(|&(v, id)| pred(v, cipher_name(v, id)))
+            .map(|(v, id)| (cipher_name(v, id), finding_id(v, id)))
             .collect();
-        names.sort_unstable();
-        names.dedup();
-        names
+        found.sort_unstable();
+        found.dedup_by_key(|(name, _)| *name);
+        found
+    }
+
+    /// Whether a version matching `relevant` is offered (or failed to probe)
+    /// but has no cipher enumeration, so suite verdicts are incomplete.
+    fn enumeration_missing(&self, relevant: impl Fn(ProtocolVersion) -> bool) -> bool {
+        self.protocols.iter().any(|p| {
+            p.version >= ProtocolVersion::SSL3
+                && relevant(p.version)
+                && p.support != ProtocolSupport::NotSupported
+                && !self.ciphers.iter().any(|c| c.version == p.version)
+        })
     }
 
     /// Key exchange results for versions before TLSv1.3.
@@ -144,25 +155,40 @@ fn protocol_vuln(
     vuln(id, name, status, detail, finding)
 }
 
-/// Verdict from the accepted suites matching `pred`.
+/// Finding that reports the affected suites: `preferred` when one of them
+/// emits it, otherwise the id emitted for the first suite.
+fn pointer(
+    found: &[(&'static str, Option<&'static str>)],
+    preferred: &'static str,
+) -> &'static str {
+    if found.iter().any(|&(_, f)| f == Some(preferred)) {
+        return preferred;
+    }
+    found
+        .iter()
+        .find_map(|&(_, f)| f)
+        .unwrap_or("cipher.unknown")
+}
+
+/// Verdict from the accepted suites matching `pred` with a version matching
+/// `versions`; a vulnerable verdict points to a cipher finding that is
+/// actually emitted, preferably `finding`.
 fn suite_vuln(
     inputs: &Inputs,
-    id: &'static str,
-    name: &'static str,
-    finding: &'static str,
-    pred: impl Fn(ProtocolVersion, &str) -> bool,
+    (id, name, finding): (&'static str, &'static str, &'static str),
+    versions: impl Fn(ProtocolVersion) -> bool,
+    pred: impl Fn(&str) -> bool,
 ) -> Vulnerability {
-    if inputs.ciphers.is_empty() {
-        return vuln(
+    let found = inputs.suites(|v, n| versions(v) && pred(n));
+    let missing = inputs.enumeration_missing(&versions);
+    match found.as_slice() {
+        [] if inputs.ciphers.is_empty() || missing => vuln(
             id,
             name,
             VulnStatus::NotTested,
-            "no cipher suites enumerated",
+            "cipher suites not enumerated for every offered version",
             finding,
-        );
-    }
-    let names = inputs.suites(pred);
-    match names.as_slice() {
+        ),
         [] => vuln(
             id,
             name,
@@ -170,13 +196,19 @@ fn suite_vuln(
             "no affected suites",
             finding,
         ),
-        [one] => vuln(id, name, VulnStatus::Vulnerable, *one, finding),
-        [first, rest @ ..] => vuln(
+        [(one, _)] => vuln(
+            id,
+            name,
+            VulnStatus::Vulnerable,
+            *one,
+            pointer(&found, finding),
+        ),
+        [(first, _), rest @ ..] => vuln(
             id,
             name,
             VulnStatus::Vulnerable,
             format!("{first} and {} more", rest.len()),
-            finding,
+            pointer(&found, finding),
         ),
     }
 }
@@ -194,23 +226,16 @@ fn beast(inputs: &Inputs) -> Vulnerability {
             finding,
         );
     }
-    let tested = old.iter().all(|&v| {
-        inputs.offered(v) == Some(false) || inputs.ciphers.iter().any(|c| c.version == v)
-    });
-    let verdict = suite_vuln(inputs, id, name, finding, |v, n| {
-        old.contains(&v) && has_weakness("cbc", n)
-    });
-    if tested || verdict.status == VulnStatus::Vulnerable {
-        verdict
-    } else {
-        vuln(
-            id,
-            name,
-            VulnStatus::NotTested,
-            "no cipher suites enumerated",
-            finding,
-        )
+    let mut verdict = suite_vuln(
+        inputs,
+        (id, name, finding),
+        |v| old.contains(&v),
+        |n| has_weakness("cbc", n),
+    );
+    if verdict.status == VulnStatus::Vulnerable {
+        verdict.finding = Some(finding);
     }
+    verdict
 }
 
 /// Logjam: export DHE suites, small DH groups, or a widely shared 1024-bit
@@ -219,8 +244,9 @@ fn logjam(inputs: &Inputs) -> Vulnerability {
     let (id, name) = ("logjam", "Logjam");
     if !inputs.ciphers.is_empty() {
         let export = inputs.suites(|_, n| n.contains("DHE") && n.contains("EXPORT"));
-        if let Some(suite) = export.first() {
-            return vuln(id, name, VulnStatus::Vulnerable, *suite, "cipher.export");
+        if let Some((suite, _)) = export.first() {
+            let finding = pointer(&export, "cipher.export");
+            return vuln(id, name, VulnStatus::Vulnerable, *suite, finding);
         }
     }
     let mut detail = None;
@@ -260,6 +286,7 @@ fn logjam(inputs: &Inputs) -> Vulnerability {
 fn raccoon(inputs: &Inputs) -> Vulnerability {
     let (id, name, finding) = ("raccoon", "Raccoon", "vuln.raccoon");
     let mut measured = false;
+    let mut unmeasured = false;
     let mut dhe = false;
     for k in inputs.legacy_key_exchange() {
         dhe |= k.dh_bits.is_some();
@@ -269,10 +296,16 @@ fn raccoon(inputs: &Inputs) -> Vulnerability {
                 return vuln(id, name, VulnStatus::Vulnerable, text, finding);
             }
             Some(false) => measured = true,
+            None if k.dh_bits.is_some() => unmeasured = true,
             None => {}
         }
     }
-    let (status, detail) = if measured {
+    let (status, detail) = if unmeasured {
+        (
+            VulnStatus::NotTested,
+            "DH key reuse not measured for every DHE result",
+        )
+    } else if measured {
         (
             VulnStatus::NotVulnerable,
             "fresh DH public value per handshake",
@@ -337,6 +370,7 @@ pub fn assess_vulnerabilities(
         features,
     };
     let only_tls13 = "no TLSv1.2 or older protocol";
+    let all = |_: ProtocolVersion| true;
     vec![
         protocol_vuln(
             &inputs,
@@ -346,13 +380,13 @@ pub fn assess_vulnerabilities(
             "protocol.ssl3",
         ),
         beast(&inputs),
-        suite_vuln(&inputs, "sweet32", "SWEET32", "cipher.3des", |_, n| {
+        suite_vuln(&inputs, ("sweet32", "SWEET32", "cipher.3des"), all, |n| {
             ["3des", "des", "rc2"].iter().any(|k| has_weakness(k, n)) || n.contains("_IDEA_")
         }),
-        suite_vuln(&inputs, "rc4", "RC4", "cipher.rc4", |_, n| {
+        suite_vuln(&inputs, ("rc4", "RC4", "cipher.rc4"), all, |n| {
             has_weakness("rc4", n)
         }),
-        suite_vuln(&inputs, "freak", "FREAK", "cipher.export", |_, n| {
+        suite_vuln(&inputs, ("freak", "FREAK", "cipher.export"), all, |n| {
             n.starts_with("TLS_RSA_EXPORT")
         }),
         logjam(&inputs),
@@ -400,10 +434,9 @@ pub fn assess_vulnerabilities(
         ),
         suite_vuln(
             &inputs,
-            "no_forward_secrecy",
-            "No forward secrecy",
-            "cipher.no_pfs",
-            |_, n| has_weakness("no_pfs", n),
+            ("no_forward_secrecy", "No forward secrecy", "cipher.no_pfs"),
+            all,
+            |n| has_weakness("no_pfs", n),
         ),
         raccoon(&inputs),
     ]
@@ -658,6 +691,54 @@ mod tests {
         }
         assert_eq!(status(&list, "drown"), VulnStatus::NotVulnerable);
         assert_eq!(vulnerability_findings(&list), []);
+    }
+
+    /// A supported version without cipher enumeration makes a clean suite
+    /// verdict "not tested", but found suites still count.
+    #[test]
+    fn incomplete_enumeration() {
+        let p = protocols(&[ProtocolVersion::TLS10, ProtocolVersion::TLS12]);
+        let c = [ciphers(ProtocolVersion::TLS12, &[ECDHE_GCM, RSA_RC4])];
+        let list = assess_vulnerabilities(&p, &c, &[], None);
+        for id in ["beast", "sweet32", "freak"] {
+            assert_eq!(status(&list, id), VulnStatus::NotTested, "{id}");
+        }
+        assert_eq!(status(&list, "rc4"), VulnStatus::Vulnerable);
+    }
+
+    /// Vulnerable verdicts point to the cipher finding that is emitted.
+    #[test]
+    fn finding_pointers() {
+        let p = protocols(&[ProtocolVersion::TLS12]);
+        let by_id = |suites: &[u32], id: &str| {
+            let c = [ciphers(ProtocolVersion::TLS12, suites)];
+            let list = assess_vulnerabilities(&p, &c, &[], None);
+            list.into_iter().find(|v| v.id == id).unwrap().finding
+        };
+        // TLS_RSA_WITH_AES_128_CBC_SHA is reported as cipher.cbc.
+        assert_eq!(
+            by_id(&[RSA_AES_CBC], "no_forward_secrecy"),
+            Some("cipher.cbc")
+        );
+        // The export RC4 suite is reported as cipher.export.
+        assert_eq!(by_id(&[RSA_EXPORT], "rc4"), Some("cipher.export"));
+        assert_eq!(by_id(&[RSA_EXPORT, RSA_RC4], "rc4"), Some("cipher.rc4"));
+        // TLS_RSA_WITH_DES_CBC_SHA is reported as cipher.des.
+        assert_eq!(by_id(&[0x0009], "sweet32"), Some("cipher.des"));
+        // TLS_RSA_WITH_IDEA_CBC_SHA has no IDEA rule; it is reported as cipher.cbc.
+        assert_eq!(by_id(&[0x0007], "sweet32"), Some("cipher.cbc"));
+    }
+
+    /// One DHE result without a reuse measurement makes Raccoon "not tested".
+    #[test]
+    fn raccoon_partially_measured() {
+        let p = protocols(&[ProtocolVersion::TLS11, ProtocolVersion::TLS12]);
+        let k = [
+            kx(ProtocolVersion::TLS11, Some(vec![0xc5; 256]), None),
+            kx(ProtocolVersion::TLS12, Some(vec![0xc5; 256]), Some(false)),
+        ];
+        let list = assess_vulnerabilities(&p, &[], &k, None);
+        assert_eq!(status(&list, "raccoon"), VulnStatus::NotTested);
     }
 
     /// Feature checks do not apply to TLSv1.3-only or single-version servers.
