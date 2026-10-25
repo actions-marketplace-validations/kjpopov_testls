@@ -19,26 +19,52 @@ pub struct AltService {
 /// Default `ma` of an alternative service: 24 hours (RFC 7838 §3.1).
 const DEFAULT_MAX_AGE: u64 = 24 * 60 * 60;
 
-/// Alternative services from the first `Alt-Svc` header. `clear` yields an
-/// empty list (RFC 7838 §3).
+/// Alternative services from every `Alt-Svc` header, combined into one list
+/// in order (RFC 9110 §5.3). `clear` yields an empty list (RFC 7838 §3).
 ///
 /// # Errors
 ///
 /// Returns a message when the header does not follow the RFC 7838 grammar.
 pub fn alt_services(response: &HttpResponse) -> Result<Vec<AltService>, String> {
-    let Some(value) = response.header("alt-svc") else {
-        return Ok(Vec::new());
-    };
-    if value.trim().eq_ignore_ascii_case("clear") {
+    let value = response
+        .header_values("alt-svc")
+        .collect::<Vec<_>>()
+        .join(",");
+    if value.trim().is_empty() || value.trim().eq_ignore_ascii_case("clear") {
         return Ok(Vec::new());
     }
-    value.split(',').map(alt_service).collect()
+    split_unquoted(&value, ',')
+        .ok_or_else(|| format!("invalid Alt-Svc entry `{}`", printable(value.trim())))?
+        .into_iter()
+        .map(alt_service)
+        .collect()
+}
+
+/// Splits `s` at `delim` outside quoted strings, honouring `\` escapes
+/// inside quotes (RFC 9110 §5.6.4). `None` for an unterminated quote.
+fn split_unquoted(s: &str, delim: char) -> Option<Vec<&str>> {
+    let mut parts = Vec::new();
+    let (mut start, mut quoted, mut escaped) = (0, false, false);
+    for (i, c) in s.char_indices() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' if quoted => escaped = true,
+            '"' => quoted = !quoted,
+            c if c == delim && !quoted => {
+                parts.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&s[start..]);
+    (!quoted).then_some(parts)
 }
 
 /// Parses `protocol-id "=" alt-authority *( OWS ";" OWS parameter )`.
 fn alt_service(entry: &str) -> Result<AltService, String> {
     let invalid = || format!("invalid Alt-Svc entry `{}`", printable(entry.trim()));
-    let mut parts = entry.split(';');
+    let mut parts = split_unquoted(entry, ';').ok_or_else(invalid)?.into_iter();
     let (protocol, authority) = parts
         .next()
         .and_then(|p| p.trim().split_once('='))
@@ -49,7 +75,12 @@ fn alt_service(entry: &str) -> Result<AltService, String> {
     let authority = authority
         .strip_prefix('"')
         .and_then(|a| a.strip_suffix('"'))
-        .filter(|a| a.contains(':') && !a.contains(['"', '\\']))
+        .filter(|a| !a.contains(['"', '\\']))
+        .filter(|a| {
+            a.rsplit_once(':').is_some_and(|(_, port)| {
+                !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())
+            })
+        })
         .ok_or_else(invalid)?;
     let mut max_age = DEFAULT_MAX_AGE;
     for param in parts {
@@ -152,11 +183,11 @@ pub fn cookies(response: &HttpResponse) -> Vec<Cookie> {
 pub fn banners(response: &HttpResponse) -> Vec<(&'static str, String)> {
     [("Server", "server"), ("X-Powered-By", "x-powered-by")]
         .into_iter()
-        .filter_map(|(label, name)| {
+        .flat_map(|(label, name)| {
             response
-                .header(name)
+                .header_values(name)
                 .filter(|v| !v.is_empty())
-                .map(|v| (label, printable(v)))
+                .map(move |v| (label, printable(v)))
         })
         .collect()
 }
@@ -270,6 +301,21 @@ mod tests {
             ]
         );
         assert_eq!(alt(r#"w%3Dx%3Ay=":443""#).unwrap()[0].protocol, "w=x:y");
+        let quoted = alt(r#"h3=":443"; ext="a,b;c\"d"; ma=60, h2=":443""#).unwrap();
+        assert_eq!(quoted.len(), 2);
+        assert_eq!(quoted[0].max_age, 60);
+        let split = alt_services(&response(&[
+            ("Alt-Svc", r#"h2=":443""#),
+            ("Alt-Svc", r#"h3=":443""#),
+        ]))
+        .unwrap();
+        assert_eq!(
+            split
+                .iter()
+                .map(|s| s.protocol.as_str())
+                .collect::<Vec<_>>(),
+            ["h2", "h3"]
+        );
         assert_eq!(alt("clear").unwrap(), []);
         assert_eq!(alt_services(&response(&[])).unwrap(), []);
         for bad in [
@@ -279,6 +325,9 @@ mod tests {
             r#"=":443""#,
             r#"h3=":443"; ma=x"#,
             r#"h%zz=":1""#,
+            r#"h3=":notaport""#,
+            r#"h3="host:""#,
+            r#"h3=":443"; ext="open"#,
         ] {
             assert!(alt(bad).is_err(), "{bad}");
         }
@@ -366,6 +415,11 @@ mod tests {
         assert_eq!(
             banners(&response(&[("Server", "a\u{1b}[31m")])),
             [("Server", "a?[31m".to_owned())]
+        );
+        let repeated = response(&[("X-Powered-By", "PHP"), ("X-Powered-By", "Express")]);
+        assert_eq!(
+            ids(&http_extra_findings(&repeated)),
+            ["header.banner", "header.banner"]
         );
     }
 
