@@ -68,7 +68,8 @@ impl Intolerance {
 }
 
 /// Whether `response` completes a handshake at `version` with one of
-/// `suites`; a `HelloRetryRequest` at `version` also counts.
+/// `suites`; a `HelloRetryRequest` at `version` also counts when it names
+/// an offered suite (RFC 8446 §4.1.4).
 fn completes(
     version: ProtocolVersion,
     suites: &[u16],
@@ -79,7 +80,7 @@ fn completes(
     };
     Ok(
         hello.negotiated_version().map_err(ProbeError::Decode)? == version
-            && (hello.is_hello_retry_request() || suites.contains(&hello.cipher_suite)),
+            && suites.contains(&hello.cipher_suite),
     )
 }
 
@@ -505,6 +506,29 @@ mod tests {
         let ssl3 = ciphers(ProtocolVersion::SSL3, 0x000a);
         let r = probe_intolerance(&unreachable, &ssl3, None).await.unwrap();
         assert_eq!(r, Intolerance::untested(None));
+    }
+
+    /// A `HelloRetryRequest` only counts when it names an offered suite.
+    #[test]
+    fn retry_request_needs_offered_suite() {
+        let hrr = |suite| HelloResponse::ServerHello {
+            hello: testls_wire::ServerHello {
+                legacy_version: ProtocolVersion::TLS12,
+                random: testls_wire::HRR_RANDOM,
+                session_id: vec![],
+                cipher_suite: suite,
+                compression_method: 0,
+                extensions: vec![testls_wire::RawExtension {
+                    typ: ext::SUPPORTED_VERSIONS,
+                    data: vec![3, 4],
+                }],
+            },
+            certificates: vec![],
+            server_key_exchange: None,
+        };
+        let v = ProtocolVersion::TLS13;
+        assert!(completes(v, &[0x1301], &hrr(0x1301)).unwrap());
+        assert!(!completes(v, &[0x1301], &hrr(0x1302)).unwrap());
     }
 
     /// The padded hello fills exactly one record.
