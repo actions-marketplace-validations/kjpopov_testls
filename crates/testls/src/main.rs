@@ -12,11 +12,11 @@ use clap::Parser;
 use clap::builder::TypedValueParser as _;
 use testls_checks::{
     Finding, Severity, TrustStore, certificate_findings, cipher_findings, describe_certificate,
-    key_exchange_findings, protocol_findings, trust_findings,
+    http_findings, key_exchange_findings, protocol_findings, trust_findings,
 };
 use testls_probe::{
-    ProtocolSupport, Transport, detect_protocols, enumerate_ciphers, fetch_certificates,
-    probe_key_exchange,
+    HttpResponse, ProtocolSupport, Transport, detect_protocols, enumerate_ciphers,
+    fetch_certificates, fetch_http_headers, probe_key_exchange,
 };
 use testls_report::text::{self, CertificateSection, CipherSection, KeyExchangeSection};
 use testls_report::{ColorChoice, Format, Painter, json};
@@ -165,6 +165,10 @@ async fn main() -> ExitCode {
     show(format!("\n{}", text::certificate(&certificate, paint)));
     findings.extend(cert_findings);
 
+    let (http, http_findings) = http_section(&transport, sni).await;
+    show(format!("\n{}", text::http(&http, paint)));
+    findings.extend(http_findings);
+
     findings.retain(|f| f.severity > Severity::Ok);
     findings.sort_by_key(|f| std::cmp::Reverse(f.severity));
     show(format!("\n{}", text::findings(&findings, paint)));
@@ -181,6 +185,7 @@ async fn main() -> ExitCode {
                 ciphers: &ciphers,
                 key_exchange: &key_exchange,
                 certificate: &certificate,
+                http: &http,
                 findings: &findings,
             })
         );
@@ -318,6 +323,30 @@ async fn certificate_section(
     (Ok(section), findings)
 }
 
+/// Fetches the reply to `GET /` and checks HSTS and security headers.
+///
+/// A server that does not speak HTTP is common for non-web TLS services,
+/// so a failed fetch is informational.
+async fn http_section(
+    transport: &Transport,
+    sni: Option<&str>,
+) -> (Result<HttpResponse, String>, Vec<Finding>) {
+    match fetch_http_headers(transport, sni).await {
+        Ok(response) => {
+            let findings = http_findings(&response);
+            (Ok(response), findings)
+        }
+        Err(e) => {
+            let finding = Finding::new(
+                "http.error",
+                Severity::Info,
+                format!("HTTP headers could not be retrieved: {e}"),
+            );
+            (Err(e.to_string()), vec![finding])
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Unit tests for the scan helpers.
@@ -341,5 +370,17 @@ mod tests {
             "cipher enumeration failed"
         );
         assert_eq!(kx_findings(&kx)[0].id, "group.error");
+    }
+
+    /// A failed HTTP fetch becomes an informational finding.
+    #[tokio::test]
+    async fn http_error_is_info() {
+        // Nothing listens on port 9 of the discard address.
+        let transport = Transport::new(SocketAddr::from(([127, 0, 0, 1], 9)));
+        let (http, findings) = http_section(&transport, None).await;
+        assert!(http.is_err());
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].id, "http.error");
+        assert_eq!(findings[0].severity, Severity::Info);
     }
 }

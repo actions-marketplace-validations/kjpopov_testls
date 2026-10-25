@@ -14,6 +14,13 @@ All notable changes to `testls` are listed here. The format follows
 - Findings for deprecated curves (RFC 8422), DH primes below 2048 bits, and
   TLSv1.3 without a post-quantum (ML-KEM) group.
 - `key_exchange` array in the JSON report (additive; schema version stays 1).
+- HTTP headers section from one `GET /` over a full handshake: HSTS
+  (RFC 6797) with preload eligibility, Content-Security-Policy,
+  X-Frame-Options, X-Content-Type-Options, and Referrer-Policy.
+- Findings for a missing, invalid, disabled, or short (under 180 days) HSTS
+  policy, a preload request that does not meet the preload list's
+  requirements, and missing security headers (info).
+- `http` object in the JSON report (additive).
 
 ## [0.1.0] - 2026-10-24
 

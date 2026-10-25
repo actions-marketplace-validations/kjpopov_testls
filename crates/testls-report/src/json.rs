@@ -3,13 +3,18 @@
 //! The serialized structs here are the schema; they are kept separate from
 //! the probe and check types so internal refactors cannot change the output.
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 
 use serde::Serialize;
-use testls_checks::{Finding, cipher_name, cipher_severity, group_name, group_severity};
-use testls_probe::{CipherOrder, ProtocolResult, ProtocolSupport};
+use testls_checks::{
+    Finding, cipher_name, cipher_severity, group_name, group_severity, parse_hsts,
+};
+use testls_probe::{CipherOrder, HttpResponse, ProtocolResult, ProtocolSupport};
 
-use crate::text::{CertificateSection, CipherSection, KeyExchangeSection, suite_id};
+use crate::text::{
+    CertificateSection, CipherSection, KeyExchangeSection, SECURITY_HEADERS, suite_id,
+};
 
 /// Version of the JSON schema. Bumped on any change that is not a pure
 /// addition of fields.
@@ -34,6 +39,8 @@ pub struct Report<'a> {
     pub key_exchange: &'a [KeyExchangeSection],
     /// Certificate chain, or why it could not be retrieved.
     pub certificate: &'a Result<CertificateSection, String>,
+    /// Reply to `GET /`, or why it could not be fetched.
+    pub http: &'a Result<HttpResponse, String>,
     /// Findings, most severe first.
     pub findings: &'a [Finding],
 }
@@ -57,6 +64,8 @@ struct Document<'a> {
     key_exchange: Vec<KeyExchangeJson>,
     /// Certificate chain result.
     certificate: CertificateJson<'a>,
+    /// HTTP security headers result.
+    http: HttpJson<'a>,
     /// Findings, most severe first.
     findings: Vec<FindingJson<'a>>,
 }
@@ -183,6 +192,34 @@ struct CertJson<'a> {
     error: Option<&'a str>,
 }
 
+/// Status and security headers of the reply to `GET /`.
+#[derive(Debug, Serialize)]
+struct HttpJson<'a> {
+    /// HTTP status code, or `null` when the fetch failed.
+    status: Option<u16>,
+    /// Each security header by lowercase name, `null` when not set.
+    headers: BTreeMap<String, Option<&'a str>>,
+    /// Parsed `Strict-Transport-Security` policy, or `null` when the header
+    /// is missing or invalid.
+    hsts: Option<HstsJson>,
+    /// Error message when the headers could not be fetched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'a str>,
+}
+
+/// Parsed `Strict-Transport-Security` policy.
+#[derive(Debug, Serialize)]
+struct HstsJson {
+    /// `max-age` in seconds.
+    max_age: u64,
+    /// The `includeSubDomains` directive is present.
+    include_subdomains: bool,
+    /// The `preload` directive is present.
+    preload: bool,
+    /// The policy meets the preload list's header requirements.
+    preload_eligible: bool,
+}
+
 /// One finding.
 #[derive(Debug, Serialize)]
 struct FindingJson<'a> {
@@ -218,6 +255,7 @@ pub fn render(report: &Report<'_>) -> String {
         ciphers: report.ciphers.iter().map(ciphers).collect(),
         key_exchange: report.key_exchange.iter().map(key_exchange).collect(),
         certificate: certificate(report.certificate),
+        http: http(report.http),
         findings: report
             .findings
             .iter()
@@ -352,6 +390,36 @@ fn certificate(section: &Result<CertificateSection, String>) -> CertificateJson<
     }
 }
 
+/// Converts the HTTP section; only the first HSTS header counts
+/// (RFC 6797 §8.1).
+fn http(section: &Result<HttpResponse, String>) -> HttpJson<'_> {
+    match section {
+        Ok(response) => HttpJson {
+            status: Some(response.status),
+            headers: SECURITY_HEADERS
+                .iter()
+                .map(|name| (name.to_ascii_lowercase(), response.header(name)))
+                .collect(),
+            hsts: response
+                .header("strict-transport-security")
+                .and_then(|v| parse_hsts(v).ok())
+                .map(|h| HstsJson {
+                    max_age: h.max_age,
+                    include_subdomains: h.include_subdomains,
+                    preload: h.preload,
+                    preload_eligible: h.preload_eligible(),
+                }),
+            error: None,
+        },
+        Err(e) => HttpJson {
+            status: None,
+            headers: BTreeMap::new(),
+            hsts: None,
+            error: Some(e),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
@@ -415,11 +483,8 @@ mod tests {
                 Err("bad".into()),
             ],
         });
-        let findings = [Finding::new(
-            "cert.untrusted",
-            Severity::High,
-            "certificate chain is not trusted",
-        )];
+        let http = Err("reset".into());
+        let findings = [Finding::new("cert.untrusted", Severity::High, "untrusted")];
         let report = Report {
             target: "localhost:443",
             addr: "127.0.0.1:443".parse().unwrap(),
@@ -429,6 +494,7 @@ mod tests {
             ciphers: &ciphers,
             key_exchange: &[],
             certificate: &certificate,
+            http: &http,
             findings: &findings,
         };
         assert_eq!(
@@ -466,8 +532,9 @@ mod tests {
                         {"error": "bad"},
                     ],
                 },
+                "http": {"status": null, "headers": {}, "hsts": null, "error": "reset"},
                 "findings": [
-                    {"id": "cert.untrusted", "severity": "high", "message": "certificate chain is not trusted"},
+                    {"id": "cert.untrusted", "severity": "high", "message": "untrusted"},
                 ],
             })
         );
@@ -501,6 +568,7 @@ mod tests {
             },
         ];
         let certificate = Err("refused".into());
+        let http = Err("reset".into());
         let report = Report {
             target: "127.0.0.1",
             addr: "127.0.0.1:443".parse().unwrap(),
@@ -510,6 +578,7 @@ mod tests {
             ciphers: &[],
             key_exchange: &sections,
             certificate: &certificate,
+            http: &http,
             findings: &[],
         };
         assert_eq!(
@@ -539,6 +608,7 @@ mod tests {
     #[test]
     fn errors_and_nulls() {
         let certificate = Err("refused".into());
+        let http = Err("reset".into());
         let report = Report {
             target: "127.0.0.1",
             addr: "127.0.0.1:443".parse().unwrap(),
@@ -548,6 +618,7 @@ mod tests {
             ciphers: &[],
             key_exchange: &[],
             certificate: &certificate,
+            http: &http,
             findings: &[],
         };
         let v = value(&report);
@@ -557,5 +628,54 @@ mod tests {
             json!({"protocol": null, "chain": [], "error": "refused"})
         );
         assert_eq!(v["findings"], json!([]));
+    }
+
+    /// The HTTP section lists every security header and the parsed HSTS
+    /// policy from the first header.
+    #[test]
+    fn http_section() {
+        let certificate = Err("refused".into());
+        let http = Ok(HttpResponse {
+            status: 301,
+            headers: vec![
+                (
+                    "strict-transport-security".into(),
+                    "max-age=31536000; includeSubDomains; preload".into(),
+                ),
+                ("strict-transport-security".into(), "max-age=0".into()),
+                ("x-frame-options".into(), "DENY".into()),
+            ],
+        });
+        let report = Report {
+            target: "127.0.0.1",
+            addr: "127.0.0.1:443".parse().unwrap(),
+            sni: None,
+            started_at: 0,
+            protocols: &[],
+            ciphers: &[],
+            key_exchange: &[],
+            certificate: &certificate,
+            http: &http,
+            findings: &[],
+        };
+        assert_eq!(
+            value(&report)["http"],
+            json!({
+                "status": 301,
+                "headers": {
+                    "content-security-policy": null,
+                    "referrer-policy": null,
+                    "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+                    "x-content-type-options": null,
+                    "x-frame-options": "DENY",
+                },
+                "hsts": {
+                    "max_age": 31_536_000,
+                    "include_subdomains": true,
+                    "preload": true,
+                    "preload_eligible": true,
+                },
+            })
+        );
     }
 }

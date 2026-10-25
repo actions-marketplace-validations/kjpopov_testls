@@ -62,7 +62,7 @@ Two connection paths:
 
 ### v0.2 — Key exchange, headers, revocation
 - [x] Supported groups incl. X25519MLKEM768, ECDHE curve list, DH param size
-- HSTS / preload / security headers via full-handshake path
+- [x] HSTS / preload / security headers via full-handshake path
 - OCSP stapling, OCSP responder, CRL
 
 ### v0.3 — Protocols & vulnerabilities
@@ -131,3 +131,4 @@ Two connection paths:
 | 25 | Every CI check is required on `main` (`protectmain` ruleset). Workflows that only matter for some files (`zizmor`, `fuzz`) still run on every pull request and skip their work in a step instead of using `paths:` filters; CI and coverage cancel superseded pull request runs; cargo commands run with `--locked` | A path-filtered required check never reports and blocks unrelated PRs; `--locked` catches a stale `Cargo.lock` on the PR instead of at release time |
 | 26 | Releases are cut from `main` by a version-bump PR that updates `Cargo.toml` and `CHANGELOG.md` (Keep a Changelog); the `v*` tag is pushed after it merges, and the release workflow publishes binaries with generated notes; tags with a `-` suffix are pre-releases | The changelog is curated for users, while generated notes still credit every PR; the workflow refuses tags that don't match `Cargo.toml` |
 | 27 | Supported groups are enumerated per offered version by offering a shrinking group list and removing each selected group: TLSv1.3 sends an empty `key_share` so the server names its choice in a HelloRetryRequest, while TLSv1.0–1.2 read the named curve from the ECDHE ServerKeyExchange. The DH prime size comes from a DHE ServerKeyExchange. Curves below `secp256r1` rate medium (RFC 8422 §5.1.1), DH primes below 1024 bits high and below 2048 medium; TLSv1.3 without an ML-KEM group is info | No key shares need computing, so no crypto dependency is added and every registered group, including ML-KEM hybrids, can be probed |
+| 28 | HTTP headers come from one `GET /` (HTTP/1.1, ALPN `http/1.1`, `Connection: close`) over the rustls full handshake; only the status line and header section are read (64 KiB cap) and redirects are not followed. A missing, invalid, disabled, or short (under 180 days) HSTS policy is low; missing CSP, framing protection, `nosniff`, and Referrer-Policy are info; a failed fetch is info because many TLS services do not speak HTTP | The headers of the first response are what a browser applies to this origin; reusing rustls avoids a new HTTP dependency, and low/info severities keep `--fail-on high` usable for non-web endpoints |

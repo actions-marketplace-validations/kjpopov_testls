@@ -28,6 +28,7 @@ finishes. This page describes schema version **1**.
 | `ciphers` | array | One [cipher list](#cipher-list) per offered version |
 | `key_exchange` | array | One [key exchange](#key-exchange) per offered version |
 | `certificate` | object | The [certificate chain](#certificate-chain) |
+| `http` | object | [HTTP headers](#http-headers) of the reply to `GET /` |
 | `findings` | array | [Findings](#finding), most severe first |
 
 ### Protocol
@@ -77,6 +78,21 @@ finishes. This page describes schema version **1**.
 | `chain[].key` | string | Key algorithm and size, e.g. `"RSA 2048 bits"` |
 | `chain[].error` | string | Only for a certificate that cannot be parsed; the other fields are then absent |
 | `error` | string | Only when the chain could not be retrieved; `chain` is then empty |
+
+### HTTP headers
+
+One `GET /` request is sent over a full handshake; redirects are not followed.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `status` | integer or null | HTTP status code; `null` on error |
+| `headers` | object | Each security header by lowercase name (`strict-transport-security`, `content-security-policy`, `x-frame-options`, `x-content-type-options`, `referrer-policy`), first value or `null` when not set; empty on error |
+| `hsts` | object or null | Parsed `Strict-Transport-Security` policy from the first header; `null` when missing or invalid |
+| `hsts.max_age` | integer | `max-age` in seconds |
+| `hsts.include_subdomains` | boolean | `includeSubDomains` is present |
+| `hsts.preload` | boolean | `preload` is present |
+| `hsts.preload_eligible` | boolean | `max-age` is at least one year and both `includeSubDomains` and `preload` are present |
+| `error` | string | Only when the headers could not be fetched, e.g. the server does not speak HTTP |
 
 ### Finding
 
@@ -135,6 +151,17 @@ Abbreviated:
         "key": "EC 256 bits"
       }
     ]
+  },
+  "http": {
+    "status": 200,
+    "headers": {
+      "content-security-policy": null,
+      "referrer-policy": "no-referrer",
+      "strict-transport-security": "max-age=63072000; includeSubDomains; preload",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY"
+    },
+    "hsts": { "max_age": 63072000, "include_subdomains": true, "preload": true, "preload_eligible": true }
   },
   "findings": [
     { "id": "protocol.no_tls13", "severity": "info", "message": "..." }
