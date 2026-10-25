@@ -177,8 +177,8 @@ const EXPLANATIONS: &[Explanation] = &[
     entry(
         "group.weak",
         "Deprecated key exchange group",
-        "Binary curves, small prime curves and explicit curve parameters are deprecated. Offer x25519, secp256r1 or secp384r1 instead.",
-        "RFC 8422 §5.1.1",
+        "Binary curves, small prime curves and explicit curve parameters are deprecated, and the pre-standard Kyber code points are obsolete. Offer x25519, secp256r1, secp384r1 or X25519MLKEM768 instead.",
+        "RFC 8422 §5.1.1, IANA TLS Supported Groups",
     ),
     entry(
         "group.no_post_quantum",
@@ -598,6 +598,7 @@ mod tests {
             include_str!("intolerance.rs"),
             include_str!("key_exchange.rs"),
             include_str!("ocsp.rs"),
+            include_str!("post_quantum.rs"),
             include_str!("protocols.rs"),
             include_str!("revocation.rs"),
             include_str!("trust.rs"),
