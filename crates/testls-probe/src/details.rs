@@ -17,7 +17,7 @@ use rustls::client::{
 };
 use rustls::pki_types::ServerName;
 use testls_wire::{ClientHello, Extension, ProtocolVersion, ServerHello, ext};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::time::{Instant, timeout};
 
 use crate::certificates::{client_config, connect_tls};
@@ -33,6 +33,8 @@ const DOWNGRADE_TLS11: [u8; 8] = *b"DOWNGRD\x00";
 const TICKET_WAIT: Duration = Duration::from_secs(1);
 /// Poll interval while waiting for session tickets.
 const TICKET_POLL: Duration = Duration::from_millis(50);
+/// How long to keep collecting tickets after the first one arrives.
+const TICKET_GRACE: Duration = Duration::from_millis(200);
 
 /// Details found by [`probe_details`].
 ///
@@ -169,16 +171,31 @@ async fn tickets(transport: &Transport, sni: Option<&str>) -> Option<Vec<u32>> {
     if tls.get_ref().1.protocol_version() != Some(rustls::ProtocolVersion::TLSv1_3) {
         return None;
     }
-    // Tickets arrive after the handshake and are processed on read.
-    let deadline = Instant::now() + TICKET_WAIT.min(transport.read_timeout);
+    collect_tickets(&mut tls, &recorder, TICKET_WAIT.min(transport.read_timeout)).await;
+    Some(recorder.take())
+}
+
+/// Read from `stream` so tickets get processed, for up to `wait`. Keeps
+/// reading for [`TICKET_GRACE`] after the first ticket, since later tickets
+/// may allow more 0-RTT data.
+async fn collect_tickets<S: AsyncRead + Unpin>(
+    stream: &mut S,
+    recorder: &TicketRecorder,
+    wait: Duration,
+) {
+    let mut deadline = Instant::now() + wait;
+    let mut first_seen = false;
     let mut buf = [0u8; 1024];
-    while recorder.is_empty() && Instant::now() < deadline {
-        match timeout(TICKET_POLL, tls.read(&mut buf)).await {
+    while Instant::now() < deadline {
+        if !first_seen && !recorder.is_empty() {
+            first_seen = true;
+            deadline = deadline.min(Instant::now() + TICKET_GRACE);
+        }
+        match timeout(TICKET_POLL, stream.read(&mut buf)).await {
             Err(_) | Ok(Ok(1..)) => {}
             Ok(Ok(0) | Err(_)) => break,
         }
     }
-    Some(recorder.take())
 }
 
 /// Session store that keeps only the 0-RTT limit of each TLS 1.3 ticket
@@ -196,6 +213,14 @@ impl TicketRecorder {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .is_empty()
+    }
+
+    /// Record one ticket's 0-RTT limit.
+    fn record(&self, max_early_data: u32) {
+        self.early_data
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(max_early_data);
     }
 
     /// The recorded 0-RTT limits.
@@ -231,10 +256,7 @@ impl ClientSessionStore for TicketRecorder {
 
     /// Records the ticket's 0-RTT limit.
     fn insert_tls13_ticket(&self, _: ServerName<'static>, value: Tls13ClientSessionValue) {
-        self.early_data
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(value.max_early_data_size());
+        self.record(value.max_early_data_size());
     }
 
     /// Never resumes a TLS 1.3 session.
@@ -421,6 +443,43 @@ mod tests {
         .unwrap();
         assert_eq!(d.extended_master_secret, Some(false));
         assert_eq!(d.downgrade_sentinel, None);
+    }
+
+    /// Stream that records one ticket limit per read, then stays silent.
+    struct TicketStream {
+        /// Recorder the "tickets" go to.
+        recorder: Arc<TicketRecorder>,
+        /// Limits still to deliver, in order.
+        limits: Vec<u32>,
+    }
+
+    impl AsyncRead for TicketStream {
+        /// Deliver the next ticket as one byte, or stay pending.
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            if self.limits.is_empty() {
+                return std::task::Poll::Pending;
+            }
+            let limit = self.limits.remove(0);
+            self.recorder.record(limit);
+            buf.put_slice(&[0]);
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    /// Tickets after the first are collected, so the largest limit wins.
+    #[tokio::test]
+    async fn later_tickets_are_collected() {
+        let recorder = Arc::new(TicketRecorder::default());
+        let mut stream = TicketStream {
+            recorder: recorder.clone(),
+            limits: vec![0, 1024, 16384],
+        };
+        collect_tickets(&mut stream, &recorder, TICKET_WAIT).await;
+        assert_eq!(recorder.take(), vec![0, 1024, 16384]);
     }
 
     /// The TLS 1.1 sentinel differs from the TLS 1.2 one.
