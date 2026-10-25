@@ -8,8 +8,8 @@ use std::net::SocketAddr;
 
 use serde::Serialize;
 use testls_checks::{
-    CertStatus, Finding, OcspStatus, RevocationCheck, RevocationMethod, Vulnerability, cipher_name,
-    cipher_severity, group_name, group_severity, parse_hsts, revocation_reason_name,
+    CertStatus, Finding, OcspStatus, PostQuantum, RevocationCheck, RevocationMethod, Vulnerability,
+    cipher_name, cipher_severity, group_name, group_severity, parse_hsts, revocation_reason_name,
 };
 use testls_probe::{
     CipherOrder, HandshakeDetails, HttpResponse, Intolerance, ProtocolResult, ProtocolSupport,
@@ -41,6 +41,8 @@ pub struct Report<'a> {
     pub ciphers: &'a [CipherSection],
     /// Key exchange probe per offered protocol.
     pub key_exchange: &'a [KeyExchangeSection],
+    /// Post-quantum readiness of the TLSv1.3 key exchange.
+    pub post_quantum: &'a PostQuantum,
     /// Certificate chain, or why it could not be retrieved.
     pub certificate: &'a Result<CertificateSection, String>,
     /// Reply to `GET /`, or why it could not be fetched.
@@ -75,6 +77,8 @@ struct Document<'a> {
     ciphers: Vec<CiphersJson>,
     /// One entry per offered protocol version.
     key_exchange: Vec<KeyExchangeJson>,
+    /// Post-quantum readiness summary.
+    post_quantum: PostQuantumJson,
     /// Certificate chain result.
     certificate: CertificateJson<'a>,
     /// HTTP security headers result.
@@ -352,6 +356,19 @@ struct DetailsJson<'a> {
     error: Option<&'a str>,
 }
 
+/// Post-quantum readiness of the TLSv1.3 key exchange.
+#[derive(Debug, Serialize)]
+struct PostQuantumJson {
+    /// `ready`, `draft only`, `not ready`, or `not tested`.
+    status: &'static str,
+    /// Accepted ML-KEM groups.
+    groups: Vec<GroupJson>,
+    /// Accepted draft Kyber code points.
+    draft_groups: Vec<GroupJson>,
+    /// Server picks an ML-KEM group first, or `null` when unknown.
+    preferred: Option<bool>,
+}
+
 /// One finding.
 #[derive(Debug, Serialize)]
 struct FindingJson<'a> {
@@ -386,6 +403,7 @@ pub fn render(report: &Report<'_>) -> String {
         protocols: report.protocols.iter().map(protocol).collect(),
         ciphers: report.ciphers.iter().map(ciphers).collect(),
         key_exchange: report.key_exchange.iter().map(key_exchange).collect(),
+        post_quantum: post_quantum(report.post_quantum),
         certificate: certificate(report.certificate),
         http: http(report.http),
         revocation: report.revocation.map(revocation),
@@ -435,6 +453,25 @@ fn details(section: &Result<HandshakeDetails, String>) -> DetailsJson<'_> {
         session_tickets: result.and_then(|r| r.session_tickets),
         max_early_data: result.and_then(|r| r.max_early_data),
         error: section.as_ref().err().map(String::as_str),
+    }
+}
+
+/// Converts the post-quantum summary.
+fn post_quantum(pq: &PostQuantum) -> PostQuantumJson {
+    PostQuantumJson {
+        status: pq.status.as_str(),
+        groups: pq.groups.iter().map(|&id| group(id)).collect(),
+        draft_groups: pq.draft_groups.iter().map(|&id| group(id)).collect(),
+        preferred: pq.preferred,
+    }
+}
+
+/// Converts one group code point.
+fn group(id: u16) -> GroupJson {
+    GroupJson {
+        id: format!("0x{id:04x}"),
+        name: group_name(id),
+        severity: group_severity(id).0.as_str(),
     }
 }
 
@@ -507,15 +544,7 @@ fn key_exchange(section: &KeyExchangeSection) -> KeyExchangeJson {
         Ok(k) => KeyExchangeJson {
             protocol,
             group_order: order(k.group_order),
-            groups: k
-                .groups
-                .iter()
-                .map(|&id| GroupJson {
-                    id: format!("0x{id:04x}"),
-                    name: group_name(id),
-                    severity: group_severity(id).0.as_str(),
-                })
-                .collect(),
+            groups: k.groups.iter().map(|&id| group(id)).collect(),
             dh_bits: k.dh_bits,
             error: None,
         },
@@ -687,11 +716,41 @@ fn revocation_check(check: &RevocationCheck) -> RevocationCheckJson<'_> {
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
-    use testls_checks::{CertificateInfo, RevocationStatus, Severity, VulnStatus};
+    use testls_checks::{CertificateInfo, PqStatus, RevocationStatus, Severity, VulnStatus};
     use testls_probe::{CipherResult, KeyExchangeResult};
     use testls_wire::ProtocolVersion;
 
     use super::*;
+
+    /// Post-quantum summary of a scan without TLSv1.3 data.
+    const UNTESTED: PostQuantum = PostQuantum {
+        status: PqStatus::NotTested,
+        groups: Vec::new(),
+        draft_groups: Vec::new(),
+        preferred: None,
+    };
+
+    /// The post-quantum summary lists ML-KEM and draft groups separately.
+    #[test]
+    fn post_quantum_object() {
+        let pq = PostQuantum {
+            status: PqStatus::Ready,
+            groups: vec![0x11ec],
+            draft_groups: vec![0x6399],
+            preferred: Some(false),
+        };
+        assert_eq!(
+            serde_json::to_value(post_quantum(&pq)).unwrap(),
+            json!({
+                "status": "ready",
+                "groups": [{"id": "0x11ec", "name": "X25519MLKEM768", "severity": "ok"}],
+                "draft_groups": [
+                    {"id": "0x6399", "name": "X25519Kyber768Draft00 (OBSOLETE)", "severity": "low"}
+                ],
+                "preferred": false,
+            })
+        );
+    }
 
     /// Renders `report` and parses it back for comparison.
     fn value(report: &Report<'_>) -> Value {
@@ -756,6 +815,7 @@ mod tests {
             protocols: &protocols,
             ciphers: &ciphers,
             key_exchange: &[],
+            post_quantum: &UNTESTED,
             certificate: &certificate,
             http: &Err("reset".into()),
             revocation: None,
@@ -783,7 +843,7 @@ mod tests {
                     },
                     {"protocol": "TLSv1.2", "order": null, "suites": [], "error": "reset"},
                 ],
-                "key_exchange": [],
+                "key_exchange": [], "post_quantum": {"status": "not tested", "groups": [], "draft_groups": [], "preferred": null},
                 "certificate": {
                     "protocol": "TLSv1.3",
                     "chain": [
@@ -845,6 +905,7 @@ mod tests {
             protocols: &[],
             ciphers: &[],
             key_exchange: &sections,
+            post_quantum: &UNTESTED,
             certificate: &certificate,
             http: &http,
             revocation: None,
@@ -889,6 +950,7 @@ mod tests {
             protocols: &[],
             ciphers: &[],
             key_exchange: &[],
+            post_quantum: &UNTESTED,
             certificate: &certificate,
             http: &http,
             revocation: None,
@@ -930,6 +992,7 @@ mod tests {
             protocols: &[],
             ciphers: &[],
             key_exchange: &[],
+            post_quantum: &UNTESTED,
             certificate: &certificate,
             http: &http,
             revocation: None,

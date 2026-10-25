@@ -22,6 +22,9 @@ All notable changes to `testls` are listed here. The format follows
 - ClientHello tolerance section (text and JSON `intolerance` object):
   unknown version, unknown extension, GREASE, a record-filling hello and a
   fragmented hello, with `intolerance.*` findings for rejections.
+- Post-quantum readiness section (text and JSON `post_quantum` object):
+  TLSv1.3 ML-KEM groups, draft Kyber code points listed separately, and
+  whether the server prefers ML-KEM.
 - Handshake details section (text and JSON `details` object): extended
   master secret, TLSv1.3 downgrade sentinel, session tickets and 0-RTT,
   with `handshake.no_ems`, `handshake.no_downgrade_sentinel` and
@@ -29,6 +32,7 @@ All notable changes to `testls` are listed here. The format follows
 
 ### Changed
 
+- Obsolete draft Kyber groups are rated low and reported as `group.weak`.
 - Text output shows each finding's id in brackets, e.g.
   `[hsts.missing]`.
 
