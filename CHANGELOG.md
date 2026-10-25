@@ -19,6 +19,9 @@ All notable changes to `testls` are listed here. The format follows
 - The Logjam verdict names well-known DH primes (RFC 2409, 3526, 5114,
   7919), and a second DHE handshake checks whether the server reuses its DH
   public value.
+- ClientHello tolerance section (text and JSON `intolerance` object):
+  unknown version, unknown extension, GREASE, a record-filling hello and a
+  fragmented hello, with `intolerance.*` findings for rejections.
 
 ### Changed
 

@@ -97,6 +97,11 @@ fn legacy_server() {
         "Raccoon                        not vulnerable fresh DH public value per handshake"
     );
     assert_eq!(
+        s.line("ClientHello tolerance"),
+        "ClientHello tolerance TLSv1.2"
+    );
+    assert!(!s.has("intolerance."), "{}", s.stdout);
+    assert_eq!(
         s.code, 1,
         "critical findings must fail the default threshold"
     );
@@ -138,6 +143,17 @@ fn modern_server() {
     assert!(
         vulns.lines().all(|l| l.contains(" not vulnerable ")),
         "{vulns}"
+    );
+    let tolerance = s
+        .stdout
+        .split_once("\nClientHello tolerance TLSv1.3\n")
+        .expect("tolerance")
+        .1;
+    let tolerance = tolerance.split_once("\n\n").expect("section end").0;
+    assert_eq!(tolerance.lines().count(), 5, "{tolerance}");
+    assert!(
+        tolerance.lines().all(|l| l.ends_with(" tolerated")),
+        "{tolerance}"
     );
     let findings = s.stdout.split_once("\nFindings\n").expect("findings").1;
     let lines: Vec<&str> = findings.lines().map(str::trim).collect();
@@ -249,6 +265,8 @@ fn json_report() {
         .unwrap();
     assert_eq!(beast["status"], "vulnerable");
     assert_eq!(beast["finding"], "vuln.beast");
+    assert_eq!(v["intolerance"]["protocol"], "TLSv1.2");
+    assert_eq!(v["intolerance"]["tests"]["grease"], "tolerated");
     assert_eq!(v["findings"][0]["severity"], "critical");
     assert!(
         v["findings"]

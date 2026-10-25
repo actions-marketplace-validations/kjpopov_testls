@@ -12,7 +12,8 @@ use testls_checks::{
     group_severity, protocol_severity, revocation_reason_name,
 };
 use testls_probe::{
-    CipherOrder, CipherResult, HttpResponse, KeyExchangeResult, ProtocolResult, ProtocolSupport,
+    CipherOrder, CipherResult, HttpResponse, Intolerance, KeyExchangeResult, ProtocolResult,
+    ProtocolSupport,
 };
 use testls_wire::ProtocolVersion;
 
@@ -294,6 +295,43 @@ pub fn vulnerabilities(list: &[Vulnerability], paint: Painter) -> String {
         };
         let id = v.finding.map(|f| format!(" [{f}]")).unwrap_or_default();
         let _ = writeln!(out, "  {:<30} {label} {}{id}", v.name, v.detail);
+    }
+    out
+}
+
+/// One `ClientHello` tolerance test: JSON key, display label, result accessor.
+pub(crate) type IntoleranceTest = (&'static str, &'static str, fn(&Intolerance) -> Option<bool>);
+
+/// The `ClientHello` tolerance tests in report order.
+pub(crate) const INTOLERANCE_TESTS: [IntoleranceTest; 5] = [
+    ("unknown_version", "unknown version", |i| i.unknown_version),
+    ("unknown_extension", "unknown extension", |i| {
+        i.unknown_extension
+    }),
+    ("grease", "GREASE", |i| i.grease),
+    ("oversized", "oversized hello", |i| i.oversized),
+    ("fragmented", "fragmented hello", |i| i.fragmented),
+];
+
+/// Renders whether the server accepts unusual but valid `ClientHello`s.
+#[must_use]
+pub fn intolerance(section: &Result<Intolerance, String>, paint: Painter) -> String {
+    let result = match section {
+        Ok(result) => result,
+        Err(e) => return format!("{}: error: {e}\n", paint.heading("ClientHello tolerance")),
+    };
+    let heading = match result.version {
+        Some(v) => format!("ClientHello tolerance {v}"),
+        None => "ClientHello tolerance".to_owned(),
+    };
+    let mut out = format!("{}\n", paint.heading(&heading));
+    for (_, label, get) in INTOLERANCE_TESTS {
+        let verdict = match get(result) {
+            Some(true) => paint.severity(Severity::Ok, "tolerated"),
+            Some(false) => paint.severity(Severity::Medium, "rejected"),
+            None => "not tested".to_owned(),
+        };
+        let _ = writeln!(out, "  {label:<18} {verdict}");
     }
     out
 }
@@ -619,6 +657,32 @@ mod tests {
         assert_eq!(
             http(&Err("refused".into()), PLAIN),
             "HTTP headers: error: refused\n"
+        );
+    }
+
+    /// Tolerance lines show each verdict, the tested version, and errors.
+    #[test]
+    fn intolerance_lines() {
+        let result = Intolerance {
+            version: Some(ProtocolVersion::TLS13),
+            unknown_version: Some(true),
+            unknown_extension: Some(false),
+            grease: None,
+            oversized: Some(true),
+            fragmented: Some(true),
+        };
+        assert_eq!(
+            intolerance(&Ok(result), PLAIN),
+            "ClientHello tolerance TLSv1.3\n  \
+             unknown version    tolerated\n  \
+             unknown extension  rejected\n  \
+             GREASE             not tested\n  \
+             oversized hello    tolerated\n  \
+             fragmented hello   tolerated\n"
+        );
+        assert_eq!(
+            intolerance(&Err("timed out".into()), PLAIN),
+            "ClientHello tolerance: error: timed out\n"
         );
     }
 

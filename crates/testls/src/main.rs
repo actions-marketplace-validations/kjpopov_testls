@@ -15,13 +15,14 @@ use clap::{Parser, Subcommand};
 use testls_checks::{
     Finding, RevocationCheck, Severity, TrustStore, Vulnerability, assess_vulnerabilities,
     certificate_findings, cipher_findings, describe_certificate, explain, explanations,
-    http_findings, key_exchange_findings, ocsp_findings, protocol_findings, revocation_findings,
-    revocation_urls, trust_findings, verify_ocsp_response, vulnerability_findings,
+    http_findings, intolerance_findings, key_exchange_findings, ocsp_findings, protocol_findings,
+    revocation_findings, revocation_urls, trust_findings, verify_ocsp_response,
+    vulnerability_findings,
 };
 use testls_probe::{
-    CipherResult, Fetcher, HttpResponse, KeyExchangeResult, ProtocolResult, ProtocolSupport,
-    Transport, detect_protocols, enumerate_ciphers, fetch_certificates, fetch_http_headers,
-    probe_features, probe_key_exchange,
+    CipherResult, Fetcher, HttpResponse, Intolerance, KeyExchangeResult, ProtocolResult,
+    ProtocolSupport, Transport, detect_protocols, enumerate_ciphers, fetch_certificates,
+    fetch_http_headers, probe_features, probe_intolerance, probe_key_exchange,
 };
 use testls_report::text::{self, CertificateSection, CipherSection, KeyExchangeSection};
 use testls_report::{ColorChoice, Format, Painter, json};
@@ -170,12 +171,25 @@ async fn main() -> ExitCode {
     }
 }
 
-/// Scans `scan_target` with the options in `cli` and returns the exit code.
-async fn scan(cli: &Cli, scan_target: &Target) -> ExitCode {
-    let paint = Painter::new(cli.color.enabled(
+/// Builds the painter from `--color`, the terminal, and `NO_COLOR`.
+fn painter(cli: &Cli) -> Painter {
+    Painter::new(cli.color.enabled(
         cli.color != ColorChoice::Never && colour_terminal(),
         std::env::var("NO_COLOR").ok().as_deref(),
-    ));
+    ))
+}
+
+/// Builds the transport to `addr` with the timeouts in `cli`.
+fn transport(cli: &Cli, addr: SocketAddr) -> Transport {
+    let mut transport = Transport::new(addr);
+    transport.connect_timeout = Duration::from_secs(cli.connect_timeout);
+    transport.read_timeout = Duration::from_secs(cli.read_timeout);
+    transport
+}
+
+/// Scans `scan_target` with the options in `cli` and returns the exit code.
+async fn scan(cli: &Cli, scan_target: &Target) -> ExitCode {
+    let paint = painter(cli);
     let store = match trust_store(cli) {
         Ok(store) => store,
         Err(e) => {
@@ -192,9 +206,7 @@ async fn scan(cli: &Cli, scan_target: &Target) -> ExitCode {
     };
     let sni = cli.sni.as_deref().or(scan_target.default_sni());
 
-    let mut transport = Transport::new(addr);
-    transport.connect_timeout = Duration::from_secs(cli.connect_timeout);
-    transport.read_timeout = Duration::from_secs(cli.read_timeout);
+    let transport = transport(cli, addr);
 
     let started_at = unix_now();
     let target = scan_target.to_string();
@@ -256,6 +268,10 @@ async fn scan(cli: &Cli, scan_target: &Target) -> ExitCode {
     show(format!("\n{}", text::vulnerabilities(&vulns, paint)));
     findings.extend(vulnerability_findings(&vulns));
 
+    let (intolerance, intolerance_findings) = intolerance_section(&transport, &ciphers, sni).await;
+    show(format!("\n{}", text::intolerance(&intolerance, paint)));
+    findings.extend(intolerance_findings);
+
     findings.retain(|f| f.severity > Severity::Ok);
     findings.sort_by_key(|f| std::cmp::Reverse(f.severity));
     show(format!("\n{}", text::findings(&findings, paint)));
@@ -275,6 +291,7 @@ async fn scan(cli: &Cli, scan_target: &Target) -> ExitCode {
                 http: &http,
                 revocation: revocation.as_ref(),
                 vulnerabilities: &vulns,
+                intolerance: &intolerance,
                 findings: &findings,
             })
         );
@@ -505,6 +522,34 @@ async fn vulnerability_section(
     assess_vulnerabilities(protocols, &ciphers, &key_exchange, features.as_ref())
 }
 
+/// Sends unusual but valid `ClientHello`s at the best offered version.
+///
+/// A probe error becomes an informational `intolerance.error` finding.
+async fn intolerance_section(
+    transport: &Transport,
+    ciphers: &[CipherSection],
+    sni: Option<&str>,
+) -> (Result<Intolerance, String>, Vec<Finding>) {
+    let ciphers: Vec<CipherResult> = ciphers
+        .iter()
+        .filter_map(|s| s.outcome.as_ref().ok().cloned())
+        .collect();
+    match probe_intolerance(transport, &ciphers, sni).await {
+        Ok(result) => {
+            let findings = intolerance_findings(&result);
+            (Ok(result), findings)
+        }
+        Err(e) => {
+            let finding = Finding::new(
+                "intolerance.error",
+                Severity::Info,
+                format!("ClientHello tolerance could not be tested: {e}"),
+            );
+            (Err(e.to_string()), vec![finding])
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Unit tests for the scan helpers.
@@ -603,5 +648,26 @@ mod tests {
         let crime = list.iter().find(|v| v.id == "crime").expect("crime");
         assert_eq!(crime.status, testls_checks::VulnStatus::NotTested);
         assert_eq!(vulnerability_findings(&list), vec![]);
+    }
+
+    /// A failed tolerance probe is reported as an info finding.
+    #[tokio::test]
+    async fn intolerance_error_is_info() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let ciphers = [CipherSection {
+            version: ProtocolVersion::TLS12,
+            outcome: Ok(CipherResult {
+                version: ProtocolVersion::TLS12,
+                suites: vec![0xc02f],
+                order: testls_probe::CipherOrder::Server,
+            }),
+        }];
+        let (section, findings) = intolerance_section(&Transport::new(addr), &ciphers, None).await;
+        assert!(section.is_err());
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].id, "intolerance.error");
+        assert_eq!(findings[0].severity, Severity::Info);
     }
 }
