@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Generates the OCSP test fixtures used by crates/testls-checks/src/ocsp.rs.
+# Generates the OCSP and CRL test fixtures used by crates/testls-checks/src
+# (ocsp.rs and revocation.rs).
 #
 # The fixtures are not committed: responses carry the generation time, and the
 # tests derive their clock from the generated "good" response. Run this script
@@ -44,6 +45,22 @@ extendedKeyUsage=OCSPSigning
 basicConstraints=CA:false
 keyUsage=keyEncipherment
 extendedKeyUsage=OCSPSigning
+[urls]
+basicConstraints=CA:false
+subjectAltName=DNS:localhost
+extendedKeyUsage=serverAuth
+authorityInfoAccess=OCSP;URI:http://ocsp.example.test/,caIssuers;URI:http://ca.example.test/ca.der
+crlDistributionPoints=URI:http://crl.example.test/ca.crl,URI:ldap://crl.example.test/ca
+EOF
+
+cat > ca.cnf <<'EOF'
+[ca]
+default_ca=test_ca
+[test_ca]
+database=index.txt
+crlnumber=crlnumber
+default_md=sha256
+default_crl_days=7
 EOF
 
 # key NAME: writes a P-256 key to NAME.key.
@@ -77,6 +94,7 @@ issue responder 0x1003 responder
 issue stray 0x1004 leaf
 issue must-staple 0x1005 muststaple
 issue responder-no-sign 0x1006 responder_no_sign
+issue urls 0x1007 urls
 
 # Status database: leaf is good, other was revoked for key compromise on
 # 2026-10-01; stray is absent and therefore unknown.
@@ -90,11 +108,23 @@ respond stray responder unknown
 respond leaf other unauthorized
 respond leaf responder-no-sign no-digital-signature
 
-for cert in ca leaf other stray must-staple; do
+# CRL from the same database, and one signed by the responder instead of the CA.
+echo 1000 > crlnumber
+"$openssl" ca -config ca.cnf -gencrl -keyfile ca.key -cert ca.pem -out crl.pem 2>/dev/null
+"$openssl" crl -in crl.pem -outform DER -out crl.der
+"$openssl" ca -config ca.cnf -gencrl -keyfile responder.key -cert responder.pem \
+    -out crl-responder.pem 2>/dev/null
+"$openssl" crl -in crl-responder.pem -outform DER -out crl-responder.der
+
+# The request openssl builds for leaf, to compare with ours.
+cp good.req request.der
+
+for cert in ca leaf other stray must-staple urls; do
     "$openssl" x509 -in "$cert.pem" -outform DER -out "$cert.der"
     cp "$cert.der" "$out/ocsp-$cert.der"
 done
-for response in good revoked delegated unknown unauthorized no-digital-signature; do
+for response in good revoked delegated unknown unauthorized no-digital-signature \
+    crl crl-responder request; do
     cp "$response.der" "$out/ocsp-$response.der"
 done
 echo "wrote OCSP fixtures to $out"
