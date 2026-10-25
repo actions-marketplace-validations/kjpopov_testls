@@ -12,7 +12,8 @@ use clap::Parser;
 use clap::builder::TypedValueParser as _;
 use testls_checks::{
     Finding, Severity, TrustStore, certificate_findings, cipher_findings, describe_certificate,
-    http_findings, key_exchange_findings, protocol_findings, trust_findings,
+    http_findings, key_exchange_findings, ocsp_findings, protocol_findings, trust_findings,
+    verify_ocsp_response,
 };
 use testls_probe::{
     HttpResponse, ProtocolSupport, Transport, detect_protocols, enumerate_ciphers,
@@ -312,6 +313,9 @@ async fn certificate_section(
     let now = unix_now();
     let mut findings = certificate_findings(&chain.certificates, Some(host), now);
     findings.extend(trust_findings(&chain.certificates, now, store));
+    let ocsp_response = chain.ocsp_response.as_deref();
+    findings.extend(ocsp_findings(&chain.certificates, ocsp_response, now));
+    let ocsp = ocsp_response.map(|der| verify_ocsp_response(der, &chain.certificates, now));
     let section = CertificateSection {
         version: chain.version,
         certificates: chain
@@ -319,6 +323,7 @@ async fn certificate_section(
             .iter()
             .map(|der| describe_certificate(der))
             .collect(),
+        ocsp,
     };
     (Ok(section), findings)
 }

@@ -248,8 +248,10 @@ fn stale_finding(status: &OcspStatus, now: i64) -> Option<Finding> {
     })
 }
 
-/// Formats a Unix timestamp like certificate validity dates.
-fn display_time(time: i64) -> String {
+/// Formats a Unix timestamp like certificate validity dates, e.g.
+/// `Nov  1 08:48:34 2026 +00:00`.
+#[must_use]
+pub fn display_time(time: i64) -> String {
     ASN1Time::from_timestamp(time).map_or_else(|_| time.to_string(), |t| t.to_string())
 }
 

@@ -8,7 +8,8 @@ use std::net::SocketAddr;
 
 use serde::Serialize;
 use testls_checks::{
-    Finding, cipher_name, cipher_severity, group_name, group_severity, parse_hsts,
+    CertStatus, Finding, OcspStatus, cipher_name, cipher_severity, group_name, group_severity,
+    parse_hsts, revocation_reason_name,
 };
 use testls_probe::{CipherOrder, HttpResponse, ProtocolResult, ProtocolSupport};
 
@@ -161,7 +162,37 @@ struct CertificateJson<'a> {
     protocol: Option<String>,
     /// Certificates, leaf first.
     chain: Vec<CertJson<'a>>,
+    /// Stapled OCSP response, or `null` when the chain could not be
+    /// retrieved.
+    ocsp: Option<OcspJson<'a>>,
     /// Error message when the chain could not be retrieved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'a str>,
+}
+
+/// Stapled OCSP response for the leaf certificate.
+#[derive(Debug, Serialize)]
+struct OcspJson<'a> {
+    /// Whether the server stapled a response.
+    stapled: bool,
+    /// `good`, `revoked`, `unknown`, `invalid`, or `null` when not stapled.
+    status: Option<&'static str>,
+    /// When the response was signed, Unix time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    produced_at: Option<i64>,
+    /// Start of the validity interval, Unix time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    this_update: Option<i64>,
+    /// End of the validity interval, Unix time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_update: Option<i64>,
+    /// Revocation time, Unix time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revocation_time: Option<i64>,
+    /// RFC 5280 `CRLReason` name, when revoked with a reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revocation_reason: Option<&'static str>,
+    /// Why the response is invalid.
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<&'a str>,
 }
@@ -380,14 +411,52 @@ fn certificate(section: &Result<CertificateSection, String>) -> CertificateJson<
                     },
                 })
                 .collect(),
+            ocsp: Some(ocsp(chain.ocsp.as_ref())),
             error: None,
         },
         Err(e) => CertificateJson {
             protocol: None,
             chain: Vec::new(),
+            ocsp: None,
             error: Some(e),
         },
     }
+}
+
+/// Converts the stapled OCSP result.
+fn ocsp(section: Option<&Result<OcspStatus, String>>) -> OcspJson<'_> {
+    let mut json = OcspJson {
+        stapled: section.is_some(),
+        status: None,
+        produced_at: None,
+        this_update: None,
+        next_update: None,
+        revocation_time: None,
+        revocation_reason: None,
+        error: None,
+    };
+    match section {
+        None => {}
+        Some(Err(e)) => {
+            json.status = Some("invalid");
+            json.error = Some(e);
+        }
+        Some(Ok(status)) => {
+            json.produced_at = Some(status.produced_at);
+            json.this_update = Some(status.this_update);
+            json.next_update = status.next_update;
+            json.status = Some(match status.status {
+                CertStatus::Good => "good",
+                CertStatus::Revoked { time, reason } => {
+                    json.revocation_time = Some(time);
+                    json.revocation_reason = reason.map(revocation_reason_name);
+                    "revoked"
+                }
+                CertStatus::Unknown => "unknown",
+            });
+        }
+    }
+    json
 }
 
 /// Converts the HTTP section; only the first HSTS header counts
@@ -482,6 +551,7 @@ mod tests {
                 }),
                 Err("bad".into()),
             ],
+            ocsp: None,
         });
         let http = Err("reset".into());
         let findings = [Finding::new("cert.untrusted", Severity::High, "untrusted")];
@@ -531,11 +601,10 @@ mod tests {
                         },
                         {"error": "bad"},
                     ],
+                    "ocsp": {"stapled": false, "status": null},
                 },
                 "http": {"status": null, "headers": {}, "hsts": null, "error": "reset"},
-                "findings": [
-                    {"id": "cert.untrusted", "severity": "high", "message": "untrusted"},
-                ],
+                "findings": [{"id": "cert.untrusted", "severity": "high", "message": "untrusted"}],
             })
         );
     }
@@ -625,7 +694,7 @@ mod tests {
         assert_eq!(v["target"]["sni"], Value::Null);
         assert_eq!(
             v["certificate"],
-            json!({"protocol": null, "chain": [], "error": "refused"})
+            json!({"protocol": null, "chain": [], "ocsp": null, "error": "refused"})
         );
         assert_eq!(v["findings"], json!([]));
     }
@@ -676,6 +745,47 @@ mod tests {
                     "preload_eligible": true,
                 },
             })
+        );
+    }
+
+    /// The OCSP object carries the status, validity interval, revocation
+    /// details, or the reason the response is invalid.
+    #[test]
+    fn ocsp_object() {
+        let revoked = Ok(OcspStatus {
+            status: CertStatus::Revoked {
+                time: 5,
+                reason: Some(1),
+            },
+            produced_at: 2,
+            this_update: 3,
+            next_update: None,
+        });
+        assert_eq!(
+            serde_json::to_value(ocsp(Some(&revoked))).unwrap(),
+            json!({
+                "stapled": true,
+                "status": "revoked",
+                "produced_at": 2,
+                "this_update": 3,
+                "revocation_time": 5,
+                "revocation_reason": "keyCompromise",
+            })
+        );
+        let good = Ok(OcspStatus {
+            status: CertStatus::Good,
+            produced_at: 2,
+            this_update: 3,
+            next_update: Some(4),
+        });
+        assert_eq!(
+            serde_json::to_value(ocsp(Some(&good))).unwrap(),
+            json!({"stapled": true, "status": "good", "produced_at": 2, "this_update": 3, "next_update": 4})
+        );
+        let invalid = Err("bad signature".into());
+        assert_eq!(
+            serde_json::to_value(ocsp(Some(&invalid))).unwrap(),
+            json!({"stapled": true, "status": "invalid", "error": "bad signature"})
         );
     }
 }
