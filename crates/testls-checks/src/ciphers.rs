@@ -110,6 +110,11 @@ pub(crate) fn rule_keys() -> impl Iterator<Item = &'static str> {
     RULES.iter().map(|r| r.key)
 }
 
+/// Whether suite `name` has the weakness of rule `key`.
+pub(crate) fn has_weakness(key: &str, name: &str) -> bool {
+    RULES.iter().any(|r| r.key == key && (r.matches)(name))
+}
+
 /// Name of a suite as reported for `version`, or `"unknown"`.
 #[must_use]
 pub fn cipher_name(version: ProtocolVersion, id: u32) -> &'static str {

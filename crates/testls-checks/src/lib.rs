@@ -10,6 +10,7 @@ mod ocsp;
 mod protocols;
 mod revocation;
 mod trust;
+mod vulnerabilities;
 
 use std::fmt;
 
@@ -28,6 +29,9 @@ pub use revocation::{
     revocation_urls, verify_crl,
 };
 pub use trust::{TrustStore, trust_findings};
+pub use vulnerabilities::{
+    VulnStatus, Vulnerability, assess_vulnerabilities, vulnerability_findings,
+};
 
 /// How serious a finding is. Ordered from least to most severe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
