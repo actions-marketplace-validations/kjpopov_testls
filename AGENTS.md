@@ -22,6 +22,7 @@ CI runs with `RUSTFLAGS=-D warnings`, so every warning fails the build.
 Run locally:
 
 ```sh
+scripts/gen-ocsp-fixtures.sh    # OCSP test fixtures (needs OpenSSL 3+)
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace

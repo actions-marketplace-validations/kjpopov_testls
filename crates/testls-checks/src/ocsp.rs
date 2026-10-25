@@ -648,7 +648,8 @@ impl<'a> Der<'a> {
 
 /// Picks the certificate whose key signed the response: the issuer itself
 /// or a delegated responder it issued with the OCSP signing EKU
-/// (RFC 6960 §4.2.2.2).
+/// (RFC 6960 §4.2.2.2) whose key usage, if present, allows
+/// `digitalSignature`.
 fn signer<'c>(
     responder: &ResponderId<'_>,
     certs: &'c [X509Certificate<'c>],
@@ -671,6 +672,15 @@ fn signer<'c>(
     );
     if !authorised {
         return Err("responder certificate is not authorised for OCSP signing".into());
+    }
+    // RFC 5280 §4.2.1.3: a present keyUsage must allow digitalSignature.
+    let signing_allowed = match delegate.key_usage() {
+        Ok(None) => true,
+        Ok(Some(usage)) => usage.value.digital_signature(),
+        Err(_) => false,
+    };
+    if !signing_allowed {
+        return Err("responder certificate key usage does not allow signing".into());
     }
     let valid = ASN1Time::from_timestamp(now).is_ok_and(|now| delegate.validity().is_valid_at(now));
     if !valid {
@@ -704,12 +714,35 @@ mod tests {
     /// Response for `LEAF` signed by `OTHER`, which lacks the OCSP EKU.
     const UNAUTHORIZED: &[u8] = include_bytes!("testdata/ocsp-unauthorized.der");
 
-    /// 2026-10-24, before the responses were produced.
-    const BEFORE: i64 = 1_792_800_000;
-    /// 2026-10-26, inside every response's validity interval.
-    const NOW: i64 = 1_792_972_800;
-    /// 2026-11-02, after every response's `nextUpdate`.
-    const AFTER: i64 = 1_793_577_600;
+    /// Delegated response for `LEAF` from a responder whose key usage lacks
+    /// `digitalSignature`.
+    const NO_DIGITAL_SIGNATURE: &[u8] = include_bytes!("testdata/ocsp-no-digital-signature.der");
+
+    /// One day in seconds.
+    const DAY: i64 = 86_400;
+
+    /// `thisUpdate` of the generated responses; the fixtures are made by
+    /// `scripts/gen-ocsp-fixtures.sh`, so test times are relative to it.
+    fn issued() -> i64 {
+        verify_ocsp_response(GOOD, &chain(LEAF), 0)
+            .expect("run scripts/gen-ocsp-fixtures.sh")
+            .this_update
+    }
+
+    /// A day before the responses were produced.
+    fn before() -> i64 {
+        issued() - DAY
+    }
+
+    /// A day after production, inside every response's validity interval.
+    fn now() -> i64 {
+        issued() + DAY
+    }
+
+    /// A day after every response's `nextUpdate`.
+    fn after() -> i64 {
+        issued() + 8 * DAY
+    }
 
     /// Chain of `leaf` and the test CA.
     fn chain(leaf: &[u8]) -> Vec<Vec<u8>> {
@@ -726,19 +759,19 @@ mod tests {
 
     /// Error text of a response that fails verification.
     fn error(response: &[u8], leaf: &[u8]) -> String {
-        verify_ocsp_response(response, &chain(leaf), NOW).unwrap_err()
+        verify_ocsp_response(response, &chain(leaf), now()).unwrap_err()
     }
 
     /// A CA-signed good response verifies and is fresh.
     #[test]
     fn good_response() {
-        let status = verify_ocsp_response(GOOD, &chain(LEAF), NOW).unwrap();
+        let status = verify_ocsp_response(GOOD, &chain(LEAF), now()).unwrap();
         assert_eq!(status.status, CertStatus::Good);
-        assert!(status.produced_at > BEFORE && status.produced_at < NOW);
+        assert!(status.produced_at > before() && status.produced_at < now());
         assert_eq!(status.this_update, status.produced_at);
         assert_eq!(status.next_update, Some(status.this_update + 7 * 86_400));
         assert_eq!(
-            findings(LEAF, Some(GOOD), NOW),
+            findings(LEAF, Some(GOOD), now()),
             [("ocsp.stapled".into(), Severity::Ok)]
         );
     }
@@ -746,10 +779,10 @@ mod tests {
     /// A delegated responder authorised by the issuer is accepted.
     #[test]
     fn delegated_responder() {
-        let status = verify_ocsp_response(DELEGATED, &chain(LEAF), NOW).unwrap();
+        let status = verify_ocsp_response(DELEGATED, &chain(LEAF), now()).unwrap();
         assert_eq!(status.status, CertStatus::Good);
         assert_eq!(
-            findings(LEAF, Some(DELEGATED), BEFORE),
+            findings(LEAF, Some(DELEGATED), before()),
             [("ocsp.invalid".into(), Severity::Medium)],
             "responder certificate must be valid at scan time"
         );
@@ -758,7 +791,7 @@ mod tests {
     /// Revoked and unknown statuses are reported.
     #[test]
     fn revoked_and_unknown() {
-        let status = verify_ocsp_response(REVOKED, &chain(OTHER), NOW).unwrap();
+        let status = verify_ocsp_response(REVOKED, &chain(OTHER), now()).unwrap();
         assert_eq!(
             status.status,
             CertStatus::Revoked {
@@ -766,7 +799,7 @@ mod tests {
                 reason: Some(1)
             }
         );
-        let revoked = ocsp_findings(&chain(OTHER), Some(REVOKED), NOW);
+        let revoked = ocsp_findings(&chain(OTHER), Some(REVOKED), now());
         assert_eq!(revoked[0].id, "ocsp.revoked");
         assert_eq!(revoked[0].severity, Severity::Critical);
         assert_eq!(
@@ -774,7 +807,7 @@ mod tests {
             "certificate was revoked on Oct  1 00:00:00 2026 +00:00 (keyCompromise)"
         );
         assert_eq!(
-            findings(STRAY, Some(UNKNOWN), NOW),
+            findings(STRAY, Some(UNKNOWN), now()),
             [("ocsp.unknown".into(), Severity::Medium)]
         );
     }
@@ -783,11 +816,11 @@ mod tests {
     #[test]
     fn freshness() {
         assert_eq!(
-            findings(LEAF, Some(GOOD), BEFORE),
+            findings(LEAF, Some(GOOD), before()),
             [("ocsp.not_yet_valid".into(), Severity::Medium)]
         );
         assert_eq!(
-            findings(LEAF, Some(GOOD), AFTER),
+            findings(LEAF, Some(GOOD), after()),
             [("ocsp.expired".into(), Severity::Medium)]
         );
     }
@@ -798,13 +831,16 @@ mod tests {
     fn missing_next_update() {
         let status = OcspStatus {
             status: CertStatus::Good,
-            produced_at: NOW,
-            this_update: NOW,
+            produced_at: now(),
+            this_update: now(),
             next_update: None,
         };
-        assert!(stale_finding(&status, NOW + MAX_AGE_WITHOUT_NEXT_UPDATE).is_none());
-        let stale = stale_finding(&status, NOW + MAX_AGE_WITHOUT_NEXT_UPDATE + CLOCK_SKEW + 1)
-            .expect("stale");
+        assert!(stale_finding(&status, now() + MAX_AGE_WITHOUT_NEXT_UPDATE).is_none());
+        let stale = stale_finding(
+            &status,
+            now() + MAX_AGE_WITHOUT_NEXT_UPDATE + CLOCK_SKEW + 1,
+        )
+        .expect("stale");
         assert_eq!(stale.id, "ocsp.expired");
         assert_eq!(stale.severity, Severity::Medium);
     }
@@ -813,11 +849,11 @@ mod tests {
     #[test]
     fn missing_staple() {
         assert_eq!(
-            findings(LEAF, None, NOW),
+            findings(LEAF, None, now()),
             [("ocsp.not_stapled".into(), Severity::Info)]
         );
         assert_eq!(
-            findings(MUST_STAPLE, None, NOW),
+            findings(MUST_STAPLE, None, now()),
             [("ocsp.must_staple_missing".into(), Severity::High)]
         );
     }
@@ -835,19 +871,25 @@ mod tests {
             "responder certificate is not authorised for OCSP signing"
         );
         assert_eq!(
-            verify_ocsp_response(GOOD, &[LEAF.to_vec()], NOW).unwrap_err(),
+            error(NO_DIGITAL_SIGNATURE, LEAF),
+            "responder certificate key usage does not allow signing"
+        );
+        assert_eq!(
+            verify_ocsp_response(GOOD, &[LEAF.to_vec()], now()).unwrap_err(),
             "issuer certificate missing from chain"
         );
         assert_eq!(
-            verify_ocsp_response(GOOD, &[LEAF.to_vec(), OTHER.to_vec()], NOW).unwrap_err(),
+            verify_ocsp_response(GOOD, &[LEAF.to_vec(), OTHER.to_vec()], now()).unwrap_err(),
             "no response for the leaf certificate"
         );
         let mut tampered = GOOD.to_vec();
-        let produced_at = tampered.windows(8).position(|w| w == b"20261025").unwrap();
-        tampered[produced_at + 3] = b'7';
+        // The first GeneralizedTime is producedAt; change its tens of minutes.
+        let produced_at = tampered.windows(2).position(|w| w == [0x18, 0x0f]).unwrap();
+        let minute = &mut tampered[produced_at + 2 + 10];
+        *minute = if *minute == b'0' { b'1' } else { b'0' };
         assert!(error(&tampered, LEAF).starts_with("signature does not verify"));
         assert_eq!(
-            findings(LEAF, Some(&tampered), NOW),
+            findings(LEAF, Some(&tampered), now()),
             [("ocsp.invalid".into(), Severity::Medium)]
         );
     }

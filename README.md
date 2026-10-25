@@ -97,6 +97,7 @@ A web service (`testls serve`, REST API and browser UI) is planned for v0.4.
 git clone https://github.com/kjpopov/testls
 cd testls
 cargo build --release
+scripts/gen-ocsp-fixtures.sh   # test fixtures, needs OpenSSL 3 or later
 cargo test
 ```
 
