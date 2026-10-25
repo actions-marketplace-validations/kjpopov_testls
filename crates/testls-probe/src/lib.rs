@@ -2,6 +2,7 @@
 
 mod certificates;
 mod ciphers;
+mod details;
 mod features;
 mod fetch;
 mod groups;
@@ -22,6 +23,7 @@ use tokio::time::timeout;
 
 pub use certificates::{CertificateChain, fetch_certificates};
 pub use ciphers::{CipherOrder, CipherResult, enumerate_ciphers};
+pub use details::{HandshakeDetails, probe_details};
 pub use features::{HandshakeFeatures, probe_features};
 pub use fetch::{Fetcher, HttpBody};
 pub use groups::{KeyExchangeResult, probe_key_exchange};
