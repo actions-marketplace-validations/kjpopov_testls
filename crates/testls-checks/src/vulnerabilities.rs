@@ -131,6 +131,31 @@ impl Inputs<'_> {
         })
     }
 
+    /// Whether an offered SSLv3..TLSv1.2 version lacks a key exchange result,
+    /// or accepted a DHE suite without a DH parameter measurement.
+    fn dh_unmeasured(&self) -> bool {
+        self.protocols.iter().any(|p| {
+            let legacy = (ProtocolVersion::SSL3..ProtocolVersion::TLS13).contains(&p.version);
+            if !legacy || p.support == ProtocolSupport::NotSupported {
+                return false;
+            }
+            let Some(k) = self.key_exchange.iter().find(|k| k.version == p.version) else {
+                return true;
+            };
+            let dhe = self
+                .ciphers
+                .iter()
+                .filter(|c| c.version == p.version)
+                .flat_map(|c| &c.suites)
+                .map(|&id| cipher_name(p.version, id))
+                .any(|n| {
+                    (n.starts_with("TLS_DHE_") || n.starts_with("TLS_DH_anon_"))
+                        && !n.contains("_PSK_")
+                });
+            dhe && k.dh_bits.is_none()
+        })
+    }
+
     /// Key exchange results for versions before TLSv1.3.
     fn legacy_key_exchange(&self) -> impl Iterator<Item = &KeyExchangeResult> {
         self.key_exchange
@@ -268,6 +293,15 @@ fn logjam(inputs: &Inputs) -> Vulnerability {
             Some(p) => format!("{bits}-bit {}", p.name),
             None => format!("{bits}-bit custom DH group"),
         });
+    }
+    if inputs.dh_unmeasured() {
+        return vuln(
+            id,
+            name,
+            VulnStatus::NotTested,
+            "DH parameters not measured for every offered version",
+            "",
+        );
     }
     match detail {
         Some(text) => vuln(id, name, VulnStatus::NotVulnerable, text, ""),
@@ -668,6 +702,20 @@ mod tests {
 
         let v = assess(&[], &[]);
         assert_eq!(v.status, VulnStatus::NotTested);
+
+        // TLS_DHE_RSA_WITH_AES_128_GCM_SHA256 accepted, DH size not measured.
+        let v = assess(&[ciphers(tls12, &[0x009e])], &[kx(tls12, None, None)]);
+        assert_eq!(v.status, VulnStatus::NotTested);
+
+        // One offered version without key exchange data.
+        let p = protocols(&[ProtocolVersion::TLS11, tls12]);
+        let k = [kx(tls12, Some(vec![0xc5; 256]), None)];
+        let list = assess_vulnerabilities(&p, &[], &k, None);
+        assert_eq!(status(&list, "logjam"), VulnStatus::NotTested);
+        // A measured weak group still wins.
+        let k = [kx(tls12, Some(vec![0xff; 64]), None)];
+        let list = assess_vulnerabilities(&p, &[], &k, None);
+        assert_eq!(status(&list, "logjam"), VulnStatus::Vulnerable);
     }
 
     /// Missing data leads to "not tested" rather than a guess.
