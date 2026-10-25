@@ -24,7 +24,9 @@ pub struct HandshakeFeatures {
     pub legacy_version: Option<ProtocolVersion>,
     /// Whether the server agreed to DEFLATE compression.
     pub compression: Option<bool>,
-    /// Whether the server answered with a `renegotiation_info` extension.
+    /// Whether the server answered with an empty `renegotiation_info`
+    /// extension, as RFC 5746 (section 3.6) requires on an initial
+    /// handshake.
     pub secure_renegotiation: Option<bool>,
     /// Version of the `TLS_FALLBACK_SCSV` hello, below the server's best.
     pub fallback_version: Option<ProtocolVersion>,
@@ -119,7 +121,9 @@ pub async fn probe_features(
         features.legacy_version = Some(legacy.version);
         if let Some(sh) = accepted(legacy.version, &suites, response.as_ref())? {
             features.compression = Some(sh.compression_method == COMPRESSION_DEFLATE);
-            features.secure_renegotiation = Some(sh.extension(ext::RENEGOTIATION_INFO).is_some());
+            // An empty renegotiated_connection is a single zero length byte.
+            features.secure_renegotiation =
+                Some(sh.extension(ext::RENEGOTIATION_INFO) == Some(&[0][..]));
         }
     }
 
@@ -152,8 +156,8 @@ mod tests {
     struct Behaviour {
         /// Accept DEFLATE when offered.
         deflate: bool,
-        /// Send `renegotiation_info` back.
-        renegotiation: bool,
+        /// `renegotiation_info` body to send back, if any.
+        renegotiation: Option<&'static [u8]>,
         /// Refuse hellos carrying `TLS_FALLBACK_SCSV`.
         fallback: bool,
     }
@@ -189,13 +193,14 @@ mod tests {
         body.push(u8::from(
             behaviour.deflate && methods.contains(&COMPRESSION_DEFLATE),
         ));
-        let exts: &[u8] = if behaviour.renegotiation {
-            &[0xff, 0x01, 0, 1, 0]
-        } else {
-            &[]
-        };
+        let mut exts = Vec::new();
+        if let Some(info) = behaviour.renegotiation {
+            exts.extend([0xff, 0x01]);
+            exts.extend(u16::try_from(info.len()).unwrap().to_be_bytes());
+            exts.extend(info);
+        }
         body.extend(u16::try_from(exts.len()).unwrap().to_be_bytes());
-        body.extend(exts);
+        body.extend(&exts);
         let mut hs = vec![2, 0];
         hs.extend(u16::try_from(body.len()).unwrap().to_be_bytes());
         hs.extend(body);
@@ -241,7 +246,7 @@ mod tests {
     async fn protected_server() {
         let addr = serve(Behaviour {
             deflate: false,
-            renegotiation: true,
+            renegotiation: Some(&[0]),
             fallback: true,
         })
         .await;
@@ -260,7 +265,7 @@ mod tests {
     async fn unprotected_server() {
         let addr = serve(Behaviour {
             deflate: true,
-            renegotiation: false,
+            renegotiation: None,
             fallback: false,
         })
         .await;
@@ -270,6 +275,24 @@ mod tests {
         assert_eq!(f.compression, Some(true));
         assert_eq!(f.secure_renegotiation, Some(false));
         assert_eq!(f.fallback_scsv, Some(false));
+    }
+
+    /// A malformed or non-empty `renegotiation_info` on an initial
+    /// handshake does not count as secure renegotiation.
+    #[tokio::test]
+    async fn non_empty_renegotiation_info() {
+        for info in [&[][..], &[1, 0xaa][..], &[0, 0][..]] {
+            let addr = serve(Behaviour {
+                deflate: false,
+                renegotiation: Some(info),
+                fallback: true,
+            })
+            .await;
+            let f = probe_features(&Transport::new(addr), &two_versions(), None)
+                .await
+                .unwrap();
+            assert_eq!(f.secure_renegotiation, Some(false), "{info:?}");
+        }
     }
 
     /// With a single version there is nothing to fall back from, and a

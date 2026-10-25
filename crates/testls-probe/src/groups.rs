@@ -29,9 +29,10 @@ pub struct KeyExchangeResult {
     pub dh_bits: Option<usize>,
     /// The DH prime itself (big-endian), if the server accepted a DHE suite.
     pub dh_prime: Option<Vec<u8>>,
-    /// Whether two DHE handshakes got the same server public value, which
-    /// means the server reuses its ephemeral key (a Raccoon precondition).
-    /// `None` if the second handshake did not complete with a DHE suite.
+    /// Whether two DHE handshakes got the same parameters and server public
+    /// value, which means the server reuses its ephemeral key (a Raccoon
+    /// precondition). `None` if the second handshake failed or did not
+    /// complete with a DHE suite.
     pub dh_key_reused: Option<bool>,
 }
 
@@ -271,9 +272,13 @@ pub async fn probe_key_exchange(
         && !dhe.is_empty()
         && let Some(first) = dh_params(transport, version, &dhe, sni).await?
     {
-        let second = dh_params(transport, version, &dhe, sni).await?;
+        // A failed second handshake only leaves reuse unknown.
+        let second = dh_params(transport, version, &dhe, sni)
+            .await
+            .ok()
+            .flatten();
         result.dh_bits = Some(first.prime_bits());
-        result.dh_key_reused = second.map(|s| s.public_key == first.public_key);
+        result.dh_key_reused = second.map(|s| s == first);
         result.dh_prime = Some(first.p);
     }
     Ok(result)
@@ -584,6 +589,36 @@ mod mock_server {
         .unwrap();
         assert_eq!(r.dh_bits, Some(512));
         assert_eq!(r.dh_key_reused, Some(true));
+    }
+
+    /// If the second DHE handshake fails, the first result is kept and
+    /// reuse stays unknown.
+    #[tokio::test]
+    async fn second_dh_handshake_fails() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0; 1 << 16];
+            let mut n = 0;
+            while n < 5 || n < 5 + usize::from(u16::from_be_bytes([buf[3], buf[4]])) {
+                n += s.read(&mut buf[n..]).await.unwrap();
+            }
+            s.write_all(&reply(&buf[..n], &[], 64, false))
+                .await
+                .unwrap();
+            // Dropping the listener refuses the second connection.
+        });
+        let r = probe_key_exchange(
+            &Transport::new(addr),
+            ProtocolVersion::TLS12,
+            &[0x009e],
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(r.dh_bits, Some(512));
+        assert_eq!(r.dh_key_reused, None);
     }
 
     /// Without ECDHE or DHE suites nothing is probed.
