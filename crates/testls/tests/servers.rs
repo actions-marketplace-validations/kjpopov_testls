@@ -219,6 +219,7 @@ fn json_report() {
         serde_json::Value::Null
     );
     assert_eq!(v["http"]["hsts"], serde_json::Value::Null);
+    assert_eq!(v["revocation"], serde_json::Value::Null);
     assert_eq!(v["findings"][0]["severity"], "critical");
     assert!(
         v["findings"]
@@ -235,6 +236,26 @@ fn json_report() {
             .any(|f| f["id"] == "hsts.missing" && f["severity"] == "low")
     );
     assert_eq!(s.code, 1);
+}
+
+/// `--revocation` adds a revocation section; the test certificate names no
+/// OCSP responder or CRL, so no other server is contacted.
+#[test]
+#[ignore = "needs tests/servers running"]
+fn revocation_without_sources() {
+    let s = scan("127.0.0.1:14434", &["--revocation", "--ca-file", CA_FILE]);
+    assert!(
+        s.has("Revocation\n  no HTTP OCSP responder or CRL named\n"),
+        "{}",
+        s.stdout
+    );
+    assert!(s.has("info     certificate names no HTTP OCSP responder or CRL"));
+    let j = scan(
+        "127.0.0.1:14434",
+        &["--revocation", "--ca-file", CA_FILE, "--format", "json"],
+    );
+    let v: serde_json::Value = serde_json::from_str(&j.stdout).expect("valid JSON");
+    assert_eq!(v["revocation"], serde_json::json!({"checks": []}));
 }
 
 /// Without the test CA the same server's certificate is untrusted, and an

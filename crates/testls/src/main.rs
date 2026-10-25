@@ -1,5 +1,6 @@
 //! `testls` command-line interface.
 
+mod revocation;
 mod target;
 
 use std::io::IsTerminal as _;
@@ -11,12 +12,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use clap::Parser;
 use clap::builder::TypedValueParser as _;
 use testls_checks::{
-    Finding, Severity, TrustStore, certificate_findings, cipher_findings, describe_certificate,
-    http_findings, key_exchange_findings, ocsp_findings, protocol_findings, trust_findings,
-    verify_ocsp_response,
+    Finding, RevocationCheck, Severity, TrustStore, certificate_findings, cipher_findings,
+    describe_certificate, http_findings, key_exchange_findings, ocsp_findings, protocol_findings,
+    revocation_findings, revocation_urls, trust_findings, verify_ocsp_response,
 };
 use testls_probe::{
-    HttpResponse, ProtocolSupport, Transport, detect_protocols, enumerate_ciphers,
+    Fetcher, HttpResponse, ProtocolSupport, Transport, detect_protocols, enumerate_ciphers,
     fetch_certificates, fetch_http_headers, probe_key_exchange,
 };
 use testls_report::text::{self, CertificateSection, CipherSection, KeyExchangeSection};
@@ -60,6 +61,12 @@ struct Cli {
     /// platform store).
     #[arg(long, conflicts_with = "ca_file")]
     system_roots: bool,
+
+    /// Also ask the certificate issuer's OCSP responder, falling back to its
+    /// CRLs, whether the leaf certificate is revoked. This contacts servers
+    /// other than the target.
+    #[arg(long)]
+    revocation: bool,
 
     /// Colour the output: `auto` colours only on a terminal when `NO_COLOR`
     /// is unset.
@@ -162,9 +169,19 @@ async fn main() -> ExitCode {
     }
 
     let host = sni.map_or_else(|| addr.ip().to_string(), str::to_owned);
-    let (certificate, cert_findings) = certificate_section(&transport, sni, &host, &store).await;
+    let (certificate, cert_findings, chain) =
+        certificate_section(&transport, sni, &host, &store).await;
     show(format!("\n{}", text::certificate(&certificate, paint)));
     findings.extend(cert_findings);
+
+    let revocation = if cli.revocation {
+        let (section, revocation_findings) = revocation_section(&transport, chain.as_deref()).await;
+        show(format!("\n{}", text::revocation(&section, paint)));
+        findings.extend(revocation_findings);
+        Some(section)
+    } else {
+        None
+    };
 
     let (http, http_findings) = http_section(&transport, sni).await;
     show(format!("\n{}", text::http(&http, paint)));
@@ -187,6 +204,7 @@ async fn main() -> ExitCode {
                 key_exchange: &key_exchange,
                 certificate: &certificate,
                 http: &http,
+                revocation: revocation.as_ref(),
                 findings: &findings,
             })
         );
@@ -289,8 +307,16 @@ fn kx_findings(section: &KeyExchangeSection) -> Vec<Finding> {
     }
 }
 
-/// Fetches and checks the certificate chain, returning its description and
-/// findings.
+/// Certificate section, its findings, and the DER chain when it was
+/// retrieved.
+type CertificateOutcome = (
+    Result<CertificateSection, String>,
+    Vec<Finding>,
+    Option<Vec<Vec<u8>>>,
+);
+
+/// Fetches and checks the certificate chain, returning its description,
+/// findings, and the chain itself.
 ///
 /// The leaf is checked against `host`, the SNI name or the target IP.
 async fn certificate_section(
@@ -298,7 +324,7 @@ async fn certificate_section(
     sni: Option<&str>,
     host: &str,
     store: &TrustStore,
-) -> (Result<CertificateSection, String>, Vec<Finding>) {
+) -> CertificateOutcome {
     let chain = match fetch_certificates(transport, sni).await {
         Ok(chain) => chain,
         Err(e) => {
@@ -307,7 +333,7 @@ async fn certificate_section(
                 Severity::Info,
                 format!("certificate could not be retrieved: {e}"),
             );
-            return (Err(e.to_string()), vec![finding]);
+            return (Err(e.to_string()), vec![finding], None);
         }
     };
     let now = unix_now();
@@ -325,7 +351,45 @@ async fn certificate_section(
             .collect(),
         ocsp,
     };
-    (Ok(section), findings)
+    (Ok(section), findings, Some(chain.certificates))
+}
+
+/// Checks the leaf of `chain` against the issuer's OCSP responders and
+/// CRLs. Without a chain or with unreadable URLs the check cannot run,
+/// which is informational.
+///
+/// Requests use the connect and read timeouts of `transport`.
+async fn revocation_section(
+    transport: &Transport,
+    chain: Option<&[Vec<u8>]>,
+) -> (Result<Vec<RevocationCheck>, String>, Vec<Finding>) {
+    let fetcher = Fetcher {
+        connect_timeout: transport.connect_timeout,
+        read_timeout: transport.read_timeout,
+        max_body: 0,
+    };
+    let urls = chain
+        .ok_or_else(|| "certificate chain could not be retrieved".to_owned())
+        .and_then(|chain| {
+            let leaf = chain.first().ok_or("empty certificate chain")?;
+            revocation_urls(leaf).map(|urls| (chain, urls))
+        });
+    match urls {
+        Ok((chain, urls)) => {
+            let now = unix_now();
+            let checks = revocation::check_revocation(fetcher, chain, &urls, now).await;
+            let findings = revocation_findings(&checks, now);
+            (Ok(checks), findings)
+        }
+        Err(e) => {
+            let finding = Finding::new(
+                "revocation.error",
+                Severity::Info,
+                format!("revocation status could not be checked: {e}"),
+            );
+            (Err(e), vec![finding])
+        }
+    }
 }
 
 /// Fetches the reply to `GET /` and checks HSTS and security headers.
@@ -375,6 +439,21 @@ mod tests {
             "cipher enumeration failed"
         );
         assert_eq!(kx_findings(&kx)[0].id, "group.error");
+    }
+
+    /// Without a certificate chain the revocation check reports why.
+    #[tokio::test]
+    async fn revocation_without_chain() {
+        let transport = Transport::new(SocketAddr::from(([127, 0, 0, 1], 9)));
+        let (section, findings) = revocation_section(&transport, None).await;
+        assert_eq!(
+            section.unwrap_err(),
+            "certificate chain could not be retrieved"
+        );
+        assert_eq!(findings[0].id, "revocation.error");
+        let (section, findings) = revocation_section(&transport, Some(&[])).await;
+        assert_eq!(section.unwrap_err(), "empty certificate chain");
+        assert_eq!(findings[0].severity, Severity::Info);
     }
 
     /// A failed HTTP fetch becomes an informational finding.
