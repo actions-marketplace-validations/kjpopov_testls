@@ -4,7 +4,7 @@
 //! record what the server presents, not to decide whether to trust it. Trust
 //! is evaluated later by the checks.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{CryptoProvider, ring};
@@ -25,6 +25,9 @@ pub struct CertificateChain {
     pub version: ProtocolVersion,
     /// DER-encoded certificates in the order the server sent them, leaf first.
     pub certificates: Vec<Vec<u8>>,
+    /// DER-encoded OCSP response stapled to the handshake (RFC 6066 §8,
+    /// RFC 8446 §4.4.2.1), if the server sent one.
+    pub ocsp_response: Option<Vec<u8>>,
 }
 
 /// Completes a TLS 1.2/1.3 handshake and returns the server's certificate
@@ -40,7 +43,8 @@ pub async fn fetch_certificates(
     transport: &Transport,
     sni: Option<&str>,
 ) -> Result<CertificateChain, ProbeError> {
-    let tls = connect_tls(transport, sni, client_config()).await?;
+    let verifier = Arc::new(AcceptAll::new());
+    let tls = connect_tls(transport, sni, config_with(verifier.clone())).await?;
     let (_, conn) = tls.get_ref();
     let version = conn
         .protocol_version()
@@ -57,6 +61,7 @@ pub async fn fetch_certificates(
     Ok(CertificateChain {
         version,
         certificates,
+        ocsp_response: verifier.take_ocsp_response(),
     })
 }
 
@@ -99,29 +104,67 @@ pub(crate) async fn connect_tls(
 
 /// Client config offering TLS 1.2 and 1.3 with the recording verifier.
 pub(crate) fn client_config() -> ClientConfig {
-    let provider = Arc::new(ring::default_provider());
-    ClientConfig::builder_with_provider(provider.clone())
+    config_with(Arc::new(AcceptAll::new()))
+}
+
+/// Client config offering TLS 1.2 and 1.3 that verifies with `verifier`.
+///
+/// rustls always sends the `status_request` extension, so servers that
+/// staple OCSP responses hand them to the verifier.
+fn config_with(verifier: Arc<AcceptAll>) -> ClientConfig {
+    ClientConfig::builder_with_provider(verifier.provider.clone())
         .with_safe_default_protocol_versions()
         .expect("ring supports the default protocol versions")
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(AcceptAll(provider)))
+        .with_custom_certificate_verifier(verifier)
         .with_no_client_auth()
 }
 
-/// Verifier that accepts any certificate and handshake signature.
+/// Verifier that accepts any certificate and handshake signature, and keeps
+/// the stapled OCSP response.
 #[derive(Debug)]
-struct AcceptAll(Arc<CryptoProvider>);
+struct AcceptAll {
+    /// Provider whose signature schemes are advertised.
+    provider: Arc<CryptoProvider>,
+    /// Stapled OCSP response seen during the handshake.
+    ocsp_response: Mutex<Option<Vec<u8>>>,
+}
+
+impl AcceptAll {
+    /// Verifier using the ring provider, with nothing recorded yet.
+    fn new() -> Self {
+        Self {
+            provider: Arc::new(ring::default_provider()),
+            ocsp_response: Mutex::new(None),
+        }
+    }
+
+    /// Takes the recorded stapled OCSP response, if any.
+    fn take_ocsp_response(&self) -> Option<Vec<u8>> {
+        self.ocsp_response
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+    }
+}
 
 impl ServerCertVerifier for AcceptAll {
-    /// Accepts the chain unconditionally; trust is checked elsewhere.
+    /// Accepts the chain unconditionally and records a non-empty stapled
+    /// OCSP response; trust is checked elsewhere.
     fn verify_server_cert(
         &self,
         _end_entity: &CertificateDer<'_>,
         _intermediates: &[CertificateDer<'_>],
         _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
+        ocsp_response: &[u8],
         _now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
+        if !ocsp_response.is_empty() {
+            *self
+                .ocsp_response
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some(ocsp_response.to_vec());
+        }
         Ok(ServerCertVerified::assertion())
     }
 
@@ -147,7 +190,9 @@ impl ServerCertVerifier for AcceptAll {
 
     /// Advertises every scheme the crypto provider knows.
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.0.signature_verification_algorithms.supported_schemes()
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
     }
 }
 
@@ -168,13 +213,23 @@ mod tests {
 
     /// Starts a one-shot rustls server limited to `versions`.
     async fn serve(versions: &[&'static rustls::SupportedProtocolVersion]) -> SocketAddr {
+        serve_with_ocsp(versions, Vec::new()).await
+    }
+
+    /// Starts a one-shot rustls server limited to `versions` that staples
+    /// `ocsp` (nothing when empty).
+    async fn serve_with_ocsp(
+        versions: &[&'static rustls::SupportedProtocolVersion],
+        ocsp: Vec<u8>,
+    ) -> SocketAddr {
         let config = ServerConfig::builder_with_provider(Arc::new(ring::default_provider()))
             .with_protocol_versions(versions)
             .unwrap()
             .with_no_client_auth()
-            .with_single_cert(
+            .with_single_cert_with_ocsp(
                 vec![CertificateDer::from(CERT.to_vec())],
                 PrivateKeyDer::try_from(KEY.to_vec()).unwrap(),
+                ocsp,
             )
             .unwrap();
         let acceptor = TlsAcceptor::from(Arc::new(config));
@@ -198,6 +253,20 @@ mod tests {
             .unwrap();
         assert_eq!(chain.version, ProtocolVersion::TLS13);
         assert_eq!(chain.certificates, vec![CERT.to_vec()]);
+        assert_eq!(chain.ocsp_response, None);
+    }
+
+    /// A stapled OCSP response is recorded over TLS 1.3 and TLS 1.2.
+    #[tokio::test]
+    async fn records_stapled_ocsp_response() {
+        let ocsp = b"\x30\x03\x0a\x01\x00".to_vec();
+        for version in [&rustls::version::TLS13, &rustls::version::TLS12] {
+            let addr = serve_with_ocsp(&[version], ocsp.clone()).await;
+            let chain = fetch_certificates(&Transport::new(addr), Some("localhost"))
+                .await
+                .unwrap();
+            assert_eq!(chain.ocsp_response.as_ref(), Some(&ocsp), "{version:?}");
+        }
     }
 
     /// TLS 1.2 handshake works too, even without SNI.
