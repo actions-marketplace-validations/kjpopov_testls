@@ -100,11 +100,13 @@ impl Transport {
     ///
     /// # Errors
     /// Returns a [`ProbeError`] on connect/I/O failure, timeout, or a reply
-    /// that is not TLS/SSL.
+    /// that is not TLS/SSL. A connect timeout is a [`ProbeError::Connect`]
+    /// with [`io::ErrorKind::TimedOut`], so callers can tell that no hello
+    /// was sent.
     pub async fn exchange(&self, hello: &[u8]) -> Result<HelloResponse, ProbeError> {
         let mut stream = timeout(self.connect_timeout, TcpStream::connect(self.addr))
             .await
-            .map_err(|_| ProbeError::Timeout)?
+            .map_err(|_| ProbeError::Connect(io::ErrorKind::TimedOut.into()))?
             .map_err(ProbeError::Connect)?;
         stream.set_nodelay(true).map_err(ProbeError::Io)?;
         timeout(self.read_timeout, async {
