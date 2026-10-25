@@ -18,6 +18,8 @@ pub mod ext {
     pub const SUPPORTED_GROUPS: u16 = 10;
     /// `ec_point_formats` (RFC 8422).
     pub const EC_POINT_FORMATS: u16 = 11;
+    /// `padding` (RFC 7685).
+    pub const PADDING: u16 = 21;
     /// `signature_algorithms` (RFC 8446).
     pub const SIGNATURE_ALGORITHMS: u16 = 13;
     /// `supported_versions` (RFC 8446).
@@ -195,13 +197,35 @@ impl ClientHello {
                 max: MAX_FRAGMENT_LEN,
             });
         }
+        self.records(&hs, MAX_FRAGMENT_LEN)
+    }
+
+    /// Encode as consecutive records carrying at most `fragment_len` bytes
+    /// of the handshake message each.
+    ///
+    /// Handshake messages may span several records (RFC 8446, section 5.1;
+    /// RFC 5246, section 6.2.1).
+    ///
+    /// `fragment_len` is clamped to `1..=MAX_FRAGMENT_LEN`.
+    ///
+    /// # Errors
+    /// Returns an error if a variable-length field overflows.
+    pub fn encode_fragmented(&self, fragment_len: usize) -> Result<Vec<u8>, EncodeError> {
+        let fragment_len = fragment_len.clamp(1, MAX_FRAGMENT_LEN);
+        self.records(&self.encode_handshake()?, fragment_len)
+    }
+
+    /// Wrap `hs` in handshake records of at most `fragment_len` bytes.
+    fn records(&self, hs: &[u8], fragment_len: usize) -> Result<Vec<u8>, EncodeError> {
         let mut w = Writer::new();
-        w.u8(CONTENT_HANDSHAKE);
-        w.u16(self.record_version.0);
-        w.prefixed(2, "record", |w| {
-            w.bytes(&hs);
-            Ok(())
-        })?;
+        for chunk in hs.chunks(fragment_len) {
+            w.u8(CONTENT_HANDSHAKE);
+            w.u16(self.record_version.0);
+            w.prefixed(2, "record", |w| {
+                w.bytes(chunk);
+                Ok(())
+            })?;
+        }
         Ok(w.into_inner())
     }
 }
@@ -336,6 +360,37 @@ mod tests {
         ];
         expected.extend([0x11; 16]);
         assert_eq!(bytes, expected);
+    }
+
+    /// Fragmented encoding splits the handshake message across records
+    /// whose bodies concatenate to the unfragmented message.
+    #[test]
+    fn fragmented_records() {
+        let ch = minimal();
+        let hs = ch.encode_handshake().unwrap();
+        let bytes = ch.encode_fragmented(16).unwrap();
+        let mut body: Vec<u8> = Vec::new();
+        let mut rest = &bytes[..];
+        let mut records = 0;
+        while !rest.is_empty() {
+            assert_eq!(&rest[..3], &[22, 3, 1]);
+            let len = usize::from(u16::from_be_bytes([rest[3], rest[4]]));
+            assert!(len <= 16);
+            body.extend(&rest[5..5 + len]);
+            rest = &rest[5 + len..];
+            records += 1;
+        }
+        assert_eq!(body, hs);
+        assert_eq!(records, hs.len().div_ceil(16));
+        assert_eq!(
+            ch.encode_fragmented(MAX_FRAGMENT_LEN).unwrap(),
+            ch.encode().unwrap()
+        );
+        assert_eq!(
+            ch.encode_fragmented(MAX_FRAGMENT_LEN + 1).unwrap(),
+            ch.encode().unwrap()
+        );
+        assert_eq!(ch.encode_fragmented(0).unwrap().len(), hs.len() * 6);
     }
 
     #[test]
