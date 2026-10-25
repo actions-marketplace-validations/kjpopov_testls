@@ -9,8 +9,9 @@
 # Usage: scripts/gen-ocsp-fixtures.sh
 set -euo pipefail
 
-# Git Bash on Windows rewrites arguments that look like paths ("/CN=...").
-export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
+# Git Bash on Windows would rewrite the "/CN=..." subjects as paths. openssl
+# only ever gets relative paths below, and outputs are copied with `cp`.
+export MSYS2_ARG_CONV_EXCL='/CN='
 
 openssl=${OPENSSL:-openssl}
 # macOS ships LibreSSL as `openssl`; prefer Homebrew's OpenSSL when present.
@@ -90,7 +91,8 @@ respond leaf other unauthorized
 respond leaf responder-no-sign no-digital-signature
 
 for cert in ca leaf other stray must-staple; do
-    "$openssl" x509 -in "$cert.pem" -outform DER -out "$out/ocsp-$cert.der"
+    "$openssl" x509 -in "$cert.pem" -outform DER -out "$cert.der"
+    cp "$cert.der" "$out/ocsp-$cert.der"
 done
 for response in good revoked delegated unknown unauthorized no-digital-signature; do
     cp "$response.der" "$out/ocsp-$response.der"
