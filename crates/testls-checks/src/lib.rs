@@ -1,5 +1,6 @@
 //! Scan findings, severity model, and check implementations.
 
+mod baseline;
 mod certificates;
 mod ciphers;
 mod der;
@@ -17,6 +18,7 @@ mod vulnerabilities;
 
 use std::fmt;
 
+pub use baseline::{Sct, baseline_findings, embedded_scts, max_validity_days};
 pub use certificates::{CertificateInfo, certificate_findings, describe_certificate};
 pub use ciphers::{cipher_findings, cipher_name, cipher_severity};
 pub use details::details_findings;
