@@ -635,6 +635,7 @@ dependencies = [
 name = "testls-checks"
 version = "0.1.0"
 dependencies = [
+ "ring",
  "rustls-native-certs",
  "rustls-pki-types",
  "rustls-webpki",

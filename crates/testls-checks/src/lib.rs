@@ -4,6 +4,7 @@ mod certificates;
 mod ciphers;
 mod http;
 mod key_exchange;
+mod ocsp;
 mod protocols;
 mod trust;
 
@@ -13,6 +14,9 @@ pub use certificates::{CertificateInfo, certificate_findings, describe_certifica
 pub use ciphers::{cipher_findings, cipher_name, cipher_severity};
 pub use http::{Hsts, http_findings, parse_hsts};
 pub use key_exchange::{dh_severity, group_name, group_severity, key_exchange_findings};
+pub use ocsp::{
+    CertStatus, OcspStatus, ocsp_findings, revocation_reason_name, verify_ocsp_response,
+};
 pub use protocols::{protocol_findings, protocol_severity};
 pub use trust::{TrustStore, trust_findings};
 
