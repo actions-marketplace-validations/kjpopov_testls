@@ -20,6 +20,8 @@ pub mod ext {
     pub const EC_POINT_FORMATS: u16 = 11;
     /// `padding` (RFC 7685).
     pub const PADDING: u16 = 21;
+    /// `extended_master_secret` (RFC 7627).
+    pub const EXTENDED_MASTER_SECRET: u16 = 23;
     /// `signature_algorithms` (RFC 8446).
     pub const SIGNATURE_ALGORITHMS: u16 = 13;
     /// `supported_versions` (RFC 8446).
