@@ -1,9 +1,14 @@
 //! TLS registry data (cipher suites, named groups, signature schemes)
-//! generated from IANA registry snapshots.
+//! generated from IANA registry snapshots, plus well-known Diffie-Hellman
+//! primes.
 //!
-//! The tables live in `generated.rs`, produced by `scripts/gen-iana.py`.
+//! The registry tables live in `generated.rs`, produced by
+//! `scripts/gen-iana.py`.
 
+mod dh;
 mod generated;
+
+pub use dh::{KnownPrime, known_dh_prime, known_dh_primes};
 
 /// IANA "Recommended" column value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
