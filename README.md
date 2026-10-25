@@ -10,8 +10,9 @@
 TLS/SSL scanner for the web era, written in Rust and inspired by
 [testssl.sh](https://testssl.sh). Single static binary. No bash. No subprocess.
 
-> **Status: v0.1.** The command-line scanner checks protocols, cipher suites
-> and certificates; the features marked v0.2 and later are planned. See
+> **Status: v0.2.** The command-line scanner checks protocols, cipher suites,
+> key exchange, certificates, revocation and HTTP security headers; the
+> features marked v0.3 and later are planned. See
 > [docs/PLAN.md](docs/PLAN.md) and [CHANGELOG.md](CHANGELOG.md).
 
 ## Why
@@ -30,8 +31,8 @@ Download a prebuilt binary for Linux (static musl, x86_64/aarch64), macOS
 `SHA256SUMS`, and put `testls` on your `PATH`:
 
 ```bash
-tar xzf testls-v0.1.0-x86_64-unknown-linux-musl.tar.gz
-./testls-v0.1.0-x86_64-unknown-linux-musl/testls example.com
+tar xzf testls-v0.2.0-x86_64-unknown-linux-musl.tar.gz
+./testls-v0.2.0-x86_64-unknown-linux-musl/testls example.com
 ```
 
 On macOS the binaries are not notarized yet; clear the quarantine flag with
