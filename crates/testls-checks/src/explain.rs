@@ -187,6 +187,12 @@ const EXPLANATIONS: &[Explanation] = &[
         "draft-ietf-tls-ecdhe-mlkem, FIPS 203",
     ),
     entry(
+        "group.draft_kyber",
+        "Obsolete draft Kyber group accepted",
+        "Pre-standard Kyber code points predate FIPS 203 and are marked obsolete by IANA; clients are dropping them. Offer X25519MLKEM768 instead.",
+        "IANA TLS Supported Groups, draft-ietf-tls-ecdhe-mlkem",
+    ),
+    entry(
         "group.error",
         "Key exchange could not be probed",
         "A network or protocol error stopped group or DH parameter detection for this protocol version.",
@@ -591,6 +597,7 @@ mod tests {
             include_str!("intolerance.rs"),
             include_str!("key_exchange.rs"),
             include_str!("ocsp.rs"),
+            include_str!("post_quantum.rs"),
             include_str!("protocols.rs"),
             include_str!("revocation.rs"),
             include_str!("trust.rs"),

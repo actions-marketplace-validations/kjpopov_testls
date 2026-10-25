@@ -9,6 +9,7 @@ mod http;
 mod intolerance;
 mod key_exchange;
 mod ocsp;
+mod post_quantum;
 mod protocols;
 mod revocation;
 mod trust;
@@ -26,6 +27,9 @@ pub use key_exchange::{dh_severity, group_name, group_severity, key_exchange_fin
 pub use ocsp::{
     CertStatus, OcspStatus, display_time, ocsp_findings, ocsp_request, revocation_reason_name,
     verify_ocsp_response,
+};
+pub use post_quantum::{
+    GroupKind, PostQuantum, PqStatus, group_kind, post_quantum_findings, post_quantum_readiness,
 };
 pub use protocols::{protocol_findings, protocol_severity};
 pub use revocation::{

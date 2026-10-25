@@ -3,13 +3,14 @@
 use testls_probe::KeyExchangeResult;
 use testls_wire::ProtocolVersion;
 
+use crate::post_quantum::{GroupKind, group_kind};
 use crate::{Finding, Severity};
 
 /// Whether group `id` is post-quantum: a pure ML-KEM group
 /// (draft-ietf-tls-mlkem) or an ML-KEM hybrid (draft-ietf-tls-ecdhe-mlkem),
 /// as named in the IANA TLS Supported Groups registry.
 fn is_post_quantum(id: u16) -> bool {
-    testls_data::group(id).is_some_and(|g| g.name.contains("MLKEM"))
+    group_kind(id) == GroupKind::PostQuantum
 }
 
 /// IANA name of group `id`, or `"unknown"`.
