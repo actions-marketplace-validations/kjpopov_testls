@@ -76,7 +76,7 @@ A web service (`testls serve`, REST API and browser UI) is planned for v0.6.
 | Vulnerabilities | Derived checks: POODLE, BEAST, SWEET32, Logjam, … | v0.3 |
 | Workflow | Multiple targets, SARIF/JUnit/HTML, baselines, policies | v0.4 |
 | STARTTLS | SMTP, IMAP, POP3, … | v0.5 |
-| Intrusive checks | Heartbleed, CCS injection, ROBOT (`--intrusive`) | v0.5 |
+| Intrusive checks | Heartbleed, CCS injection, Ticketbleed, ROBOT (`--intrusive`) | v0.5 |
 | Grading | Own grading model | v0.5 |
 | Web service | REST + SSE API and embedded web UI | v0.6 |
 
