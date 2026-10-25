@@ -92,10 +92,27 @@ fn sct_count(value: &[u8]) -> Option<usize> {
     let mut count = 0;
     while !rest.is_empty() {
         let (len, entries) = split_u16(rest)?;
+        sct_body_fits(entries.get(..len)?).then_some(())?;
         rest = entries.get(len..)?;
         count += 1;
     }
     Some(count)
+}
+
+/// Whether a `SignedCertificateTimestamp` body consists of exactly its
+/// fields: version, log id, timestamp, extensions, hash and signature
+/// algorithms and signature (RFC 6962 §3.2).
+fn sct_body_fits(body: &[u8]) -> bool {
+    let Some(rest) = body.get(1 + 32 + 8..) else {
+        return false;
+    };
+    let Some((len, rest)) = split_u16(rest) else {
+        return false;
+    };
+    let Some(rest) = rest.get(len + 2..) else {
+        return false;
+    };
+    split_u16(rest).is_some_and(|(len, signature)| signature.len() == len)
 }
 
 /// Splits a big-endian `u16` length prefix off `data`.
@@ -163,6 +180,8 @@ mod tests {
 
     /// Self-signed leaf valid 2026-04-01 to 2027-04-01 with two SCTs.
     const CT_SCTS: &[u8] = include_bytes!("testdata/ct-scts.der");
+    /// Same as `CT_SCTS` but each SCT has a byte after its signature.
+    const CT_SCT_PADDING: &[u8] = include_bytes!("testdata/ct-sct-padding.der");
     /// Leaf valid 2026-01-01 to 2027-01-01 without SCTs.
     const EC_LOCALHOST: &[u8] = include_bytes!("testdata/ec-localhost.der");
 
@@ -209,13 +228,41 @@ mod tests {
     /// The SCT list must be consumed exactly, without trailing bytes.
     #[test]
     fn sct_list_framing() {
-        assert_eq!(sct_count(&[4, 2, 0, 0]), Some(0));
-        assert_eq!(sct_count(&[4, 7, 0, 5, 0, 1, 9, 0, 0]), Some(2));
+        let mut sct = vec![0; 41];
+        sct.extend([0, 0, 4, 3, 0, 1, 9]);
+        let entry = |body: &[u8]| {
+            let mut list = u16::try_from(body.len()).unwrap().to_be_bytes().to_vec();
+            list.extend(body);
+            list
+        };
+        let value = |entries: &[Vec<u8>]| {
+            let list: Vec<u8> = entries.concat();
+            let mut inner = u16::try_from(list.len()).unwrap().to_be_bytes().to_vec();
+            inner.extend(list);
+            let mut der = vec![4, u8::try_from(inner.len()).unwrap()];
+            der.extend(inner);
+            der
+        };
+        assert_eq!(sct_count(&value(&[])), Some(0));
+        assert_eq!(sct_count(&value(&[entry(&sct), entry(&sct)])), Some(2));
+        let mut padded = sct.clone();
+        padded.push(0);
+        assert_eq!(sct_count(&value(&[entry(&padded)])), None);
+        assert_eq!(sct_count(&value(&[entry(&sct[..sct.len() - 1])])), None);
         assert_eq!(sct_count(&[4, 3, 0, 0, 0]), None);
         assert_eq!(sct_count(&[4, 2, 0, 0, 0]), None);
         assert_eq!(sct_count(&[4, 4, 0, 2, 0, 5]), None);
-        assert_eq!(sct_count(&[4, 6, 0, 4, 0, 1, 9, 9]), None);
         assert_eq!(sct_count(&[2, 2, 0, 0]), None);
+    }
+
+    /// Bytes after an SCT's signature make the certificate's list invalid.
+    #[test]
+    fn sct_padding_is_invalid() {
+        assert_eq!(
+            embedded_scts(CT_SCT_PADDING),
+            Err("malformed SCT list".to_owned())
+        );
+        assert_eq!(ids(CT_SCT_PADDING), ["cert.too_long", "cert.sct_invalid"]);
     }
 
     /// A one-year certificate is fine before 2026-03-15 and too long after.
