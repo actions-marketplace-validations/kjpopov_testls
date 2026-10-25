@@ -65,6 +65,7 @@ Two connection paths:
 - [x] HSTS / preload / security headers via full-handshake path
 - [x] OCSP stapling
 - [x] OCSP responder, CRL (opt-in `--revocation`)
+- [x] Released as v0.2.0
 
 ### v0.3 — Protocols & vulnerabilities
 - STARTTLS (SMTP, IMAP, POP3, FTP, XMPP, LDAP, PostgreSQL, MySQL)
