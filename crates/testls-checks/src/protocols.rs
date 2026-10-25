@@ -19,7 +19,8 @@ pub fn protocol_severity(version: ProtocolVersion) -> (Severity, &'static str) {
     }
 }
 
-fn id(version: ProtocolVersion) -> String {
+/// Finding id for a protocol version, e.g. `protocol.tls10`.
+pub(crate) fn id(version: ProtocolVersion) -> String {
     let name = version
         .to_string()
         .to_ascii_lowercase()

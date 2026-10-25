@@ -104,6 +104,12 @@ fn ssl2_name(id: u32) -> &'static str {
     }
 }
 
+/// Keys of all rating rules; findings use them as `cipher.{key}`.
+#[cfg(test)]
+pub(crate) fn rule_keys() -> impl Iterator<Item = &'static str> {
+    RULES.iter().map(|r| r.key)
+}
+
 /// Name of a suite as reported for `version`, or `"unknown"`.
 #[must_use]
 pub fn cipher_name(version: ProtocolVersion, id: u32) -> &'static str {

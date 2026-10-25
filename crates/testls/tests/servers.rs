@@ -70,7 +70,7 @@ fn legacy_server() {
     assert_eq!(s.line("Ciphers TLSv1.2"), "Ciphers TLSv1.2 client order");
     assert!(s.has("0x0034  TLS_DH_anon_WITH_AES_128_CBC_SHA"));
     assert!(s.has("critical TLSv1.2 TLS_DH_anon_WITH_AES_128_CBC_SHA: anonymous"));
-    assert!(s.has("medium   TLSv1.0 offered: deprecated (RFC 8996)"));
+    assert!(s.has("medium   TLSv1.0 offered: deprecated (RFC 8996) [protocol.tls10]"));
     assert!(s.has("info     TLSv1.2: server follows the client's cipher order"));
     assert_eq!(
         s.line("Key exchange TLSv1.2"),
@@ -123,12 +123,12 @@ fn modern_server() {
     assert_eq!(
         lines,
         [
-            "low      no Strict-Transport-Security header",
-            "info     no OCSP response stapled",
-            "info     no X-Content-Type-Options: nosniff header",
-            "info     no restrictive X-Frame-Options header or CSP frame-ancestors directive",
-            "info     no Content-Security-Policy header",
-            "info     no Referrer-Policy header",
+            "low      no Strict-Transport-Security header [hsts.missing]",
+            "info     no OCSP response stapled [ocsp.not_stapled]",
+            "info     no X-Content-Type-Options: nosniff header [header.x_content_type_options]",
+            "info     no restrictive X-Frame-Options header or CSP frame-ancestors directive [header.framing]",
+            "info     no Content-Security-Policy header [header.content_security_policy]",
+            "info     no Referrer-Policy header [header.referrer_policy]",
         ],
         "{}",
         s.stdout
@@ -361,4 +361,29 @@ fn unreachable_is_scan_error() {
         .output()
         .expect("run testls");
     assert_eq!(out.status.code(), Some(2));
+}
+
+/// `testls explain <id>` describes a finding; an unknown id is an error
+/// (exit code 2). No server is needed.
+#[test]
+fn explain_subcommand() {
+    let out = Command::new(env!("CARGO_BIN_EXE_testls"))
+        .args(["explain", "cipher.rc4"])
+        .output()
+        .expect("run testls");
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8(out.stdout).expect("utf-8 output");
+    assert!(
+        stdout.starts_with("cipher.rc4: RC4 cipher suite\n"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("Reference: RFC 7465"), "{stdout}");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_testls"))
+        .args(["explain", "cipher.nope"])
+        .output()
+        .expect("run testls");
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8(out.stderr).expect("utf-8 output");
+    assert!(stderr.contains("unknown finding id"), "{stderr}");
 }
