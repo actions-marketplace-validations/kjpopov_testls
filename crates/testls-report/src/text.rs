@@ -424,6 +424,8 @@ mod tests {
                 groups: vec![0x001d, 0x0017],
                 group_order: CipherOrder::Server,
                 dh_bits: Some(2048),
+                dh_prime: None,
+                dh_key_reused: None,
             }),
         };
         assert_eq!(
@@ -442,6 +444,8 @@ mod tests {
                 groups: vec![],
                 group_order: CipherOrder::NotApplicable,
                 dh_bits: None,
+                dh_prime: None,
+                dh_key_reused: None,
             }),
         };
         assert_eq!(

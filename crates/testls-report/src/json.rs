@@ -711,6 +711,8 @@ mod tests {
                     groups: vec![0x11ec, 0x001d],
                     group_order: CipherOrder::Client,
                     dh_bits: None,
+                    dh_prime: None,
+                    dh_key_reused: None,
                 }),
             },
             KeyExchangeSection {
@@ -720,6 +722,8 @@ mod tests {
                     groups: vec![0x0015],
                     group_order: CipherOrder::NotApplicable,
                     dh_bits: Some(1024),
+                    dh_prime: None,
+                    dh_key_reused: None,
                 }),
             },
             KeyExchangeSection {

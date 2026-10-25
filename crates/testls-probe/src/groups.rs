@@ -27,6 +27,13 @@ pub struct KeyExchangeResult {
     /// Size in bits of the DH prime the server uses with DHE suites, if it
     /// accepted one.
     pub dh_bits: Option<usize>,
+    /// The DH prime itself (big-endian), if the server accepted a DHE suite.
+    pub dh_prime: Option<Vec<u8>>,
+    /// Whether two DHE handshakes got the same parameters and server public
+    /// value, which means the server reuses its ephemeral key (a Raccoon
+    /// precondition). `None` if the second handshake failed or did not
+    /// complete with a DHE suite.
+    pub dh_key_reused: Option<bool>,
 }
 
 /// Whether `suite` carries `ServerECDHParams` in its `ServerKeyExchange`.
@@ -55,7 +62,7 @@ fn is_dhe_suite(suite: u16) -> bool {
 ///
 /// TLS 1.3 drops the curves below `secp256r1` (RFC 8446, section 4.2.7);
 /// TLS 1.2 and earlier only negotiate elliptic curves here, since
-/// finite-field groups are measured through [`dh_bits`] and the
+/// finite-field groups are measured through [`dh_params`] and the
 /// post-quantum groups are TLS 1.3 only. The explicit-curve markers
 /// `0xff01`/`0xff02` are not real groups and are never offered.
 fn candidate_groups(version: ProtocolVersion) -> Vec<u16> {
@@ -169,13 +176,13 @@ async fn enumerate_groups(
     Ok((accepted, order))
 }
 
-/// The DH prime size in bits the server uses with one of `suites`.
-async fn dh_bits(
+/// The DH parameters the server sends with one of `suites`.
+async fn dh_params(
     transport: &Transport,
     version: ProtocolVersion,
     suites: &[u16],
     sni: Option<&str>,
-) -> Result<Option<usize>, ProbeError> {
+) -> Result<Option<DheParams>, ProbeError> {
     let bytes = client_hello(version, suites.to_vec(), sni)
         .encode()
         .map_err(ProbeError::Encode)?;
@@ -197,8 +204,9 @@ async fn dh_bits(
     {
         return Ok(None);
     }
-    let params = DheParams::parse(&body).map_err(ProbeError::Decode)?;
-    Ok(Some(params.prime_bits()))
+    DheParams::parse(&body)
+        .map(Some)
+        .map_err(ProbeError::Decode)
 }
 
 /// Probe the key exchange parameters the server accepts at `version`.
@@ -206,8 +214,9 @@ async fn dh_bits(
 /// `accepted` are the cipher suites found by
 /// [`enumerate_ciphers`](crate::enumerate_ciphers) for the same version.
 /// Groups are enumerated over its ECDHE suites (all TLS 1.3 suites at
-/// TLS 1.3), at a cost of one connection per accepted group plus two; the
-/// DH size takes one more connection if any DHE suite was accepted.
+/// TLS 1.3), at a cost of one connection per accepted group plus two. If
+/// any DHE suite was accepted, two more connections fetch the DH parameters
+/// and check whether the server reuses its ephemeral key.
 /// SSLv2 and SSLv3 have no `supported_groups` extension, so only the DH
 /// size is probed there.
 ///
@@ -229,6 +238,8 @@ pub async fn probe_key_exchange(
         groups: Vec::new(),
         group_order: CipherOrder::NotApplicable,
         dh_bits: None,
+        dh_prime: None,
+        dh_key_reused: None,
     };
     if version <= ProtocolVersion::SSL2 {
         return Ok(result);
@@ -257,8 +268,18 @@ pub async fn probe_key_exchange(
         .copied()
         .filter(|&s| is_dhe_suite(s))
         .collect();
-    if version < ProtocolVersion::TLS13 && !dhe.is_empty() {
-        result.dh_bits = dh_bits(transport, version, &dhe, sni).await?;
+    if version < ProtocolVersion::TLS13
+        && !dhe.is_empty()
+        && let Some(first) = dh_params(transport, version, &dhe, sni).await?
+    {
+        // A failed second handshake only leaves reuse unknown.
+        let second = dh_params(transport, version, &dhe, sni)
+            .await
+            .ok()
+            .flatten();
+        result.dh_bits = Some(first.prime_bits());
+        result.dh_key_reused = second.map(|s| s == first);
+        result.dh_prime = Some(first.p);
     }
     Ok(result)
 }
@@ -432,8 +453,10 @@ mod mock_server {
     /// Reply to one hello: HRR for TLS 1.3, `ServerHello` +
     /// `ServerKeyExchange` + `ServerHelloDone` for TLS 1.2. `groups` are
     /// the supported groups in server preference order; `dh_prime_len` is
-    /// the byte length of the prime sent with DHE suites.
-    fn reply(hello: &[u8], groups: &[u16], dh_prime_len: usize) -> Vec<u8> {
+    /// the byte length of the prime sent with DHE suites. Unless `reuse` is set,
+    /// the DH public value is taken from the client random, so it differs
+    /// per handshake.
+    fn reply(hello: &[u8], groups: &[u16], dh_prime_len: usize, reuse: bool) -> Vec<u8> {
         const ALERT: [u8; 7] = [21, 3, 3, 0, 2, 2, 40];
         let (suites, exts) = parse_hello(hello);
         let find = |typ| exts.iter().find(|(t, _)| *t == typ).map(|(_, d)| d.clone());
@@ -460,7 +483,8 @@ mod mock_server {
             let mut ske = u16::try_from(dh_prime_len).unwrap().to_be_bytes().to_vec();
             ske.push(0x80);
             ske.extend(vec![0xff; dh_prime_len - 1]);
-            ske.extend([0, 1, 2, 0, 1, 5]);
+            ske.extend([0, 1, 2, 0, 16]);
+            ske.extend(if reuse { &[5; 16] } else { &hello[11..27] });
             return record(&[
                 (2, server_hello([7; 32], 0x009e, &[])),
                 (12, ske),
@@ -481,7 +505,7 @@ mod mock_server {
     }
 
     /// Serve hellos forever, replying as described in [`reply`].
-    async fn serve(groups: &'static [u16], dh_prime_len: usize) -> SocketAddr {
+    async fn serve(groups: &'static [u16], dh_prime_len: usize, reuse: bool) -> SocketAddr {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
@@ -492,7 +516,7 @@ mod mock_server {
                 while n < 5 || n < 5 + usize::from(u16::from_be_bytes([buf[3], buf[4]])) {
                     n += s.read(&mut buf[n..]).await.unwrap();
                 }
-                s.write_all(&reply(&buf[..n], groups, dh_prime_len))
+                s.write_all(&reply(&buf[..n], groups, dh_prime_len, reuse))
                     .await
                     .unwrap();
             }
@@ -503,7 +527,7 @@ mod mock_server {
     /// TLS 1.2: curves come out in server order, DH size is measured.
     #[tokio::test]
     async fn tls12_groups_and_dh() {
-        let addr = serve(&[0x0018, 0x001d, 0x0017], 128).await;
+        let addr = serve(&[0x0018, 0x001d, 0x0017], 128, false).await;
         let r = probe_key_exchange(
             &Transport::new(addr),
             ProtocolVersion::TLS12,
@@ -515,12 +539,14 @@ mod mock_server {
         assert_eq!(r.groups, vec![0x0018, 0x001d, 0x0017]);
         assert_eq!(r.group_order, CipherOrder::Server);
         assert_eq!(r.dh_bits, Some(1024));
+        assert_eq!(r.dh_prime.as_ref().map(Vec::len), Some(128));
+        assert_eq!(r.dh_key_reused, Some(false));
     }
 
     /// TLS 1.3: groups, including the ML-KEM hybrid, are found via HRR.
     #[tokio::test]
     async fn tls13_groups() {
-        let addr = serve(&[0x11ec, 0x001d], 0).await;
+        let addr = serve(&[0x11ec, 0x001d], 0, false).await;
         let r = probe_key_exchange(
             &Transport::new(addr),
             ProtocolVersion::TLS13,
@@ -537,8 +563,8 @@ mod mock_server {
     /// A DH size sent at another protocol version is not reported.
     #[tokio::test]
     async fn dh_bits_version_mismatch() {
-        let addr = serve(&[], 128).await;
-        let bits = dh_bits(
+        let addr = serve(&[], 128, true).await;
+        let params = dh_params(
             &Transport::new(addr),
             ProtocolVersion::TLS11,
             &[0x009e],
@@ -546,7 +572,53 @@ mod mock_server {
         )
         .await
         .unwrap();
-        assert_eq!(bits, None);
+        assert_eq!(params, None);
+    }
+
+    /// A server sending the same DH public value twice is flagged.
+    #[tokio::test]
+    async fn dh_key_reuse() {
+        let addr = serve(&[], 64, true).await;
+        let r = probe_key_exchange(
+            &Transport::new(addr),
+            ProtocolVersion::TLS12,
+            &[0x009e],
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(r.dh_bits, Some(512));
+        assert_eq!(r.dh_key_reused, Some(true));
+    }
+
+    /// If the second DHE handshake fails, the first result is kept and
+    /// reuse stays unknown.
+    #[tokio::test]
+    async fn second_dh_handshake_fails() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0; 1 << 16];
+            let mut n = 0;
+            while n < 5 || n < 5 + usize::from(u16::from_be_bytes([buf[3], buf[4]])) {
+                n += s.read(&mut buf[n..]).await.unwrap();
+            }
+            s.write_all(&reply(&buf[..n], &[], 64, false))
+                .await
+                .unwrap();
+            // Dropping the listener refuses the second connection.
+        });
+        let r = probe_key_exchange(
+            &Transport::new(addr),
+            ProtocolVersion::TLS12,
+            &[0x009e],
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(r.dh_bits, Some(512));
+        assert_eq!(r.dh_key_reused, None);
     }
 
     /// Without ECDHE or DHE suites nothing is probed.
