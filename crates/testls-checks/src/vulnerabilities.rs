@@ -148,10 +148,7 @@ impl Inputs<'_> {
                 .filter(|c| c.version == p.version)
                 .flat_map(|c| &c.suites)
                 .map(|&id| cipher_name(p.version, id))
-                .any(|n| {
-                    (n.starts_with("TLS_DHE_") || n.starts_with("TLS_DH_anon_"))
-                        && !n.contains("_PSK_")
-                });
+                .any(|n| n.starts_with("TLS_DHE_") || n.starts_with("TLS_DH_anon_"));
             dhe && k.dh_bits.is_none()
         })
     }
@@ -705,6 +702,10 @@ mod tests {
 
         // TLS_DHE_RSA_WITH_AES_128_GCM_SHA256 accepted, DH size not measured.
         let v = assess(&[ciphers(tls12, &[0x009e])], &[kx(tls12, None, None)]);
+        assert_eq!(v.status, VulnStatus::NotTested);
+
+        // TLS_DHE_PSK_WITH_AES_128_GCM_SHA256: the probe does not measure it.
+        let v = assess(&[ciphers(tls12, &[0x00aa])], &[kx(tls12, None, None)]);
         assert_eq!(v.status, VulnStatus::NotTested);
 
         // One offered version without key exchange data.
