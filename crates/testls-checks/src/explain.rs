@@ -424,6 +424,42 @@ const EXPLANATIONS: &[Explanation] = &[
         "The HTTPS request used to read response headers failed, so HSTS and security headers were not checked.",
         "testls",
     ),
+    entry(
+        "vuln.beast",
+        "BEAST: CBC suites with SSLv3 or TLSv1.0",
+        "SSLv3 and TLSv1.0 chain CBC record IVs, which lets an attacker who can inject chosen plaintext recover secrets; current clients mitigate it with record splitting.",
+        "RFC 4346 §1.1, RFC 8996",
+    ),
+    entry(
+        "vuln.crime",
+        "CRIME: TLS compression enabled",
+        "Compressing records before encryption leaks the length of secrets mixed with attacker-chosen data, such as session cookies.",
+        "RFC 7457 §2.6",
+    ),
+    entry(
+        "vuln.renegotiation",
+        "No secure renegotiation",
+        "Without the renegotiation_info extension an attacker can splice their own traffic in front of a client's session during renegotiation.",
+        "RFC 5746",
+    ),
+    entry(
+        "vuln.fallback_scsv",
+        "TLS_FALLBACK_SCSV not honoured",
+        "The server accepted a fallback handshake at a lower version, so clients that retry with older versions can be downgraded by an attacker.",
+        "RFC 7507",
+    ),
+    entry(
+        "vuln.logjam",
+        "Logjam: widely shared 1024-bit DH prime",
+        "A precomputation against a common 1024-bit prime breaks every handshake that uses it; use a 2048-bit or larger RFC 7919 group.",
+        "RFC 7919, weakdh.org",
+    ),
+    entry(
+        "vuln.raccoon",
+        "Raccoon: reused DH public value",
+        "A server that reuses its DHE secret across handshakes exposes a timing side channel on the shared secret; use fresh keys or ECDHE.",
+        "RFC 7919 §8.3, raccoon-attack.com",
+    ),
 ];
 
 /// All finding explanations, grouped by area.
@@ -449,7 +485,7 @@ mod tests {
     use super::*;
 
     /// Area prefixes that finding ids start with.
-    const AREAS: [&str; 10] = [
+    const AREAS: [&str; 11] = [
         "cert",
         "cipher",
         "dh",
@@ -460,6 +496,7 @@ mod tests {
         "ocsp",
         "protocol",
         "revocation",
+        "vuln",
     ];
 
     /// Ids emitted by the CLI itself for scan errors.
@@ -498,6 +535,7 @@ mod tests {
             include_str!("protocols.rs"),
             include_str!("revocation.rs"),
             include_str!("trust.rs"),
+            include_str!("vulnerabilities.rs"),
         ];
         let mut ids: BTreeSet<String> = sources
             .iter()

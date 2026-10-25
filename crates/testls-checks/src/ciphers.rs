@@ -110,6 +110,32 @@ pub(crate) fn rule_keys() -> impl Iterator<Item = &'static str> {
     RULES.iter().map(|r| r.key)
 }
 
+/// Whether suite `name` has the weakness of rule `key`.
+pub(crate) fn has_weakness(key: &str, name: &str) -> bool {
+    RULES.iter().any(|r| r.key == key && (r.matches)(name))
+}
+
+/// Id of the finding [`cipher_findings`] emits for suite `id` under
+/// `version`, or `None` for a strong suite.
+pub(crate) fn finding_id(version: ProtocolVersion, id: u32) -> Option<&'static str> {
+    Some(match cipher_severity(version, id).1 {
+        "strong" => return None,
+        "ssl2" => "cipher.ssl2",
+        "null" => "cipher.null",
+        "integrity_only" => "cipher.integrity_only",
+        "anon" => "cipher.anon",
+        "export" => "cipher.export",
+        "rc4" => "cipher.rc4",
+        "des" => "cipher.des",
+        "rc2" => "cipher.rc2",
+        "md5" => "cipher.md5",
+        "3des" => "cipher.3des",
+        "no_pfs" => "cipher.no_pfs",
+        "cbc" => "cipher.cbc",
+        _ => "cipher.unknown",
+    })
+}
+
 /// Name of a suite as reported for `version`, or `"unknown"`.
 #[must_use]
 pub fn cipher_name(version: ProtocolVersion, id: u32) -> &'static str {

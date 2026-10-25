@@ -90,6 +90,8 @@ data from IANA registries and RFCs, and cite the source in a comment.
 ## Notes for AI agents
 
 - Follow everything above; AI-written changes get the same human review.
+- Be extremly concise. Sacrifice grammar for the sake of being concise and
+  concision.
 - Don't call GitHub APIs or change repository settings. Push branches and let
   the maintainer handle PRs and CI.
 - Assume podman, not docker, on developer machines (`podman compose ...`).
