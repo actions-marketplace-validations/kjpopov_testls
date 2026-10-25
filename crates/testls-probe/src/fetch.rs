@@ -13,7 +13,7 @@ use tokio::net::TcpStream;
 use tokio::time::timeout;
 
 use crate::ProbeError;
-use crate::http::{complete_head, parse_head};
+use crate::http::{HttpResponse, complete_head, parse_head};
 
 /// Settings for requests to revocation endpoints.
 #[derive(Debug, Clone, Copy)]
@@ -72,6 +72,9 @@ impl Fetcher {
         content_type: &str,
         body: &[u8],
     ) -> Result<HttpBody, ProbeError> {
+        if content_type.bytes().any(|b| b.is_ascii_control()) {
+            return Err(ProbeError::Unexpected("invalid Content-Type"));
+        }
         self.request(url, Some((content_type, body))).await
     }
 
@@ -124,15 +127,20 @@ impl Fetcher {
                     data.drain(..end);
                     continue;
                 }
+                if matches!(head.status, 204 | 304) {
+                    return Ok(HttpBody {
+                        status: head.status,
+                        content_type: head.header("content-type").map(str::to_owned),
+                        body: Vec::new(),
+                    });
+                }
                 let chunked = head
                     .header_values("transfer-encoding")
                     .any(|v| v.to_ascii_lowercase().contains("chunked"));
-                let length = match head.header("content-length") {
-                    Some(v) if !chunked => Some(
-                        v.parse::<usize>()
-                            .map_err(|_| ProbeError::Unexpected("malformed Content-Length"))?,
-                    ),
-                    _ => None,
+                let length = if chunked {
+                    None
+                } else {
+                    content_length(&head)?
                 };
                 if length.is_some_and(|l| l > self.max_body) {
                     return Err(too_large());
@@ -245,6 +253,30 @@ impl HttpUrl {
             authority,
         })
     }
+}
+
+/// Returns the body length announced by every `Content-Length` field, or
+/// `None` without one. Malformed or conflicting values are an error
+/// (RFC 9112 §6.3).
+fn content_length(head: &HttpResponse) -> Result<Option<usize>, ProbeError> {
+    let mut length = None;
+    for value in head
+        .header_values("content-length")
+        .flat_map(|v| v.split(','))
+    {
+        let value = value.trim();
+        if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(ProbeError::Unexpected("malformed Content-Length"));
+        }
+        let parsed = value
+            .parse::<usize>()
+            .map_err(|_| ProbeError::Unexpected("malformed Content-Length"))?;
+        if length.is_some_and(|l| l != parsed) {
+            return Err(ProbeError::Unexpected("conflicting Content-Length values"));
+        }
+        length = Some(parsed);
+    }
+    Ok(length)
 }
 
 /// Encodes an HTTP/1.1 request (RFC 9112 §3) that asks the server to close
@@ -440,6 +472,50 @@ mod tests {
         assert_eq!(r.body, b"");
     }
 
+    /// Repeated identical `Content-Length` values are accepted.
+    #[tokio::test]
+    async fn repeated_content_length() {
+        let (addr, _task) = serve(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nContent-Length: 3, 3\r\n\r\nabcd".to_vec(),
+        )
+        .await;
+        let r = fetcher().get(&format!("http://{addr}/")).await.unwrap();
+        assert_eq!(r.body, b"abc");
+    }
+
+    /// 204 and 304 replies end after their headers even when the server
+    /// keeps the connection open.
+    #[tokio::test]
+    async fn bodyless_statuses() {
+        for reply in [
+            &b"HTTP/1.1 204 No Content\r\n\r\n"[..],
+            b"HTTP/1.1 304 Not Modified\r\nContent-Length: 10\r\n\r\n",
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut s, _) = listener.accept().await.unwrap();
+                let mut buf = [0; 1024];
+                let _ = s.read(&mut buf).await;
+                s.write_all(reply).await.unwrap();
+                std::future::pending::<()>().await;
+            });
+            let r = fetcher().get(&format!("http://{addr}/")).await.unwrap();
+            assert!(matches!(r.status, 204 | 304));
+            assert_eq!(r.body, b"");
+            server.abort();
+        }
+    }
+
+    /// Content types with control characters cannot inject header lines.
+    #[tokio::test]
+    async fn content_type_injection_is_rejected() {
+        let r = fetcher()
+            .post("http://127.0.0.1:1/", "a\r\nX-Injected: 1", b"")
+            .await;
+        assert!(matches!(r, Err(ProbeError::Unexpected(_))), "{r:?}");
+    }
+
     /// Oversized and truncated bodies are errors.
     #[tokio::test]
     async fn size_limit_and_truncation() {
@@ -452,6 +528,9 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nab".to_vec(),
             b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n401\r\n".to_vec(),
             b"HTTP/1.1 200 OK\r\nContent-Length: x\r\n\r\n".to_vec(),
+            b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nContent-Length: 4\r\n\r\nabcd".to_vec(),
+            b"HTTP/1.1 200 OK\r\nContent-Length: 3, 4\r\n\r\nabcd".to_vec(),
+            b"HTTP/1.1 200 OK\r\nContent-Length: +3\r\n\r\nabc".to_vec(),
             b"HTTP/1.1 200 OK\r\n".to_vec(),
         ] {
             let (addr, _task) = serve(reply.clone()).await;
