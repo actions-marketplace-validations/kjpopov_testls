@@ -97,8 +97,10 @@ pub fn post_quantum_readiness(key_exchange: &[KeyExchangeResult]) -> PostQuantum
         (true, false) => PqStatus::DraftOnly,
         (true, true) => PqStatus::NotReady,
     };
-    let preferred = (tls13.group_order == CipherOrder::Server && !groups.is_empty())
-        .then(|| group_kind(tls13.groups[0]) == GroupKind::PostQuantum);
+    let position = |kind| tls13.groups.iter().position(|&id| group_kind(id) == kind);
+    let preferred = (tls13.group_order == CipherOrder::Server && !groups.is_empty()).then(|| {
+        position(GroupKind::Classical).is_none_or(|c| position(GroupKind::PostQuantum) < Some(c))
+    });
     PostQuantum {
         status,
         groups,
@@ -149,6 +151,8 @@ mod tests {
 
         let pq = post_quantum_readiness(&[tls13(&[0x001d, 0x11ec], CipherOrder::Server)]);
         assert_eq!(pq.preferred, Some(false));
+        let pq = post_quantum_readiness(&[tls13(&[0x6399, 0x11ec, 0x001d], CipherOrder::Server)]);
+        assert_eq!(pq.preferred, Some(true));
         let pq = post_quantum_readiness(&[tls13(&[0x001d, 0x11ec], CipherOrder::Client)]);
         assert_eq!(pq.preferred, None);
     }
