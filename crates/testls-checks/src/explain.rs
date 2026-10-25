@@ -437,6 +437,42 @@ const EXPLANATIONS: &[Explanation] = &[
         "W3C Referrer Policy",
     ),
     entry(
+        "header.banner",
+        "Server software banner",
+        "Server and X-Powered-By values that name software and versions help attackers pick known exploits; they add no value to clients.",
+        "RFC 9110 §10.2.4",
+    ),
+    entry(
+        "header.alt_svc_invalid",
+        "Malformed Alt-Svc header",
+        "Clients ignore an Alt-Svc header they cannot parse, so advertised alternatives such as HTTP/3 are never used.",
+        "RFC 7838 §3",
+    ),
+    entry(
+        "cookie.insecure",
+        "Cookie without Secure",
+        "Cookies without the Secure attribute are also sent over plain HTTP, where an attacker on the network can read them.",
+        "RFC 6265 §4.1.2.5",
+    ),
+    entry(
+        "cookie.no_httponly",
+        "Cookie without HttpOnly",
+        "Cookies without HttpOnly are readable by page scripts, so cross-site scripting can steal them. Session cookies should set it.",
+        "RFC 6265 §4.1.2.6",
+    ),
+    entry(
+        "cookie.no_samesite",
+        "Cookie without SameSite",
+        "Without an explicit SameSite attribute, cross-site request handling depends on browser defaults. Set Lax or Strict where possible.",
+        "RFC 6265bis §4.1.2.7",
+    ),
+    entry(
+        "cookie.samesite_none_insecure",
+        "SameSite=None cookie without Secure",
+        "Browsers reject SameSite=None cookies that lack Secure, so the cookie is dropped.",
+        "RFC 6265bis §4.1.2.7",
+    ),
+    entry(
         "http.error",
         "HTTP headers could not be retrieved",
         "The HTTPS request used to read response headers failed, so HSTS and security headers were not checked.",
@@ -563,9 +599,10 @@ mod tests {
     use super::*;
 
     /// Area prefixes that finding ids start with.
-    const AREAS: [&str; 13] = [
+    const AREAS: [&str; 14] = [
         "cert",
         "cipher",
+        "cookie",
         "dh",
         "group",
         "handshake",
@@ -614,6 +651,7 @@ mod tests {
             include_str!("ciphers.rs"),
             include_str!("details.rs"),
             include_str!("http.rs"),
+            include_str!("http_extras.rs"),
             include_str!("intolerance.rs"),
             include_str!("key_exchange.rs"),
             include_str!("ocsp.rs"),

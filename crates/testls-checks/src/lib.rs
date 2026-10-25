@@ -7,6 +7,7 @@ mod der;
 mod details;
 mod explain;
 mod http;
+mod http_extras;
 mod intolerance;
 mod key_exchange;
 mod ocsp;
@@ -24,6 +25,7 @@ pub use ciphers::{cipher_findings, cipher_name, cipher_severity};
 pub use details::details_findings;
 pub use explain::{Explanation, explain, explanations};
 pub use http::{Hsts, http_findings, parse_hsts};
+pub use http_extras::{AltService, Cookie, alt_services, banners, cookies, http_extra_findings};
 pub use intolerance::intolerance_findings;
 pub use key_exchange::{dh_severity, group_name, group_severity, key_exchange_findings};
 pub use ocsp::{
