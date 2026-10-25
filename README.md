@@ -53,6 +53,9 @@ testls --ca-file my-ca.pem 10.0.0.5 --sni intranet.example
 
 # Also ask the CA's OCSP responder or CRL whether the certificate is revoked
 testls --revocation example.com
+
+# Explain a finding id shown in brackets, or list all ids
+testls explain hsts.missing
 ```
 
 Exit status is `0` when no finding reaches `--fail-on` (default `high`), `1`

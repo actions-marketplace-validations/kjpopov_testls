@@ -280,7 +280,8 @@ pub fn http(section: &Result<HttpResponse, String>, paint: Painter) -> String {
     out
 }
 
-/// Renders findings in the given order with coloured severity labels.
+/// Renders findings in the given order with coloured severity labels and
+/// their ids, which `testls explain` describes.
 #[must_use]
 pub fn findings(findings: &[Finding], paint: Painter) -> String {
     let mut out = format!("{}\n", paint.heading("Findings"));
@@ -291,9 +292,10 @@ pub fn findings(findings: &[Finding], paint: Painter) -> String {
         let label = format!("{:<8}", f.severity.as_str());
         let _ = writeln!(
             out,
-            "  {} {}",
+            "  {} {} [{}]",
             paint.severity(f.severity, &label),
-            f.message
+            f.message,
+            f.id
         );
     }
     out
@@ -598,7 +600,7 @@ mod tests {
         );
     }
 
-    /// Findings show padded severity labels, or `none`.
+    /// Findings show padded severity labels and ids, or `none`.
     #[test]
     fn finding_lines() {
         assert_eq!(findings(&[], PLAIN), "Findings\n  none\n");
@@ -609,7 +611,7 @@ mod tests {
         )];
         assert_eq!(
             findings(&list, PLAIN),
-            "Findings\n  medium   TLS 1.0 is offered\n"
+            "Findings\n  medium   TLS 1.0 is offered [protocol.tls10]\n"
         );
         assert!(findings(&list, Painter::new(true)).contains("\x1b[33mmedium  \x1b[0m TLS 1.0"));
     }

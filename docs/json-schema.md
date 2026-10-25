@@ -9,7 +9,8 @@ finishes. This page describes schema version **1**.
   meaning or type.
 - New fields may be added without a version bump. Consumers should ignore
   fields they do not know.
-- Finding `id`s are stable. New ids may appear in any release.
+- Finding `id`s are stable. New ids may appear in any release;
+  `testls explain <id>` describes each one.
 - Scan errors (exit code 2) print a message to stderr and no JSON.
 - The exit code is the same as for text output (see `--fail-on`).
 

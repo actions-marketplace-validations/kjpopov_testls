@@ -6,6 +6,16 @@ All notable changes to `testls` are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `testls explain [ID]` describes a finding id with its rationale and a
+  reference, or lists every id when none is given.
+
+### Changed
+
+- Text output shows each finding's id in brackets, e.g.
+  `[hsts.missing]`.
+
 ## [0.2.0] - 2026-10-25
 
 Key exchange, HTTP security headers and revocation checks.

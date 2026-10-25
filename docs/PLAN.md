@@ -68,8 +68,9 @@ Two connection paths:
 - [x] Released as v0.2.0
 
 ### v0.3 — Findings & derived vulnerabilities
-- Finding IDs: keep the dotted IDs as a stable contract, show them in text
-  output, and add `testls explain <id>` with a short rationale and reference
+- [x] Finding IDs: keep the dotted IDs as a stable contract, show them in
+  text output, and add `testls explain <id>` with a short rationale and
+  reference
 - Derived vulnerability checks from data the scan already collects (no extra
   attack traffic): POODLE (SSLv3), BEAST, SWEET32, RC4, FREAK (export RSA),
   Logjam (weak or common DH primes, RFC 7919 groups named), DROWN (SSLv2),
@@ -180,3 +181,4 @@ Not scheduled; pulled into a milestone when someone picks it up.
 | 32 | The wire codec stays hand-rolled instead of building the read side on a parser crate such as `tls-parser` | It already covers every message the probes need, is fuzzed in CI, and accepts the malformed and legacy input a scanner must tolerate without another dependency |
 | 33 | Network policy: apart from the target, DNS lookups (CAA, DANE/TLSA, MX) will be on by default with one opt-out switch, while every other third-party service (OCSP/CRL, AIA fetching, CT logs) is opt-in with its own flag, like `--revocation`; an umbrella flag is added only once two or more such flags exist | DNS reveals little beyond the scanned name, while contacting a CA or log tells a third party what is scanned; per-feature flags keep air-gapped and pentest use explicit |
 | 34 | Roadmap order: v0.3 findings and derived vulnerability checks, v0.4 workflow (targets, formats, policies, packaging), v0.5 STARTTLS, intrusive probes behind `--intrusive` and grading, v0.6 web service | Derived checks reuse data already collected and need no attack traffic; workflow features make the scanner usable in CI before it grows new protocols; intrusive probes stay opt-in |
+| 35 | Every finding id has an entry in a static catalogue in `testls-checks` (title, rationale, reference) that `testls explain [id]` prints; text output shows the id in brackets after each finding. A unit test compares the catalogue with the id literals in the check sources so the two cannot drift | Users can look up why a finding matters without leaving the terminal, and the suppressions and baselines planned for v0.4 can key on the ids shown. The wording is original and cites RFCs or standards |

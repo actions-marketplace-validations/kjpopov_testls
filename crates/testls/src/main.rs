@@ -3,18 +3,20 @@
 mod revocation;
 mod target;
 
+use std::fmt::Write as _;
 use std::io::IsTerminal as _;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use clap::Parser;
 use clap::builder::TypedValueParser as _;
+use clap::{Parser, Subcommand};
 use testls_checks::{
     Finding, RevocationCheck, Severity, TrustStore, certificate_findings, cipher_findings,
-    describe_certificate, http_findings, key_exchange_findings, ocsp_findings, protocol_findings,
-    revocation_findings, revocation_urls, trust_findings, verify_ocsp_response,
+    describe_certificate, explain, explanations, http_findings, key_exchange_findings,
+    ocsp_findings, protocol_findings, revocation_findings, revocation_urls, trust_findings,
+    verify_ocsp_response,
 };
 use testls_probe::{
     Fetcher, HttpResponse, ProtocolSupport, Transport, detect_protocols, enumerate_ciphers,
@@ -28,10 +30,20 @@ use target::{Host, Target};
 
 /// TLS/SSL scanner inspired by testssl.sh.
 #[derive(Debug, Parser)]
-#[command(version, about)]
+#[command(
+    version,
+    about,
+    args_conflicts_with_subcommands = true,
+    subcommand_negates_reqs = true
+)]
 struct Cli {
+    /// Extra commands; without one, `testls` scans the target.
+    #[command(subcommand)]
+    command: Option<Command>,
+
     /// Target: host, host:port, [ipv6]:port, or https:// URL.
-    target: Target,
+    #[arg(required = true)]
+    target: Option<Target>,
 
     /// Server name to send in SNI (defaults to the target host name).
     #[arg(long)]
@@ -83,6 +95,16 @@ struct Cli {
     format: Format,
 }
 
+/// Subcommands besides the default scan.
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Describe a finding id, or list all ids when none is given.
+    Explain {
+        /// Finding id as shown in brackets in the findings list.
+        id: Option<String>,
+    },
+}
+
 /// Resolves the target to the first socket address it maps to.
 async fn resolve(target: &Target) -> std::io::Result<SocketAddr> {
     match &target.host {
@@ -103,36 +125,78 @@ fn colour_terminal() -> bool {
     std::io::stdout().is_terminal() && anstyle_query::windows::enable_ansi_colors().unwrap_or(true)
 }
 
-/// Runs the scan and maps the outcome to the exit code contract.
+/// Prints `testls explain` output: exit code 0, or 2 for an unknown id.
+fn explain_command(id: Option<&str>) -> ExitCode {
+    match explain_text(id) {
+        Ok(text) => {
+            print!("{text}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// Text for `testls explain`: one finding in detail, or a list of all ids.
+fn explain_text(id: Option<&str>) -> Result<String, String> {
+    let Some(id) = id else {
+        let width = explanations().iter().map(|e| e.id.len()).max().unwrap_or(0);
+        let mut out = String::new();
+        for e in explanations() {
+            let _ = writeln!(out, "{:<width$}  {}", e.id, e.title);
+        }
+        return Ok(out);
+    };
+    let e = explain(id).ok_or_else(|| {
+        format!("unknown finding id `{id}`; run `testls explain` to list all ids")
+    })?;
+    Ok(format!(
+        "{}: {}\n\n{}\n\nReference: {}\n",
+        e.id, e.title, e.rationale, e.reference
+    ))
+}
+
+/// Runs the selected command and maps the outcome to the exit code contract.
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
+    match (&cli.command, &cli.target) {
+        (Some(Command::Explain { id }), _) => explain_command(id.as_deref()),
+        (None, Some(target)) => scan(&cli, target).await,
+        (None, None) => unreachable!("clap requires a target without a subcommand"),
+    }
+}
+
+/// Scans `scan_target` with the options in `cli` and returns the exit code.
+async fn scan(cli: &Cli, scan_target: &Target) -> ExitCode {
     let paint = Painter::new(cli.color.enabled(
         cli.color != ColorChoice::Never && colour_terminal(),
         std::env::var("NO_COLOR").ok().as_deref(),
     ));
-    let store = match trust_store(&cli) {
+    let store = match trust_store(cli) {
         Ok(store) => store,
         Err(e) => {
             eprintln!("error: {e}");
             return ExitCode::from(2);
         }
     };
-    let addr = match resolve(&cli.target).await {
+    let addr = match resolve(scan_target).await {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("error: cannot resolve {}: {e}", cli.target);
+            eprintln!("error: cannot resolve {scan_target}: {e}");
             return ExitCode::from(2);
         }
     };
-    let sni = cli.sni.as_deref().or(cli.target.default_sni());
+    let sni = cli.sni.as_deref().or(scan_target.default_sni());
 
     let mut transport = Transport::new(addr);
     transport.connect_timeout = Duration::from_secs(cli.connect_timeout);
     transport.read_timeout = Duration::from_secs(cli.read_timeout);
 
     let started_at = unix_now();
-    let target = cli.target.to_string();
+    let target = scan_target.to_string();
     let is_text = cli.format == Format::Text;
     let show = |section: String| {
         if is_text {
@@ -421,6 +485,32 @@ mod tests {
     //! Unit tests for the scan helpers.
 
     use super::*;
+
+    /// `explain` describes one id, lists all ids, and rejects unknown ones.
+    #[test]
+    fn explain_output() {
+        let one = explain_text(Some("hsts.missing")).expect("known id");
+        assert!(one.starts_with("hsts.missing: No HSTS header\n\n"), "{one}");
+        assert!(one.ends_with("\n\nReference: RFC 6797\n"), "{one}");
+        let all = explain_text(None).expect("list");
+        assert_eq!(all.lines().count(), explanations().len());
+        assert!(all.lines().any(|l| l.starts_with("hsts.missing ")));
+        assert!(explain_text(Some("nope")).is_err());
+    }
+
+    /// A scan needs a target; `explain` does not, and the two do not mix.
+    #[test]
+    fn command_line_forms() {
+        assert!(Cli::try_parse_from(["testls"]).is_err());
+        assert!(Cli::try_parse_from(["testls", "example.com"]).is_ok());
+        let cli = Cli::try_parse_from(["testls", "explain"]).expect("explain");
+        assert!(matches!(cli.command, Some(Command::Explain { id: None })));
+        let cli = Cli::try_parse_from(["testls", "explain", "hsts"]).expect("explain id");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Explain { id: Some(_) })
+        ));
+    }
 
     /// A failed cipher enumeration is reported in the key exchange section
     /// without probing the server.
