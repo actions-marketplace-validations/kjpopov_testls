@@ -134,9 +134,16 @@ impl Fetcher {
                         body: Vec::new(),
                     });
                 }
-                let chunked = head
+                let codings: Vec<&str> = head
                     .header_values("transfer-encoding")
-                    .any(|v| v.to_ascii_lowercase().contains("chunked"));
+                    .flat_map(|v| v.split(','))
+                    .map(str::trim)
+                    .collect();
+                let chunked = match codings.as_slice() {
+                    [] => false,
+                    [coding] if coding.eq_ignore_ascii_case("chunked") => true,
+                    _ => return Err(ProbeError::Unexpected("unsupported Transfer-Encoding")),
+                };
                 let length = if chunked {
                     None
                 } else {
@@ -531,6 +538,8 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nContent-Length: 4\r\n\r\nabcd".to_vec(),
             b"HTTP/1.1 200 OK\r\nContent-Length: 3, 4\r\n\r\nabcd".to_vec(),
             b"HTTP/1.1 200 OK\r\nContent-Length: +3\r\n\r\nabc".to_vec(),
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked\r\n\r\n0\r\n\r\n".to_vec(),
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\nabc".to_vec(),
             b"HTTP/1.1 200 OK\r\n".to_vec(),
         ] {
             let (addr, _task) = serve(reply.clone()).await;
