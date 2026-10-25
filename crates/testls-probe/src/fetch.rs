@@ -184,9 +184,9 @@ impl Fetcher {
                     "connection closed before the HTTP headers ended",
                 ));
             }
-            // Chunk framing adds at most a few bytes per chunk; this bound
-            // only stops a server that streams forever.
-            if data.len() > self.max_body.saturating_mul(2).saturating_add(64 * 1024) {
+            // A one-byte chunk ("1\r\nX\r\n") takes six bytes on the wire;
+            // this bound only stops a server that streams forever.
+            if data.len() > self.max_body.saturating_mul(6).saturating_add(64 * 1024) {
                 return Err(too_large());
             }
             let n = stream.read(&mut buf).await.map_err(ProbeError::Io)?;
@@ -467,6 +467,20 @@ mod tests {
         .await;
         let r = fetcher().get(&format!("http://{addr}/")).await.unwrap();
         assert_eq!(r.body, b"abcde");
+    }
+
+    /// A body of one-byte chunks up to the size limit is accepted despite
+    /// the framing overhead.
+    #[tokio::test]
+    async fn one_byte_chunks() {
+        let mut reply = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
+        for _ in 0..fetcher().max_body {
+            reply.extend_from_slice(b"1\r\nx\r\n");
+        }
+        reply.extend_from_slice(b"0\r\n\r\n");
+        let (addr, _task) = serve(reply).await;
+        let r = fetcher().get(&format!("http://{addr}/")).await.unwrap();
+        assert_eq!(r.body.len(), fetcher().max_body);
     }
 
     /// Error statuses are returned for the caller to judge.
