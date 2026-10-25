@@ -260,6 +260,24 @@ const EXPLANATIONS: &[Explanation] = &[
         "RFC 5280 §6",
     ),
     entry(
+        "cert.too_long",
+        "Certificate validity period too long",
+        "Publicly trusted TLS certificates may be valid for at most 398 days, 200 days when issued from 15 March 2026, 100 days from 15 March 2027 and 47 days from 15 March 2029. Longer certificates break CA rules and may be rejected by browsers.",
+        "CA/Browser Forum Baseline Requirements §6.3.2 (ballot SC-081v3)",
+    ),
+    entry(
+        "cert.no_sct",
+        "No embedded Certificate Transparency timestamps",
+        "Browsers require proof that publicly trusted certificates were logged. Without embedded SCTs the server must deliver them in the TLS handshake or a stapled OCSP response, which this check does not see.",
+        "RFC 6962 §3.3",
+    ),
+    entry(
+        "cert.sct_invalid",
+        "Embedded Certificate Transparency timestamps are unreadable",
+        "The SCT list extension cannot be parsed, so clients cannot use it as proof of logging. Reissue the certificate.",
+        "RFC 6962 §3.3",
+    ),
+    entry(
         "cert.error",
         "Certificate chain could not be retrieved",
         "The full handshake used to fetch the certificate chain failed.",
@@ -591,6 +609,7 @@ mod tests {
     /// revocation data) and by the CLI.
     fn emitted_ids() -> BTreeSet<String> {
         let sources = [
+            include_str!("baseline.rs"),
             include_str!("certificates.rs"),
             include_str!("ciphers.rs"),
             include_str!("details.rs"),
