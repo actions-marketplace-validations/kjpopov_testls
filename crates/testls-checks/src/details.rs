@@ -36,7 +36,9 @@ pub fn details_findings(details: &HandshakeDetails) -> Vec<Finding> {
         findings.push(Finding::new(
             "handshake.early_data",
             Severity::Info,
-            format!("TLSv1.3: 0-RTT early data accepted (up to {size} bytes), replayable"),
+            format!(
+                "TLSv1.3: session tickets allow 0-RTT early data (up to {size} bytes), replayable"
+            ),
         ));
     }
     findings
@@ -105,7 +107,7 @@ mod tests {
                 (
                     "handshake.early_data",
                     Severity::Info,
-                    "TLSv1.3: 0-RTT early data accepted (up to 16384 bytes), replayable"
+                    "TLSv1.3: session tickets allow 0-RTT early data (up to 16384 bytes), replayable"
                 ),
             ]
         );

@@ -510,7 +510,7 @@ const EXPLANATIONS: &[Explanation] = &[
     ),
     entry(
         "handshake.early_data",
-        "0-RTT early data accepted",
+        "Session tickets allow 0-RTT early data",
         "Early data is not protected against replay; only enable 0-RTT for idempotent requests and with application-level replay protection.",
         "RFC 8446 §8, §E.5",
     ),
