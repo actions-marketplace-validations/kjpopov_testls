@@ -378,6 +378,7 @@ fn hex_equals(hex: &str, bytes: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    //! Unit tests for the Diffie-Hellman prime table.
     use super::*;
 
     /// Decode upper-case hex for the tests.
@@ -388,6 +389,8 @@ mod tests {
             .collect()
     }
 
+    /// Entries are in order, sized as named, odd, upper-case hex without
+    /// leading zeros, and only the RFC 7919 groups are flagged `ffdhe`.
     #[test]
     fn table_is_well_formed() {
         let sizes: Vec<(&str, usize)> = known_dh_primes()
@@ -430,6 +433,8 @@ mod tests {
         }
     }
 
+    /// Lookup matches exact and zero-padded primes and rejects altered,
+    /// truncated, empty and all-zero input.
     #[test]
     fn lookup() {
         let modp14 = decode(known_dh_primes()[3].hex);
