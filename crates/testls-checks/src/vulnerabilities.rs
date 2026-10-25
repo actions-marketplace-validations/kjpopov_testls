@@ -348,7 +348,7 @@ fn raccoon(inputs: &Inputs) -> Vulnerability {
             None => {}
         }
     }
-    let (status, detail) = if unmeasured {
+    let (status, detail) = if unmeasured || inputs.dh_unmeasured() {
         (
             VulnStatus::NotTested,
             "DH key reuse not measured for every DHE result",
@@ -821,6 +821,20 @@ mod tests {
         let p = protocols(&[ProtocolVersion::TLS12]);
         let c = [ciphers(ProtocolVersion::TLS12, &[0x009e])];
         let k = [kx(ProtocolVersion::TLS12, None, None)];
+        let list = assess_vulnerabilities(&p, &c, &k, None);
+        assert_eq!(status(&list, "raccoon"), VulnStatus::NotTested);
+        // A fresh TLSv1.2 result says nothing about TLSv1.1 without a key
+        // exchange result, nor about unmeasured DHE-PSK (0x00aa).
+        let p = protocols(&[ProtocolVersion::TLS11, ProtocolVersion::TLS12]);
+        let k = [kx(
+            ProtocolVersion::TLS12,
+            Some(vec![0xc5; 256]),
+            Some(false),
+        )];
+        let list = assess_vulnerabilities(&p, &[], &k, None);
+        assert_eq!(status(&list, "raccoon"), VulnStatus::NotTested);
+        let p = protocols(&[ProtocolVersion::TLS12]);
+        let c = [ciphers(ProtocolVersion::TLS12, &[0x009e, 0x00aa])];
         let list = assess_vulnerabilities(&p, &c, &k, None);
         assert_eq!(status(&list, "raccoon"), VulnStatus::NotTested);
     }
