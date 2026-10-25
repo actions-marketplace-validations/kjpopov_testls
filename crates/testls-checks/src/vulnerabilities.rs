@@ -121,13 +121,17 @@ impl Inputs<'_> {
     }
 
     /// Whether a version matching `relevant` is offered (or failed to probe)
-    /// but has no cipher enumeration, so suite verdicts are incomplete.
+    /// but has no (or an empty) cipher enumeration, so suite verdicts are
+    /// incomplete.
     fn enumeration_missing(&self, relevant: impl Fn(ProtocolVersion) -> bool) -> bool {
         self.protocols.iter().any(|p| {
             p.version >= ProtocolVersion::SSL3
                 && relevant(p.version)
                 && p.support != ProtocolSupport::NotSupported
-                && !self.ciphers.iter().any(|c| c.version == p.version)
+                && !self
+                    .ciphers
+                    .iter()
+                    .any(|c| c.version == p.version && !c.suites.is_empty())
         })
     }
 
@@ -142,20 +146,27 @@ impl Inputs<'_> {
             let Some(k) = self.key_exchange.iter().find(|k| k.version == p.version) else {
                 return true;
             };
-            let names: Vec<_> = self
-                .ciphers
-                .iter()
-                .filter(|c| c.version == p.version)
-                .flat_map(|c| &c.suites)
-                .map(|&id| cipher_name(p.version, id))
-                .collect();
             // The probe never measures DHE-PSK, so its parameters stay unknown.
-            let dhe_psk = names.iter().any(|n| n.starts_with("TLS_DHE_PSK_"));
-            let dhe = names
-                .iter()
-                .any(|n| n.starts_with("TLS_DHE_") || n.starts_with("TLS_DH_anon_"));
-            dhe_psk || (dhe && k.dh_bits.is_none())
+            let dhe_psk = self
+                .suite_names(p.version)
+                .any(|n| n.starts_with("TLS_DHE_PSK_"));
+            dhe_psk || (self.accepts_dhe(p.version) && k.dh_bits.is_none())
         })
+    }
+
+    /// Names of the suites accepted with `version`.
+    fn suite_names(&self, version: ProtocolVersion) -> impl Iterator<Item = &'static str> + '_ {
+        self.ciphers
+            .iter()
+            .filter(move |c| c.version == version)
+            .flat_map(|c| &c.suites)
+            .map(move |&id| cipher_name(version, id))
+    }
+
+    /// Whether `version` accepted a finite-field DHE suite.
+    fn accepts_dhe(&self, version: ProtocolVersion) -> bool {
+        self.suite_names(version)
+            .any(|n| n.starts_with("TLS_DHE_") || n.starts_with("TLS_DH_anon_"))
     }
 
     /// Key exchange results for versions before TLSv1.3.
@@ -325,14 +336,15 @@ fn raccoon(inputs: &Inputs) -> Vulnerability {
     let mut unmeasured = false;
     let mut dhe = false;
     for k in inputs.legacy_key_exchange() {
-        dhe |= k.dh_bits.is_some();
+        let uses_dhe = k.dh_bits.is_some() || inputs.accepts_dhe(k.version);
+        dhe |= uses_dhe;
         match k.dh_key_reused {
             Some(true) => {
                 let text = format!("{} reuses its DH public value", k.version);
                 return vuln(id, name, VulnStatus::Vulnerable, text, finding);
             }
             Some(false) => measured = true,
-            None if k.dh_bits.is_some() => unmeasured = true,
+            None if uses_dhe => unmeasured = true,
             None => {}
         }
     }
@@ -762,6 +774,13 @@ mod tests {
             assert_eq!(status(&list, id), VulnStatus::NotTested, "{id}");
         }
         assert_eq!(status(&list, "rc4"), VulnStatus::Vulnerable);
+        // An empty enumeration counts as missing too.
+        let c = [
+            ciphers(ProtocolVersion::TLS10, &[]),
+            ciphers(ProtocolVersion::TLS12, &[ECDHE_GCM]),
+        ];
+        let list = assess_vulnerabilities(&p, &c, &[], None);
+        assert_eq!(status(&list, "beast"), VulnStatus::NotTested);
     }
 
     /// Vulnerable verdicts point to the cipher finding that is emitted.
@@ -796,6 +815,13 @@ mod tests {
             kx(ProtocolVersion::TLS12, Some(vec![0xc5; 256]), Some(false)),
         ];
         let list = assess_vulnerabilities(&p, &[], &k, None);
+        assert_eq!(status(&list, "raccoon"), VulnStatus::NotTested);
+        // An accepted DHE suite (TLS_DHE_RSA_WITH_AES_128_GCM_SHA256) without
+        // any DH measurement is not "no DHE key exchange".
+        let p = protocols(&[ProtocolVersion::TLS12]);
+        let c = [ciphers(ProtocolVersion::TLS12, &[0x009e])];
+        let k = [kx(ProtocolVersion::TLS12, None, None)];
+        let list = assess_vulnerabilities(&p, &c, &k, None);
         assert_eq!(status(&list, "raccoon"), VulnStatus::NotTested);
     }
 
