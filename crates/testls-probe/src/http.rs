@@ -131,7 +131,7 @@ fn find_header_end(buf: &[u8]) -> Option<usize> {
 
 /// Length of the received header section, `None` while it is incomplete, or
 /// an error once it exceeds [`MAX_HEADER_BYTES`] (complete or not).
-fn complete_head(buf: &[u8]) -> Result<Option<usize>, ProbeError> {
+pub(crate) fn complete_head(buf: &[u8]) -> Result<Option<usize>, ProbeError> {
     let too_large = || ProbeError::Unexpected("HTTP header section too large");
     match find_header_end(buf) {
         Some(end) if end > MAX_HEADER_BYTES => Err(too_large()),
@@ -155,7 +155,7 @@ fn is_token(name: &str) -> bool {
 /// without a colon, with a name that is not a token, or with control
 /// characters other than HTAB in the value. Field values may carry
 /// `obs-text` (RFC 9110 §5.5); bytes that are not UTF-8 become U+FFFD.
-fn parse_head(head: &[u8]) -> Result<HttpResponse, ProbeError> {
+pub(crate) fn parse_head(head: &[u8]) -> Result<HttpResponse, ProbeError> {
     let text = String::from_utf8_lossy(head);
     let mut lines = text.split("\r\n");
     let status_line = lines.next().unwrap_or_default();
