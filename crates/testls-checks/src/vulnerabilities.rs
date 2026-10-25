@@ -142,14 +142,19 @@ impl Inputs<'_> {
             let Some(k) = self.key_exchange.iter().find(|k| k.version == p.version) else {
                 return true;
             };
-            let dhe = self
+            let names: Vec<_> = self
                 .ciphers
                 .iter()
                 .filter(|c| c.version == p.version)
                 .flat_map(|c| &c.suites)
                 .map(|&id| cipher_name(p.version, id))
+                .collect();
+            // The probe never measures DHE-PSK, so its parameters stay unknown.
+            let dhe_psk = names.iter().any(|n| n.starts_with("TLS_DHE_PSK_"));
+            let dhe = names
+                .iter()
                 .any(|n| n.starts_with("TLS_DHE_") || n.starts_with("TLS_DH_anon_"));
-            dhe && k.dh_bits.is_none()
+            dhe_psk || (dhe && k.dh_bits.is_none())
         })
     }
 
@@ -706,6 +711,10 @@ mod tests {
 
         // TLS_DHE_PSK_WITH_AES_128_GCM_SHA256: the probe does not measure it.
         let v = assess(&[ciphers(tls12, &[0x00aa])], &[kx(tls12, None, None)]);
+        assert_eq!(v.status, VulnStatus::NotTested);
+        // Mixed with a measured DHE suite, DHE-PSK still stays unmeasured.
+        let k = [kx(tls12, Some(vec![0xc5; 256]), None)];
+        let v = assess(&[ciphers(tls12, &[0x00aa, 0x009e])], &k);
         assert_eq!(v.status, VulnStatus::NotTested);
 
         // One offered version without key exchange data.
