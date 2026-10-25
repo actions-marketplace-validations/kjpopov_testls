@@ -14,15 +14,16 @@ use clap::builder::TypedValueParser as _;
 use clap::{Parser, Subcommand};
 use testls_checks::{
     Finding, RevocationCheck, Severity, TrustStore, Vulnerability, assess_vulnerabilities,
-    certificate_findings, cipher_findings, describe_certificate, explain, explanations,
-    http_findings, intolerance_findings, key_exchange_findings, ocsp_findings, protocol_findings,
-    revocation_findings, revocation_urls, trust_findings, verify_ocsp_response,
+    certificate_findings, cipher_findings, describe_certificate, details_findings, explain,
+    explanations, http_findings, intolerance_findings, key_exchange_findings, ocsp_findings,
+    protocol_findings, revocation_findings, revocation_urls, trust_findings, verify_ocsp_response,
     vulnerability_findings,
 };
 use testls_probe::{
-    CipherResult, Fetcher, HttpResponse, Intolerance, KeyExchangeResult, ProtocolResult,
-    ProtocolSupport, Transport, detect_protocols, enumerate_ciphers, fetch_certificates,
-    fetch_http_headers, probe_features, probe_intolerance, probe_key_exchange,
+    CipherResult, Fetcher, HandshakeDetails, HttpResponse, Intolerance, KeyExchangeResult,
+    ProtocolResult, ProtocolSupport, Transport, detect_protocols, enumerate_ciphers,
+    fetch_certificates, fetch_http_headers, probe_details, probe_features, probe_intolerance,
+    probe_key_exchange,
 };
 use testls_report::text::{self, CertificateSection, CipherSection, KeyExchangeSection};
 use testls_report::{ColorChoice, Format, Painter, json};
@@ -190,17 +191,10 @@ fn transport(cli: &Cli, addr: SocketAddr) -> Transport {
 /// Scans `scan_target` with the options in `cli` and returns the exit code.
 async fn scan(cli: &Cli, scan_target: &Target) -> ExitCode {
     let paint = painter(cli);
-    let store = match trust_store(cli) {
-        Ok(store) => store,
+    let (store, addr) = match prepare(cli, scan_target).await {
+        Ok(ready) => ready,
         Err(e) => {
             eprintln!("error: {e}");
-            return ExitCode::from(2);
-        }
-    };
-    let addr = match resolve(scan_target).await {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("error: cannot resolve {scan_target}: {e}");
             return ExitCode::from(2);
         }
     };
@@ -272,6 +266,10 @@ async fn scan(cli: &Cli, scan_target: &Target) -> ExitCode {
     show(format!("\n{}", text::intolerance(&intolerance, paint)));
     findings.extend(intolerance_findings);
 
+    let (details, details_findings) = details_section(&transport, &ciphers, sni).await;
+    show(format!("\n{}", text::details(&details, paint)));
+    findings.extend(details_findings);
+
     findings.retain(|f| f.severity > Severity::Ok);
     findings.sort_by_key(|f| std::cmp::Reverse(f.severity));
     show(format!("\n{}", text::findings(&findings, paint)));
@@ -292,12 +290,22 @@ async fn scan(cli: &Cli, scan_target: &Target) -> ExitCode {
                 revocation: revocation.as_ref(),
                 vulnerabilities: &vulns,
                 intolerance: &intolerance,
+                details: &details,
                 findings: &findings,
             })
         );
     }
 
     ExitCode::from(u8::from(findings.iter().any(|f| f.severity >= cli.fail_on)))
+}
+
+/// Loads the trust store and resolves the target before scanning.
+async fn prepare(cli: &Cli, scan_target: &Target) -> Result<(TrustStore, SocketAddr), String> {
+    let store = trust_store(cli)?;
+    let addr = resolve(scan_target)
+        .await
+        .map_err(|e| format!("cannot resolve {scan_target}: {e}"))?;
+    Ok((store, addr))
 }
 
 /// Loads the trust store selected on the command line: a `--ca-file`
@@ -550,6 +558,35 @@ async fn intolerance_section(
     }
 }
 
+/// Probes extended master secret, the downgrade sentinel, session tickets
+/// and 0-RTT.
+///
+/// A probe error becomes an informational `handshake.error` finding.
+async fn details_section(
+    transport: &Transport,
+    ciphers: &[CipherSection],
+    sni: Option<&str>,
+) -> (Result<HandshakeDetails, String>, Vec<Finding>) {
+    let ciphers: Vec<CipherResult> = ciphers
+        .iter()
+        .filter_map(|s| s.outcome.as_ref().ok().cloned())
+        .collect();
+    match probe_details(transport, &ciphers, sni).await {
+        Ok(result) => {
+            let findings = details_findings(&result);
+            (Ok(result), findings)
+        }
+        Err(e) => {
+            let finding = Finding::new(
+                "handshake.error",
+                Severity::Info,
+                format!("handshake details could not be probed: {e}"),
+            );
+            (Err(e.to_string()), vec![finding])
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Unit tests for the scan helpers.
@@ -668,6 +705,27 @@ mod tests {
         assert!(section.is_err());
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].id, "intolerance.error");
+        assert_eq!(findings[0].severity, Severity::Info);
+    }
+
+    /// A failed handshake details probe is reported as an info finding.
+    #[tokio::test]
+    async fn details_error_is_info() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let ciphers = [CipherSection {
+            version: ProtocolVersion::TLS12,
+            outcome: Ok(CipherResult {
+                version: ProtocolVersion::TLS12,
+                suites: vec![0xc02f],
+                order: testls_probe::CipherOrder::Server,
+            }),
+        }];
+        let (section, findings) = details_section(&Transport::new(addr), &ciphers, None).await;
+        assert!(section.is_err());
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].id, "handshake.error");
         assert_eq!(findings[0].severity, Severity::Info);
     }
 }

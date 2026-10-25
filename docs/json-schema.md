@@ -33,6 +33,7 @@ finishes. This page describes schema version **1**.
 | `revocation` | object or null | [Revocation](#revocation) check with `--revocation`; `null` without it |
 | `vulnerabilities` | array | [Vulnerabilities](#vulnerability) derived from the scan data |
 | `intolerance` | object | [ClientHello tolerance](#clienthello-tolerance) tests |
+| `details` | object | [Handshake details](#handshake-details) |
 | `findings` | array | [Findings](#finding), most severe first |
 
 ### Protocol
@@ -156,6 +157,19 @@ version, the plain handshake failed, or the server was unreachable).
 | `tests.fragmented` | string or null | The ClientHello is split across 16-byte records |
 | `error` | string | Only when the probe failed |
 
+### Handshake details
+
+Each field is `null` when not tested.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `protocol` | string or null | TLSv1.2-or-older version used for the next two fields |
+| `extended_master_secret` | bool or null | Server negotiates the extended master secret (RFC 7627) |
+| `downgrade_sentinel` | bool or null | Only when TLSv1.3 is offered: the older-version ServerHello carries the downgrade sentinel (RFC 8446 §4.1.3) |
+| `session_tickets` | bool or null | Server issues TLSv1.3 session tickets |
+| `max_early_data` | integer or null | Largest 0-RTT early data size in a ticket; `0` = no 0-RTT |
+| `error` | string | Only when the probe failed |
+
 ### Finding
 
 | Field | Type | Description |
@@ -244,6 +258,10 @@ Abbreviated:
   "intolerance": {
     "protocol": "TLSv1.3",
     "tests": { "fragmented": "tolerated", "grease": "tolerated", "oversized": "rejected", "unknown_extension": "tolerated", "unknown_version": "tolerated" }
+  },
+  "details": {
+    "protocol": "TLSv1.2", "extended_master_secret": true, "downgrade_sentinel": true,
+    "session_tickets": true, "max_early_data": 0
   },
   "findings": [
     { "id": "protocol.no_tls13", "severity": "info", "message": "..." }

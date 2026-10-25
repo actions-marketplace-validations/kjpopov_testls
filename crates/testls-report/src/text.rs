@@ -12,8 +12,8 @@ use testls_checks::{
     group_severity, protocol_severity, revocation_reason_name,
 };
 use testls_probe::{
-    CipherOrder, CipherResult, HttpResponse, Intolerance, KeyExchangeResult, ProtocolResult,
-    ProtocolSupport,
+    CipherOrder, CipherResult, HandshakeDetails, HttpResponse, Intolerance, KeyExchangeResult,
+    ProtocolResult, ProtocolSupport,
 };
 use testls_wire::ProtocolVersion;
 
@@ -332,6 +332,50 @@ pub fn intolerance(section: &Result<Intolerance, String>, paint: Painter) -> Str
             None => "not tested".to_owned(),
         };
         let _ = writeln!(out, "  {label:<18} {verdict}");
+    }
+    out
+}
+
+/// Renders extended master secret, downgrade sentinel, session ticket and
+/// 0-RTT support.
+#[must_use]
+pub fn details(section: &Result<HandshakeDetails, String>, paint: Painter) -> String {
+    let result = match section {
+        Ok(result) => result,
+        Err(e) => return format!("{}: error: {e}\n", paint.heading("Handshake details")),
+    };
+    let legacy = result
+        .legacy_version
+        .map(|v| format!(" ({v})"))
+        .unwrap_or_default();
+    let flag = |value: Option<bool>, bad: Severity, suffix: &str| match value {
+        Some(true) => paint.severity(Severity::Ok, &format!("yes{suffix}")),
+        Some(false) => paint.severity(bad, &format!("no{suffix}")),
+        None => "not tested".to_owned(),
+    };
+    let early_data = match result.max_early_data {
+        Some(0) => paint.severity(Severity::Ok, "no"),
+        Some(n) => paint.severity(Severity::Info, &format!("up to {n} bytes")),
+        None => "not tested".to_owned(),
+    };
+    let mut out = format!("{}\n", paint.heading("Handshake details"));
+    let rows = [
+        (
+            "extended master secret",
+            flag(result.extended_master_secret, Severity::Low, &legacy),
+        ),
+        (
+            "downgrade sentinel",
+            flag(result.downgrade_sentinel, Severity::Medium, &legacy),
+        ),
+        (
+            "session tickets",
+            flag(result.session_tickets, Severity::Info, " (TLSv1.3)"),
+        ),
+        ("0-RTT early data", early_data),
+    ];
+    for (label, value) in rows {
+        let _ = writeln!(out, "  {label:<23} {value}");
     }
     out
 }
@@ -683,6 +727,45 @@ mod tests {
         assert_eq!(
             intolerance(&Err("timed out".into()), PLAIN),
             "ClientHello tolerance: error: timed out\n"
+        );
+    }
+
+    /// Detail lines show each flag, the probed version, 0-RTT size and errors.
+    #[test]
+    fn details_lines() {
+        let result = HandshakeDetails {
+            legacy_version: Some(ProtocolVersion::TLS12),
+            extended_master_secret: Some(true),
+            downgrade_sentinel: Some(false),
+            session_tickets: None,
+            max_early_data: Some(16384),
+        };
+        assert_eq!(
+            details(&Ok(result), PLAIN),
+            "Handshake details\n  \
+             extended master secret  yes (TLSv1.2)\n  \
+             downgrade sentinel      no (TLSv1.2)\n  \
+             session tickets         not tested\n  \
+             0-RTT early data        up to 16384 bytes\n"
+        );
+        let none = HandshakeDetails {
+            legacy_version: None,
+            extended_master_secret: None,
+            downgrade_sentinel: None,
+            session_tickets: Some(true),
+            max_early_data: Some(0),
+        };
+        assert_eq!(
+            details(&Ok(none), PLAIN),
+            "Handshake details\n  \
+             extended master secret  not tested\n  \
+             downgrade sentinel      not tested\n  \
+             session tickets         yes (TLSv1.3)\n  \
+             0-RTT early data        no\n"
+        );
+        assert_eq!(
+            details(&Err("timed out".into()), PLAIN),
+            "Handshake details: error: timed out\n"
         );
     }
 
