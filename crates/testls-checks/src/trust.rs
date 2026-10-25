@@ -21,6 +21,9 @@ use crate::{Finding, Severity};
 pub struct TrustStore {
     /// The root certificates' subject, public key, and name constraints.
     anchors: Vec<TrustAnchor<'static>>,
+    /// Whether the roots are the bundled Mozilla root program rather than
+    /// the system store or a custom bundle.
+    public: bool,
 }
 
 impl TrustStore {
@@ -30,6 +33,7 @@ impl TrustStore {
     pub fn webpki() -> Self {
         Self {
             anchors: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+            public: true,
         }
     }
 
@@ -51,7 +55,10 @@ impl TrustStore {
                     .map_err(|e| format!("root certificate #{index}: {e:?}"))
             })
             .collect::<Result<_, _>>()?;
-        Ok(Self { anchors })
+        Ok(Self {
+            anchors,
+            public: false,
+        })
     }
 
     /// Builds a store from a PEM bundle of root certificates; other PEM
@@ -107,7 +114,11 @@ impl TrustStore {
             })
             .collect();
         if !anchors.is_empty() {
-            return Ok((Self { anchors }, errors));
+            let store = Self {
+                anchors,
+                public: false,
+            };
+            return Ok((store, errors));
         }
         match errors.as_slice() {
             [] => Err("no usable root certificates found".to_owned()),
@@ -130,6 +141,15 @@ impl TrustStore {
     pub fn is_empty(&self) -> bool {
         self.anchors.is_empty()
     }
+
+    /// Whether the store is the bundled Mozilla root program. Only chains
+    /// to publicly trusted roots are bound by the CA/Browser Forum Baseline
+    /// Requirements; the system store and custom bundles can hold private
+    /// enterprise roots, so they do not count.
+    #[must_use]
+    pub fn is_public(&self) -> bool {
+        self.public
+    }
 }
 
 /// Verifies a DER certificate chain (leaf first) for TLS server
@@ -140,37 +160,46 @@ impl TrustStore {
 /// reported by [`certificate_findings`](crate::certificate_findings)).
 #[must_use]
 pub fn trust_findings(chain: &[Vec<u8>], now: i64, store: &TrustStore) -> Vec<Finding> {
-    let Some(leaf_der) = chain.first() else {
-        return Vec::new();
-    };
-    let Some(time) = verification_time(leaf_der, now) else {
-        return Vec::new();
-    };
-    let leaf_der = CertificateDer::from(leaf_der.as_slice());
-    let Ok(leaf) = EndEntityCert::try_from(&leaf_der) else {
-        return Vec::new();
-    };
-    let intermediates: Vec<CertificateDer<'_>> = chain[1..]
-        .iter()
-        .map(|der| CertificateDer::from(der.as_slice()))
-        .collect();
-
-    match leaf.verify_for_usage(
-        webpki::ALL_VERIFICATION_ALGS,
-        &store.anchors,
-        &intermediates,
-        time,
-        KeyUsage::server_auth(),
-        None,
-        None,
-    ) {
-        Ok(_) => Vec::new(),
-        Err(e) => vec![Finding::new(
+    match verify(chain, now, store) {
+        Some(Err(e)) => vec![Finding::new(
             "cert.untrusted",
             Severity::High,
             format!("certificate chain is not trusted: {}", reason(&e, chain)),
         )],
+        Some(Ok(())) | None => Vec::new(),
     }
+}
+
+/// Whether the chain (leaf first) verifies for TLS server authentication
+/// against `store` at Unix time `now`. False for an empty or unparsable chain.
+#[must_use]
+pub fn is_trusted(chain: &[Vec<u8>], now: i64, store: &TrustStore) -> bool {
+    matches!(verify(chain, now, store), Some(Ok(())))
+}
+
+/// Runs path validation; `None` when the chain is empty or the leaf cannot be
+/// parsed, so no verdict is possible.
+fn verify(chain: &[Vec<u8>], now: i64, store: &TrustStore) -> Option<Result<(), webpki::Error>> {
+    let leaf_der = chain.first()?;
+    let time = verification_time(leaf_der, now)?;
+    let leaf_der = CertificateDer::from(leaf_der.as_slice());
+    let leaf = EndEntityCert::try_from(&leaf_der).ok()?;
+    let intermediates: Vec<CertificateDer<'_>> = chain[1..]
+        .iter()
+        .map(|der| CertificateDer::from(der.as_slice()))
+        .collect();
+    Some(
+        leaf.verify_for_usage(
+            webpki::ALL_VERIFICATION_ALGS,
+            &store.anchors,
+            &intermediates,
+            time,
+            KeyUsage::server_auth(),
+            None,
+            None,
+        )
+        .map(|_| ()),
+    )
 }
 
 /// The time to verify the chain at: `now`, clamped into the leaf's validity
@@ -316,11 +345,31 @@ mod tests {
         assert_eq!(messages(&[b"garbage"], MID_2026, &store), NONE);
     }
 
+    /// Only a verified path counts as trusted; no verdict is not trust.
+    #[test]
+    fn trusted_needs_verification() {
+        let store = test_store();
+        let chain = |certs: &[&[u8]]| certs.iter().map(|c| c.to_vec()).collect::<Vec<_>>();
+        assert!(is_trusted(&chain(&[LEAF, INTERMEDIATE]), MID_2026, &store));
+        assert!(!is_trusted(&chain(&[LEAF]), MID_2026, &store));
+        assert!(!is_trusted(&[], MID_2026, &store));
+        assert!(!is_trusted(&chain(&[b"garbage"]), MID_2026, &store));
+        let mut padded = LEAF.to_vec();
+        padded.push(0);
+        assert!(!is_trusted(
+            &chain(&[&padded, INTERMEDIATE]),
+            MID_2026,
+            &store
+        ));
+    }
+
     /// The bundled Mozilla store is populated; garbage is not a trust anchor.
     #[test]
     fn stores() {
         assert!(!TrustStore::webpki().is_empty());
+        assert!(TrustStore::webpki().is_public());
         assert_eq!(test_store().len(), 1);
+        assert!(!test_store().is_public());
         assert!(TrustStore::from_certificates([b"garbage".as_slice()]).is_err());
     }
 
@@ -333,6 +382,7 @@ mod tests {
             TrustStore::from_system_certificates([b"garbage".as_slice(), ROOT], Vec::new())
                 .unwrap();
         assert_eq!(store.len(), 1);
+        assert!(!store.is_public());
         assert_eq!(warnings, Vec::<String>::new());
         assert_eq!(messages(&[LEAF, INTERMEDIATE], MID_2026, &store), NONE);
 

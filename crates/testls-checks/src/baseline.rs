@@ -222,6 +222,7 @@ mod tests {
         assert_eq!(scts[1].log_id, [0x22; 32]);
         assert_eq!(scts[0].timestamp, 1_775_001_600_000);
         assert_eq!(embedded_scts(EC_LOCALHOST).unwrap(), []);
+        assert_eq!(crate::describe_certificate(CT_SCTS).unwrap().scts, Some(2));
         assert!(embedded_scts(b"junk").is_err());
     }
 

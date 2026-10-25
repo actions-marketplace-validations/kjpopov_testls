@@ -142,6 +142,7 @@ fn modern_server() {
     assert_eq!(s.line("draft Kyber groups"), "draft Kyber groups     none");
     assert_eq!(s.line("Certificate"), "Certificate (TLSv1.3)");
     assert_eq!(s.line("key"), "key     RSA 2048 bits");
+    assert_eq!(s.line("SCTs"), "SCTs    0");
     assert_eq!(s.line("OCSP"), "OCSP     not stapled");
     assert_eq!(s.line("HTTP headers"), "HTTP headers (status 200)");
     assert_eq!(

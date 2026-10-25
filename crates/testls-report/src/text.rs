@@ -153,6 +153,12 @@ pub fn certificate(section: &Result<CertificateSection, String>, paint: Painter)
                     let _ = writeln!(out, "     names   {}", info.names.join(", "));
                 }
                 let _ = writeln!(out, "     key     {}", info.key);
+                if position == 0 {
+                    let scts = info
+                        .scts
+                        .map_or_else(|| "unreadable".into(), |n| n.to_string());
+                    let _ = writeln!(out, "     SCTs    {scts}");
+                }
             }
             Err(e) => {
                 let _ = writeln!(out, "  #{position} cannot be parsed: {e}");
@@ -616,6 +622,7 @@ mod tests {
                     not_after_unix: 0,
                     names: vec!["localhost".into(), "127.0.0.1".into()],
                     key: "EC 256 bits".into(),
+                    scts: Some(2),
                 }),
                 Err("bad".into()),
             ],
@@ -623,7 +630,7 @@ mod tests {
         });
         assert_eq!(
             certificate(&section, PLAIN),
-            "Certificate (TLSv1.3)\n  #0 CN=localhost\n     issuer  CN=test CA\n     valid   A to B\n     names   localhost, 127.0.0.1\n     key     EC 256 bits\n  #1 cannot be parsed: bad\n  OCSP     not stapled\n"
+            "Certificate (TLSv1.3)\n  #0 CN=localhost\n     issuer  CN=test CA\n     valid   A to B\n     names   localhost, 127.0.0.1\n     key     EC 256 bits\n     SCTs    2\n  #1 cannot be parsed: bad\n  OCSP     not stapled\n"
         );
         assert_eq!(
             certificate(&Err("refused".into()), PLAIN),

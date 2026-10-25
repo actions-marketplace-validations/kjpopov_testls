@@ -14,10 +14,11 @@ use clap::builder::TypedValueParser as _;
 use clap::{Parser, Subcommand};
 use testls_checks::{
     Finding, RevocationCheck, Severity, TrustStore, Vulnerability, assess_vulnerabilities,
-    certificate_findings, cipher_findings, describe_certificate, details_findings, explain,
-    explanations, http_findings, intolerance_findings, key_exchange_findings, ocsp_findings,
-    post_quantum_readiness, protocol_findings, revocation_findings, revocation_urls,
-    trust_findings, verify_ocsp_response, vulnerability_findings,
+    baseline_findings, certificate_findings, cipher_findings, describe_certificate,
+    details_findings, explain, explanations, http_findings, intolerance_findings, is_trusted,
+    key_exchange_findings, ocsp_findings, post_quantum_readiness, protocol_findings,
+    revocation_findings, revocation_urls, trust_findings, verify_ocsp_response,
+    vulnerability_findings,
 };
 use testls_probe::{
     CipherResult, Fetcher, HandshakeDetails, HttpResponse, Intolerance, KeyExchangeResult,
@@ -432,6 +433,9 @@ async fn certificate_section(
     };
     let now = unix_now();
     let mut findings = certificate_findings(&chain.certificates, Some(host), now);
+    if store.is_public() && is_trusted(&chain.certificates, now, store) {
+        findings.extend(baseline_findings(&chain.certificates));
+    }
     findings.extend(trust_findings(&chain.certificates, now, store));
     let ocsp_response = chain.ocsp_response.as_deref();
     findings.extend(ocsp_findings(&chain.certificates, ocsp_response, now));
