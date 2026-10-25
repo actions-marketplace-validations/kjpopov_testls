@@ -31,6 +31,7 @@ finishes. This page describes schema version **1**.
 | `certificate` | object | The [certificate chain](#certificate-chain) |
 | `http` | object | [HTTP headers](#http-headers) of the reply to `GET /` |
 | `revocation` | object or null | [Revocation](#revocation) check with `--revocation`; `null` without it |
+| `vulnerabilities` | array | [Vulnerabilities](#vulnerability) derived from the scan data |
 | `findings` | array | [Findings](#finding), most severe first |
 
 ### Protocol
@@ -124,6 +125,20 @@ answer. Only `http://` URLs are used.
 | `checks[].error` | string | Only on `error`: why fetching or verification failed |
 | `error` | string | Only when no check could be made, e.g. the chain could not be retrieved |
 
+### Vulnerability
+
+Named vulnerabilities judged from the protocols, cipher suites, key exchange
+and handshake features the scan collected; no attack traffic is sent. Always
+the same twelve entries in a fixed order.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `id` | string | Stable id: `poodle`, `beast`, `sweet32`, `rc4`, `freak`, `logjam`, `drown`, `crime`, `renegotiation`, `fallback_scsv`, `no_forward_secrecy`, `raccoon` |
+| `name` | string | Display name, e.g. `"POODLE"` |
+| `status` | string | `"vulnerable"`, `"not vulnerable"`, or `"not tested"` |
+| `detail` | string | Short reason for the verdict; wording may change |
+| `finding` | string or null | Only when `vulnerable`: id of the [finding](#finding) that reports it |
+
 ### Finding
 
 | Field | Type | Description |
@@ -205,6 +220,10 @@ Abbreviated:
       { "method": "ocsp", "url": "http://ocsp.example.net/", "status": "good", "this_update": 1792918114, "next_update": 1793522914 }
     ]
   },
+  "vulnerabilities": [
+    { "id": "poodle", "name": "POODLE", "status": "not vulnerable", "detail": "SSLv3 not offered", "finding": null },
+    { "id": "beast", "name": "BEAST", "status": "vulnerable", "detail": "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA", "finding": "vuln.beast" }
+  ],
   "findings": [
     { "id": "protocol.no_tls13", "severity": "info", "message": "..." }
   ]

@@ -13,14 +13,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use clap::builder::TypedValueParser as _;
 use clap::{Parser, Subcommand};
 use testls_checks::{
-    Finding, RevocationCheck, Severity, TrustStore, certificate_findings, cipher_findings,
-    describe_certificate, explain, explanations, http_findings, key_exchange_findings,
-    ocsp_findings, protocol_findings, revocation_findings, revocation_urls, trust_findings,
-    verify_ocsp_response,
+    Finding, RevocationCheck, Severity, TrustStore, Vulnerability, assess_vulnerabilities,
+    certificate_findings, cipher_findings, describe_certificate, explain, explanations,
+    http_findings, key_exchange_findings, ocsp_findings, protocol_findings, revocation_findings,
+    revocation_urls, trust_findings, verify_ocsp_response, vulnerability_findings,
 };
 use testls_probe::{
-    Fetcher, HttpResponse, ProtocolSupport, Transport, detect_protocols, enumerate_ciphers,
-    fetch_certificates, fetch_http_headers, probe_key_exchange,
+    CipherResult, Fetcher, HttpResponse, KeyExchangeResult, ProtocolResult, ProtocolSupport,
+    Transport, detect_protocols, enumerate_ciphers, fetch_certificates, fetch_http_headers,
+    probe_features, probe_key_exchange,
 };
 use testls_report::text::{self, CertificateSection, CipherSection, KeyExchangeSection};
 use testls_report::{ColorChoice, Format, Painter, json};
@@ -251,6 +252,10 @@ async fn scan(cli: &Cli, scan_target: &Target) -> ExitCode {
     show(format!("\n{}", text::http(&http, paint)));
     findings.extend(http_findings);
 
+    let vulns = vulnerability_section(&transport, &protocols, &ciphers, &key_exchange, sni).await;
+    show(format!("\n{}", text::vulnerabilities(&vulns, paint)));
+    findings.extend(vulnerability_findings(&vulns));
+
     findings.retain(|f| f.severity > Severity::Ok);
     findings.sort_by_key(|f| std::cmp::Reverse(f.severity));
     show(format!("\n{}", text::findings(&findings, paint)));
@@ -269,16 +274,13 @@ async fn scan(cli: &Cli, scan_target: &Target) -> ExitCode {
                 certificate: &certificate,
                 http: &http,
                 revocation: revocation.as_ref(),
+                vulnerabilities: &vulns,
                 findings: &findings,
             })
         );
     }
 
-    if findings.iter().any(|f| f.severity >= cli.fail_on) {
-        ExitCode::from(1)
-    } else {
-        ExitCode::SUCCESS
-    }
+    ExitCode::from(u8::from(findings.iter().any(|f| f.severity >= cli.fail_on)))
 }
 
 /// Loads the trust store selected on the command line: a `--ca-file`
@@ -480,6 +482,29 @@ async fn http_section(
     }
 }
 
+/// Probes compression, renegotiation and downgrade protection, then derives
+/// the named vulnerabilities from everything the scan collected.
+///
+/// A failed feature probe leaves the affected verdicts as not tested.
+async fn vulnerability_section(
+    transport: &Transport,
+    protocols: &[ProtocolResult],
+    ciphers: &[CipherSection],
+    key_exchange: &[KeyExchangeSection],
+    sni: Option<&str>,
+) -> Vec<Vulnerability> {
+    let ciphers: Vec<CipherResult> = ciphers
+        .iter()
+        .filter_map(|s| s.outcome.as_ref().ok().cloned())
+        .collect();
+    let key_exchange: Vec<KeyExchangeResult> = key_exchange
+        .iter()
+        .filter_map(|s| s.outcome.as_ref().ok().cloned())
+        .collect();
+    let features = probe_features(transport, &ciphers, sni).await.ok();
+    assess_vulnerabilities(protocols, &ciphers, &key_exchange, features.as_ref())
+}
+
 #[cfg(test)]
 mod tests {
     //! Unit tests for the scan helpers.
@@ -556,5 +581,27 @@ mod tests {
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].id, "http.error");
         assert_eq!(findings[0].severity, Severity::Info);
+    }
+
+    /// A failed handshake feature probe leaves its verdicts untested.
+    #[tokio::test]
+    async fn vulnerabilities_without_features() {
+        let transport = Transport::new(SocketAddr::from(([127, 0, 0, 1], 9)));
+        let protocols = [ProtocolResult {
+            version: ProtocolVersion::TLS12,
+            support: ProtocolSupport::Supported,
+        }];
+        let ciphers = [CipherSection {
+            version: ProtocolVersion::TLS12,
+            outcome: Ok(CipherResult {
+                version: ProtocolVersion::TLS12,
+                suites: vec![0xc02f],
+                order: testls_probe::CipherOrder::Server,
+            }),
+        }];
+        let list = vulnerability_section(&transport, &protocols, &ciphers, &[], None).await;
+        let crime = list.iter().find(|v| v.id == "crime").expect("crime");
+        assert_eq!(crime.status, testls_checks::VulnStatus::NotTested);
+        assert_eq!(vulnerability_findings(&list), vec![]);
     }
 }

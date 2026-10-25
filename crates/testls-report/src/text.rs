@@ -7,9 +7,9 @@ use std::fmt::Write as _;
 use std::net::SocketAddr;
 
 use testls_checks::{
-    CertStatus, CertificateInfo, Finding, OcspStatus, RevocationCheck, Severity, cipher_name,
-    cipher_severity, dh_severity, display_time, group_name, group_severity, protocol_severity,
-    revocation_reason_name,
+    CertStatus, CertificateInfo, Finding, OcspStatus, RevocationCheck, Severity, VulnStatus,
+    Vulnerability, cipher_name, cipher_severity, dh_severity, display_time, group_name,
+    group_severity, protocol_severity, revocation_reason_name,
 };
 use testls_probe::{
     CipherOrder, CipherResult, HttpResponse, KeyExchangeResult, ProtocolResult, ProtocolSupport,
@@ -276,6 +276,24 @@ pub fn http(section: &Result<HttpResponse, String>, paint: Painter) -> String {
             None => format!("{name:<26} not set"),
         };
         let _ = writeln!(out, "  {line}");
+    }
+    out
+}
+
+/// Renders the named vulnerabilities with their verdict, the reason, and the
+/// finding id that reports a vulnerable entry.
+#[must_use]
+pub fn vulnerabilities(list: &[Vulnerability], paint: Painter) -> String {
+    let mut out = format!("{}\n", paint.heading("Vulnerabilities"));
+    for v in list {
+        let label = format!("{:<14}", v.status.as_str());
+        let label = match v.status {
+            VulnStatus::Vulnerable => paint.severity(Severity::Medium, &label),
+            VulnStatus::NotVulnerable => paint.severity(Severity::Ok, &label),
+            VulnStatus::NotTested => label,
+        };
+        let id = v.finding.map(|f| format!(" [{f}]")).unwrap_or_default();
+        let _ = writeln!(out, "  {:<30} {label} {}{id}", v.name, v.detail);
     }
     out
 }
@@ -601,6 +619,41 @@ mod tests {
         assert_eq!(
             http(&Err("refused".into()), PLAIN),
             "HTTP headers: error: refused\n"
+        );
+    }
+
+    /// Vulnerabilities show name, verdict, reason and the reporting finding.
+    #[test]
+    fn vulnerability_lines() {
+        let list = [
+            Vulnerability {
+                id: "poodle",
+                name: "POODLE",
+                status: VulnStatus::NotVulnerable,
+                detail: "SSLv3 not offered".into(),
+                finding: None,
+            },
+            Vulnerability {
+                id: "crime",
+                name: "CRIME",
+                status: VulnStatus::Vulnerable,
+                detail: "TLS compression enabled".into(),
+                finding: Some("vuln.crime"),
+            },
+            Vulnerability {
+                id: "raccoon",
+                name: "Raccoon",
+                status: VulnStatus::NotTested,
+                detail: "no key exchange data".into(),
+                finding: None,
+            },
+        ];
+        assert_eq!(
+            vulnerabilities(&list, PLAIN),
+            "Vulnerabilities\n  \
+             POODLE                         not vulnerable SSLv3 not offered\n  \
+             CRIME                          vulnerable     TLS compression enabled [vuln.crime]\n  \
+             Raccoon                        not tested     no key exchange data\n"
         );
     }
 

@@ -8,7 +8,7 @@ use std::net::SocketAddr;
 
 use serde::Serialize;
 use testls_checks::{
-    CertStatus, Finding, OcspStatus, RevocationCheck, RevocationMethod, cipher_name,
+    CertStatus, Finding, OcspStatus, RevocationCheck, RevocationMethod, Vulnerability, cipher_name,
     cipher_severity, group_name, group_severity, parse_hsts, revocation_reason_name,
 };
 use testls_probe::{CipherOrder, HttpResponse, ProtocolResult, ProtocolSupport};
@@ -45,6 +45,8 @@ pub struct Report<'a> {
     /// Revocation checks against the issuer's services, or why they could
     /// not run; `None` when not requested.
     pub revocation: Option<&'a Result<Vec<RevocationCheck>, String>>,
+    /// Named vulnerabilities derived from the scan data.
+    pub vulnerabilities: &'a [Vulnerability],
     /// Findings, most severe first.
     pub findings: &'a [Finding],
 }
@@ -72,6 +74,8 @@ struct Document<'a> {
     http: HttpJson<'a>,
     /// Revocation check result, or `null` when not requested.
     revocation: Option<RevocationJson<'a>>,
+    /// Named vulnerabilities.
+    vulnerabilities: Vec<VulnerabilityJson<'a>>,
     /// Findings, most severe first.
     findings: Vec<FindingJson<'a>>,
 }
@@ -292,6 +296,21 @@ struct RevocationCheckJson<'a> {
     error: Option<&'a str>,
 }
 
+/// One named vulnerability and its verdict.
+#[derive(Debug, Serialize)]
+struct VulnerabilityJson<'a> {
+    /// Stable short id, e.g. `poodle`.
+    id: &'static str,
+    /// Display name, e.g. `POODLE`.
+    name: &'static str,
+    /// `vulnerable`, `not vulnerable`, or `not tested`.
+    status: &'static str,
+    /// Short reason for the verdict.
+    detail: &'a str,
+    /// Finding id that reports the issue, when vulnerable.
+    finding: Option<&'static str>,
+}
+
 /// One finding.
 #[derive(Debug, Serialize)]
 struct FindingJson<'a> {
@@ -329,6 +348,7 @@ pub fn render(report: &Report<'_>) -> String {
         certificate: certificate(report.certificate),
         http: http(report.http),
         revocation: report.revocation.map(revocation),
+        vulnerabilities: report.vulnerabilities.iter().map(vulnerability).collect(),
         findings: report
             .findings
             .iter()
@@ -342,6 +362,17 @@ pub fn render(report: &Report<'_>) -> String {
     let mut out = serde_json::to_string_pretty(&doc).expect("report serializes");
     out.push('\n');
     out
+}
+
+/// Converts one vulnerability verdict.
+fn vulnerability(v: &Vulnerability) -> VulnerabilityJson<'_> {
+    VulnerabilityJson {
+        id: v.id,
+        name: v.name,
+        status: v.status.as_str(),
+        detail: &v.detail,
+        finding: v.finding,
+    }
 }
 
 /// Converts one protocol result.
@@ -582,7 +613,7 @@ fn revocation_check(check: &RevocationCheck) -> RevocationCheckJson<'_> {
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
-    use testls_checks::{CertificateInfo, RevocationStatus, Severity};
+    use testls_checks::{CertificateInfo, RevocationStatus, Severity, VulnStatus};
     use testls_probe::{CipherResult, KeyExchangeResult};
     use testls_wire::ProtocolVersion;
 
@@ -643,8 +674,6 @@ mod tests {
             ],
             ocsp: None,
         });
-        let http = Err("reset".into());
-        let findings = [Finding::new("cert.untrusted", Severity::High, "untrusted")];
         let report = Report {
             target: "localhost:443",
             addr: "127.0.0.1:443".parse().unwrap(),
@@ -654,9 +683,10 @@ mod tests {
             ciphers: &ciphers,
             key_exchange: &[],
             certificate: &certificate,
-            http: &http,
+            http: &Err("reset".into()),
             revocation: None,
-            findings: &findings,
+            vulnerabilities: &[],
+            findings: &[Finding::new("cert.untrusted", Severity::High, "untrusted")],
         };
         assert_eq!(
             value(&report),
@@ -694,7 +724,8 @@ mod tests {
                     ],
                     "ocsp": {"stapled": false, "status": null},
                 },
-                "http": {"status": null, "headers": {}, "hsts": null, "error": "reset"}, "revocation": null,
+                "http": {"status": null, "headers": {}, "hsts": null, "error": "reset"},
+                "revocation": null, "vulnerabilities": [],
                 "findings": [{"id": "cert.untrusted", "severity": "high", "message": "untrusted"}],
             })
         );
@@ -744,6 +775,7 @@ mod tests {
             certificate: &certificate,
             http: &http,
             revocation: None,
+            vulnerabilities: &[],
             findings: &[],
         };
         assert_eq!(
@@ -785,6 +817,7 @@ mod tests {
             certificate: &certificate,
             http: &http,
             revocation: None,
+            vulnerabilities: &[],
             findings: &[],
         };
         let v = value(&report);
@@ -823,6 +856,7 @@ mod tests {
             certificate: &certificate,
             http: &http,
             revocation: None,
+            vulnerabilities: &[],
             findings: &[],
         };
         assert_eq!(
@@ -927,6 +961,37 @@ mod tests {
         assert_eq!(
             serde_json::to_value(revocation(&Err("refused".into()))).unwrap(),
             json!({"checks": [], "error": "refused"})
+        );
+    }
+
+    /// Vulnerabilities carry their verdict and the reporting finding id.
+    #[test]
+    fn vulnerability_object() {
+        let v = Vulnerability {
+            id: "crime",
+            name: "CRIME",
+            status: VulnStatus::Vulnerable,
+            detail: "TLS compression enabled".into(),
+            finding: Some("vuln.crime"),
+        };
+        assert_eq!(
+            serde_json::to_value(vulnerability(&v)).unwrap(),
+            json!({
+                "id": "crime",
+                "name": "CRIME",
+                "status": "vulnerable",
+                "detail": "TLS compression enabled",
+                "finding": "vuln.crime",
+            })
+        );
+        let v = Vulnerability {
+            status: VulnStatus::NotTested,
+            finding: None,
+            ..v
+        };
+        assert_eq!(
+            serde_json::to_value(vulnerability(&v)).unwrap()["finding"],
+            Value::Null
         );
     }
 }
