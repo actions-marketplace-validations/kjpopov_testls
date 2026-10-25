@@ -33,11 +33,17 @@ pub fn alt_services(response: &HttpResponse) -> Result<Vec<AltService>, String> 
     if value.trim().is_empty() || value.trim().eq_ignore_ascii_case("clear") {
         return Ok(Vec::new());
     }
-    split_unquoted(&value, ',')
-        .ok_or_else(|| format!("invalid Alt-Svc entry `{}`", printable(value.trim())))?
+    let invalid = || format!("invalid Alt-Svc entry `{}`", printable(value.trim()));
+    // Empty list elements are ignored (RFC 9110 §5.6.1).
+    let entries: Vec<&str> = split_unquoted(&value, ',')
+        .ok_or_else(invalid)?
         .into_iter()
-        .map(alt_service)
-        .collect()
+        .filter(|e| !e.trim().is_empty())
+        .collect();
+    if entries.is_empty() {
+        return Err(invalid());
+    }
+    entries.into_iter().map(alt_service).collect()
 }
 
 /// Splits `s` at `delim` outside quoted strings, honouring `\` escapes
@@ -318,7 +324,9 @@ mod tests {
         );
         assert_eq!(alt("clear").unwrap(), []);
         assert_eq!(alt_services(&response(&[])).unwrap(), []);
+        assert_eq!(alt(r#", h3=":443", ,"#).unwrap().len(), 1);
         for bad in [
+            ", ,",
             "h3",
             "h3=:443",
             r#"h3="443""#,
