@@ -17,32 +17,11 @@ use x509_parser::time::ASN1Time;
 use x509_parser::verify::verify_signature;
 use x509_parser::x509::AlgorithmIdentifier;
 
+use crate::der::{
+    BIT_STRING, Der, ENUMERATED, GENERALIZED_TIME, INTEGER, NULL, OCTET_STRING, OID, SEQUENCE,
+    encode, explicit, implicit,
+};
 use crate::{Finding, Severity};
-
-/// DER tag of `SEQUENCE`.
-const SEQUENCE: u8 = 0x30;
-/// DER tag of `INTEGER`.
-const INTEGER: u8 = 0x02;
-/// DER tag of `BIT STRING`.
-const BIT_STRING: u8 = 0x03;
-/// DER tag of `OCTET STRING`.
-const OCTET_STRING: u8 = 0x04;
-/// DER tag of `OBJECT IDENTIFIER`.
-const OID: u8 = 0x06;
-/// DER tag of `ENUMERATED`.
-const ENUMERATED: u8 = 0x0a;
-/// DER tag of `GeneralizedTime`.
-const GENERALIZED_TIME: u8 = 0x18;
-
-/// Context-specific constructed tag `[n]`.
-const fn explicit(n: u8) -> u8 {
-    0xa0 | n
-}
-
-/// Context-specific primitive tag `[n]`.
-const fn implicit(n: u8) -> u8 {
-    0x80 | n
-}
 
 /// Content octets of `id-pkix-ocsp-basic`, 1.3.6.1.5.5.7.48.1.1
 /// (RFC 6960 §4.2.1).
@@ -50,6 +29,9 @@ const OCSP_BASIC: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01, 0x01
 
 /// Content octets of `id-pe-tlsfeature`, 1.3.6.1.5.5.7.1.24 (RFC 7633 §6).
 const TLS_FEATURE: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x01, 0x18];
+
+/// Content octets of `id-sha1`, 1.3.14.3.2.26 (RFC 3279 §2.2.1).
+const SHA1: &[u8] = &[0x2b, 0x0e, 0x03, 0x02, 0x1a];
 
 /// TLS extension numbers that make up "must staple" (RFC 7633 §4.2):
 /// `status_request` (5) and `status_request_v2` (17).
@@ -224,28 +206,73 @@ pub fn ocsp_findings(chain: &[Vec<u8>], response: Option<&[u8]>, now: i64) -> Ve
 /// [`MAX_AGE_WITHOUT_NEXT_UPDATE`] after `thisUpdate`, as clients such as
 /// `mozilla::pkix` do.
 fn stale_finding(status: &OcspStatus, now: i64) -> Option<Finding> {
-    if status.this_update > now + CLOCK_SKEW {
+    stale(
+        "ocsp",
+        "stapled OCSP response",
+        status.this_update,
+        status.next_update,
+        now,
+    )
+}
+
+/// Reports revocation data used outside its validity interval: findings
+/// `{prefix}.not_yet_valid` or `{prefix}.expired`, with `what` naming the
+/// data in the message. Shared by stapled responses, responder replies and
+/// CRLs.
+pub(crate) fn stale(
+    prefix: &str,
+    what: &str,
+    this_update: i64,
+    next_update: Option<i64>,
+    now: i64,
+) -> Option<Finding> {
+    if this_update > now.saturating_add(CLOCK_SKEW) {
         return Some(Finding::new(
-            "ocsp.not_yet_valid",
+            format!("{prefix}.not_yet_valid"),
             Severity::Medium,
-            format!(
-                "stapled OCSP response is not valid before {}",
-                display_time(status.this_update)
-            ),
+            format!("{what} is not valid before {}", display_time(this_update)),
         ));
     }
-    let expiry = status.next_update.unwrap_or(
-        status
-            .this_update
-            .saturating_add(MAX_AGE_WITHOUT_NEXT_UPDATE),
-    );
+    let expiry = next_update.unwrap_or(this_update.saturating_add(MAX_AGE_WITHOUT_NEXT_UPDATE));
     (expiry.saturating_add(CLOCK_SKEW) < now).then(|| {
         Finding::new(
-            "ocsp.expired",
+            format!("{prefix}.expired"),
             Severity::Medium,
-            format!("stapled OCSP response expired {}", display_time(expiry)),
+            format!("{what} expired {}", display_time(expiry)),
         )
     })
+}
+
+/// Builds a DER `OCSPRequest` for the leaf of `chain` (RFC 6960 §4.1.1),
+/// identified by a SHA-1 `CertID` and without a nonce, as the lightweight
+/// profile expects (RFC 5019 §2.1).
+///
+/// # Errors
+///
+/// Returns a description if the chain lacks an issuer or a certificate
+/// cannot be parsed.
+pub fn ocsp_request(chain: &[Vec<u8>]) -> Result<Vec<u8>, String> {
+    let [leaf, issuer, ..] = chain else {
+        return Err("issuer certificate missing from chain".into());
+    };
+    let leaf = certificate(leaf)?;
+    let issuer = certificate(issuer)?;
+    let sha1 = |data: &[u8]| digest::digest(&digest::SHA1_FOR_LEGACY_USE_ONLY, data);
+    let algorithm = [encode(OID, SHA1), encode(NULL, &[])].concat();
+    let cert_id = [
+        encode(SEQUENCE, &algorithm),
+        encode(OCTET_STRING, sha1(issuer.subject().as_raw()).as_ref()),
+        encode(
+            OCTET_STRING,
+            sha1(&issuer.public_key().subject_public_key.data).as_ref(),
+        ),
+        encode(INTEGER, leaf.raw_serial()),
+    ]
+    .concat();
+    let request = encode(SEQUENCE, &encode(SEQUENCE, &cert_id));
+    let request_list = encode(SEQUENCE, &request);
+    let tbs_request = encode(SEQUENCE, &request_list);
+    Ok(encode(SEQUENCE, &tbs_request))
 }
 
 /// Formats a Unix timestamp like certificate validity dates, e.g.
@@ -277,7 +304,7 @@ fn must_staple(leaf: &X509Certificate<'_>) -> bool {
 }
 
 /// Parses one DER certificate, rejecting trailing bytes.
-fn certificate(der: &[u8]) -> Result<X509Certificate<'_>, String> {
+pub(crate) fn certificate(der: &[u8]) -> Result<X509Certificate<'_>, String> {
     match parse_x509_certificate(der) {
         Ok(([], cert)) => Ok(cert),
         Ok(_) => Err("certificate has trailing bytes".into()),
@@ -550,102 +577,6 @@ fn time(der: &mut Der<'_>, field: &str) -> Result<i64, String> {
     }
 }
 
-/// One DER element.
-#[derive(Debug, Clone, Copy)]
-struct Element<'a> {
-    /// Identifier octet; only low tag numbers are supported.
-    tag: u8,
-    /// Content octets.
-    content: &'a [u8],
-    /// The whole encoding, header included.
-    raw: &'a [u8],
-}
-
-/// Minimal reader for definite-length DER (X.690 §8.1, §10.1).
-#[derive(Debug)]
-struct Der<'a> {
-    /// Bytes not yet read.
-    input: &'a [u8],
-}
-
-impl<'a> Der<'a> {
-    /// Reader over `input`.
-    fn new(input: &'a [u8]) -> Self {
-        Self { input }
-    }
-
-    /// Whether all input has been read.
-    fn is_empty(&self) -> bool {
-        self.input.is_empty()
-    }
-
-    /// Reads the next element.
-    fn next(&mut self, field: &str) -> Result<Element<'a>, String> {
-        let truncated = || format!("{field} is truncated");
-        let input = self.input;
-        let (&tag, rest) = input.split_first().ok_or_else(truncated)?;
-        if tag & 0x1f == 0x1f {
-            return Err(format!("{field} has an unsupported tag"));
-        }
-        let (&first, rest) = rest.split_first().ok_or_else(truncated)?;
-        let (len, rest) = if first < 0x80 {
-            (usize::from(first), rest)
-        } else {
-            let count = usize::from(first & 0x7f);
-            if count == 0 || count > 4 || rest.len() < count {
-                return Err(format!("{field} has an invalid length"));
-            }
-            let (bytes, rest) = rest.split_at(count);
-            let len = bytes
-                .iter()
-                .fold(0usize, |len, &b| (len << 8) | usize::from(b));
-            if bytes[0] == 0 || len < 0x80 {
-                return Err(format!("{field} has a non-minimal length"));
-            }
-            (len, rest)
-        };
-        if rest.len() < len {
-            return Err(truncated());
-        }
-        let header = input.len() - rest.len();
-        let (raw, remaining) = input.split_at(header + len);
-        self.input = remaining;
-        Ok(Element {
-            tag,
-            content: &raw[header..],
-            raw,
-        })
-    }
-
-    /// Reads the next element, which must have `tag`, and returns its
-    /// content.
-    fn expect(&mut self, tag: u8, field: &str) -> Result<&'a [u8], String> {
-        let element = self.next(field)?;
-        if element.tag != tag {
-            return Err(format!("{field} has an unexpected tag"));
-        }
-        Ok(element.content)
-    }
-
-    /// Reads the next element if it has `tag`, returning its content.
-    fn optional(&mut self, tag: u8, field: &str) -> Result<Option<&'a [u8]>, String> {
-        if self.input.first() == Some(&tag) {
-            self.expect(tag, field).map(Some)
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Fails if any input is left.
-    fn finish(&self, field: &str) -> Result<(), String> {
-        if self.is_empty() {
-            Ok(())
-        } else {
-            Err(format!("{field} has trailing data"))
-        }
-    }
-}
-
 /// Picks the certificate whose key signed the response: the issuer itself
 /// or a delegated responder it issued with the OCSP signing EKU
 /// (RFC 6960 §4.2.2.2) whose key usage, if present, allows
@@ -711,6 +642,8 @@ mod tests {
     const DELEGATED: &[u8] = include_bytes!("testdata/ocsp-delegated.der");
     /// Delegated-responder response: `STRAY` is unknown.
     const UNKNOWN: &[u8] = include_bytes!("testdata/ocsp-unknown.der");
+    /// The request `openssl ocsp -sha1 -no_nonce` builds for `LEAF`.
+    const REQUEST: &[u8] = include_bytes!("testdata/ocsp-request.der");
     /// Response for `LEAF` signed by `OTHER`, which lacks the OCSP EKU.
     const UNAUTHORIZED: &[u8] = include_bytes!("testdata/ocsp-unauthorized.der");
 
@@ -919,5 +852,13 @@ mod tests {
     fn reason_names() {
         assert_eq!(revocation_reason_name(1), "keyCompromise");
         assert_eq!(revocation_reason_name(7), "unknown reason");
+    }
+
+    /// The request matches OpenSSL's byte for byte and needs an issuer.
+    #[test]
+    fn builds_requests() {
+        assert_eq!(ocsp_request(&chain(LEAF)).unwrap(), REQUEST);
+        assert!(ocsp_request(&[LEAF.to_vec()]).is_err());
+        assert!(ocsp_request(&[LEAF.to_vec(), b"junk".to_vec()]).is_err());
     }
 }

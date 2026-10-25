@@ -2,10 +2,12 @@
 
 mod certificates;
 mod ciphers;
+mod der;
 mod http;
 mod key_exchange;
 mod ocsp;
 mod protocols;
+mod revocation;
 mod trust;
 
 use std::fmt;
@@ -15,10 +17,14 @@ pub use ciphers::{cipher_findings, cipher_name, cipher_severity};
 pub use http::{Hsts, http_findings, parse_hsts};
 pub use key_exchange::{dh_severity, group_name, group_severity, key_exchange_findings};
 pub use ocsp::{
-    CertStatus, OcspStatus, display_time, ocsp_findings, revocation_reason_name,
+    CertStatus, OcspStatus, display_time, ocsp_findings, ocsp_request, revocation_reason_name,
     verify_ocsp_response,
 };
 pub use protocols::{protocol_findings, protocol_severity};
+pub use revocation::{
+    RevocationCheck, RevocationMethod, RevocationStatus, RevocationUrls, revocation_findings,
+    revocation_urls, verify_crl,
+};
 pub use trust::{TrustStore, trust_findings};
 
 /// How serious a finding is. Ordered from least to most severe.
