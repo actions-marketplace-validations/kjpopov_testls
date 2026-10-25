@@ -363,14 +363,17 @@ impl Dechunker {
             if size > max_body.saturating_sub(self.body.len()) {
                 return Err(too_large());
             }
-            let Some(chunk) = rest.get(eol + 2..eol + 2 + size + 2) else {
+            let Some(end) = size.checked_add(eol + 4) else {
+                return Err(too_large());
+            };
+            let Some(chunk) = rest.get(eol + 2..end) else {
                 return Ok(false);
             };
             if &chunk[size..] != b"\r\n" {
                 return Err(malformed());
             }
             self.body.extend_from_slice(&chunk[..size]);
-            self.consumed += eol + 2 + size + 2;
+            self.consumed += end;
         }
     }
 }
@@ -552,6 +555,14 @@ mod tests {
         }
         assert!(decoder.feed(raw, 1024).unwrap());
         assert_eq!(decoder.body, b"abcde");
+    }
+
+    /// A huge chunk size with an unlimited body is an error, not an
+    /// arithmetic overflow.
+    #[test]
+    fn huge_chunk_size_without_limit() {
+        let raw = format!("{:x}\r\nabc\r\n", usize::MAX);
+        assert!(dechunk(raw.as_bytes(), usize::MAX).is_err());
     }
 
     /// Error statuses are returned for the caller to judge.
