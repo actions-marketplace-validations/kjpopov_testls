@@ -35,6 +35,9 @@ All notable changes to `testls` are listed here. The format follows
   finding id, an optional target, a reason and an optional expiry date.
   Suppressed findings are listed separately (JSON `suppressed`) and do not
   count towards `--fail-on`; expired and unknown entries warn on stderr.
+- `--baseline FILE` takes an earlier `--format json` report: findings it
+  lists for the same target and id are suppressed with reason
+  `in baseline`, so only new findings fail the scan.
 
 ## [0.3.0] - 2026-10-26
 

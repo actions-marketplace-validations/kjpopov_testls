@@ -102,6 +102,13 @@ reason = "legacy app, replaced in Q1"
 expires = 2026-12-31         # optional, last day (UTC) the entry applies
 ```
 
+To fail only on new findings, save a JSON report and pass it as baseline:
+
+```sh
+testls --format json example.com > baseline.json
+testls --baseline baseline.json --fail-on low example.com
+```
+
 Exit status is `0` when no finding reaches `--fail-on` (default `high`), `1`
 when one does, and `2` when the scan itself fails. Run `testls --help` for all
 options; the JSON format is described in
@@ -123,6 +130,7 @@ A web service (`testls serve`, REST API and browser UI) is planned for v0.6.
 | CSV | One row per finding for spreadsheets and scripts | v0.4 |
 | HTML | Self-contained HTML report to share or archive | v0.4 |
 | Suppressions | `.testls.toml` entries with reason and expiry date | v0.4 |
+| Baseline | `--baseline` report: fail only on new findings | v0.4 |
 | Key exchange | Supported groups (X25519, ECDHE curves, ML-KEM hybrids) | v0.2 |
 | HTTP headers | HSTS, preload, header hygiene | v0.2 |
 | Revocation | OCSP stapling, OCSP/CRL | v0.2 |
