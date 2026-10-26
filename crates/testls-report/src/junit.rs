@@ -1,7 +1,7 @@
 //! JUnit XML report for CI systems that show test results.
 //!
 //! Each scanned address is a `<testsuite>` and each finding a `<testcase>`
-//! named by its id. Findings at or above `--fail-on` carry a `<failure>`,
+//! named by its id, with the suite name as its classname. Findings at or above `--fail-on` carry a `<failure>`,
 //! so the report fails exactly where the exit code does; a scan that could
 //! not run is a suite with one `<error>` case. The element and attribute
 //! names follow the common JUnit XML format read by Jenkins, GitLab and
@@ -58,7 +58,9 @@ pub fn render(scans: &[Scan], failures: &[Failure], fail_on: Severity) -> String
         failures.len()
     );
     for scan in scans {
-        let target = escape(&scan.target);
+        // GitLab keys test cases by classname and name, so the classname
+        // must tell addresses of one target apart.
+        let suite = escape(&format!("{} ({})", scan.target, scan.addr));
         let failed = scan
             .findings
             .iter()
@@ -66,8 +68,7 @@ pub fn render(scans: &[Scan], failures: &[Failure], fail_on: Severity) -> String
             .count();
         let _ = writeln!(
             out,
-            "  <testsuite name=\"{target} ({})\" tests=\"{}\" failures=\"{failed}\" errors=\"0\">",
-            scan.addr,
+            "  <testsuite name=\"{suite}\" tests=\"{}\" failures=\"{failed}\" errors=\"0\">",
             scan.findings.len()
         );
         for f in &scan.findings {
@@ -77,14 +78,14 @@ pub fn render(scans: &[Scan], failures: &[Failure], fail_on: Severity) -> String
             if f.severity >= fail_on {
                 let _ = writeln!(
                     out,
-                    "    <testcase name=\"{name}\" classname=\"{target}\">\n      \
+                    "    <testcase name=\"{name}\" classname=\"{suite}\">\n      \
                      <failure message=\"{message}\" type=\"{severity}\">{severity}: {message}</failure>\n    \
                      </testcase>"
                 );
             } else {
                 let _ = writeln!(
                     out,
-                    "    <testcase name=\"{name}\" classname=\"{target}\">\n      \
+                    "    <testcase name=\"{name}\" classname=\"{suite}\">\n      \
                      <system-out>{severity}: {message}</system-out>\n    </testcase>"
                 );
             }
@@ -152,6 +153,29 @@ mod tests {
         assert!(xml.ends_with("</testsuites>\n"));
         assert_eq!(xml.matches("<testcase ").count(), 3);
         assert_eq!(xml.matches("</testcase>").count(), 3);
+    }
+
+    /// Test cases of two addresses of one target have distinct classnames,
+    /// whether they fail or pass.
+    #[test]
+    fn addresses_distinct() {
+        let findings = vec![
+            Finding::new("protocol.tls10", Severity::Medium, "TLSv1.0 offered"),
+            Finding::new("hsts.missing", Severity::Low, "no HSTS"),
+        ];
+        let mut other = scan("a.example:443", findings.clone());
+        other.addr = "[2001:db8::1]:443".parse().expect("address");
+        let xml = render(
+            &[scan("a.example:443", findings), other],
+            &[],
+            Severity::Medium,
+        );
+        for addr in ["192.0.2.1:443", "[2001:db8::1]:443"] {
+            for id in ["protocol.tls10", "hsts.missing"] {
+                let case = format!("<testcase name=\"{id}\" classname=\"a.example:443 ({addr})\">");
+                assert_eq!(xml.matches(&case).count(), 1, "{case}\n{xml}");
+            }
+        }
     }
 
     /// An empty run is still a well-formed document.
