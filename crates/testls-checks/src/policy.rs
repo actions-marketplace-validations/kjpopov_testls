@@ -268,10 +268,10 @@ pub fn policy_findings(policy: Policy, input: &PolicyInput<'_>) -> Vec<Finding> 
                 policy,
                 &format!("{} is offered", r.version),
             )),
-            ProtocolSupport::NotSupported if required => findings.push(deviation(
+            ProtocolSupport::NotSupported if required => findings.push(Finding::new(
                 "policy.protocol",
-                policy,
-                &format!("{} is not offered", r.version),
+                DEVIATION,
+                format!("{} is not offered, but {policy} requires it", r.version),
             )),
             ProtocolSupport::Error(_) if !allowed || required => protocols_untested = true,
             _ => {}
@@ -888,7 +888,7 @@ mod tests {
             summary(&policy_findings(Policy::Nist80052r2, &input)),
             [(
                 "policy.protocol".to_owned(),
-                format!("TLSv1.3 is not offered{tail}")
+                "TLSv1.3 is not offered, but nist-800-52r2 requires it".to_owned()
             )]
             .into_iter()
             .chain([(
