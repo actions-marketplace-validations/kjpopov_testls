@@ -19,11 +19,11 @@ const HEADER: [&str; 6] = ["target", "address", "severity", "id", "message", "fa
 
 /// Quotes `s` as one CSV field. Fields with a comma, quote or line break
 /// are wrapped in double quotes with inner quotes doubled (RFC 4180,
-/// section 2). Fields starting with `=`, `+`, `-`, `@`, tab or CR get a
-/// leading `'` so spreadsheets do not evaluate scanned server data as a
+/// section 2). Fields starting with `=`, `+`, `-`, `@`, tab, CR or LF get
+/// a leading `'` so spreadsheets do not evaluate scanned server data as a
 /// formula (OWASP "CSV Injection").
 fn field(s: &str) -> String {
-    let guard = s.starts_with(['=', '+', '-', '@', '\t', '\r']);
+    let guard = s.starts_with(['=', '+', '-', '@', '\t', '\r', '\n']);
     let value = if guard { format!("'{s}") } else { s.to_owned() };
     if value.contains([',', '"', '\r', '\n']) {
         format!("\"{}\"", value.replace('"', "\"\""))
@@ -141,6 +141,7 @@ mod tests {
         assert_eq!(field("=1+1"), "'=1+1");
         assert_eq!(field("@SUM(A1),x"), "\"'@SUM(A1),x\"");
         assert_eq!(field("\rx"), "\"'\rx\"");
+        assert_eq!(field("\n=1+1"), "\"'\n=1+1\"");
         assert_eq!(field(""), "");
     }
 }
