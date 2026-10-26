@@ -40,6 +40,7 @@ per target, in scan order. This page describes schema version **1**.
 | `intolerance` | object | [ClientHello tolerance](#clienthello-tolerance) tests |
 | `details` | object | [Handshake details](#handshake-details) |
 | `findings` | array | [Findings](#finding), most severe first |
+| `suppressed` | array | [Suppressed findings](#suppressed-finding) from `.testls.toml`, most severe first |
 
 ### Protocol
 
@@ -206,6 +207,18 @@ Each field is `null` when not tested.
 Suite and group severities can also be `"ok"`. Findings with severity `ok` are not
 reported.
 
+### Suppressed finding
+
+A [finding](#finding) silenced by an active `.testls.toml` (or `--config`)
+entry. It does not count towards `--fail-on`.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `id` | string | As in [finding](#finding) |
+| `severity` | string | As in [finding](#finding) |
+| `message` | string | As in [finding](#finding) |
+| `reason` | string | The `reason` given in the suppression entry |
+
 ## Example
 
 Abbreviated:
@@ -302,6 +315,7 @@ Abbreviated:
   },
   "findings": [
     { "id": "protocol.no_tls13", "severity": "info", "message": "..." }
-  ]
+  ],
+  "suppressed": []
 }
 ```

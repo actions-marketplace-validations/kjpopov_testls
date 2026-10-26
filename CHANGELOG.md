@@ -31,6 +31,10 @@ All notable changes to `testls` are listed here. The format follows
   scripts, plus a `scan.error` row for each target that failed to scan.
 - `--format html` prints one self-contained HTML page with the same
   summary and findings as the Markdown report, for sharing and archiving.
+- Suppressions in `.testls.toml` (or `--config FILE`): each entry names a
+  finding id, an optional target, a reason and an optional expiry date.
+  Suppressed findings are listed separately (JSON `suppressed`) and do not
+  count towards `--fail-on`; expired and unknown entries warn on stderr.
 
 ## [0.3.0] - 2026-10-26
 
