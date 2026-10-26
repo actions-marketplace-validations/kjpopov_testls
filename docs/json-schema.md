@@ -40,7 +40,7 @@ per target, in scan order. This page describes schema version **1**.
 | `intolerance` | object | [ClientHello tolerance](#clienthello-tolerance) tests |
 | `details` | object | [Handshake details](#handshake-details) |
 | `findings` | array | [Findings](#finding), most severe first |
-| `suppressed` | array | [Suppressed findings](#suppressed-finding) from `.testls.toml`, most severe first |
+| `suppressed` | array | [Suppressed findings](#suppressed-finding) from `.testls.toml` or `--baseline`, most severe first |
 
 ### Protocol
 
@@ -210,14 +210,15 @@ reported.
 ### Suppressed finding
 
 A [finding](#finding) silenced by an active `.testls.toml` (or `--config`)
-entry. It does not count towards `--fail-on`.
+entry, or listed for the same `target.input` in the `--baseline` report.
+It does not count towards `--fail-on`.
 
 | Field | Type | Description |
 | --- | --- | --- |
 | `id` | string | As in [finding](#finding) |
 | `severity` | string | As in [finding](#finding) |
 | `message` | string | As in [finding](#finding) |
-| `reason` | string | The `reason` given in the suppression entry |
+| `reason` | string | The `reason` given in the suppression entry, or `"in baseline"` |
 
 ## Example
 

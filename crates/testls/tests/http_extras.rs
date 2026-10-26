@@ -1,6 +1,6 @@
 //! End-to-end scan of an in-process TLS server that sends banners,
 //! `Alt-Svc` and cookies, checking the JSON, SARIF, JUnit, Markdown,
-//! CSV and HTML reports and finding ids.
+//! CSV and HTML reports, finding ids, suppressions and baselines.
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -460,5 +460,40 @@ fn config_suppresses_findings() {
         .args(["--config", "no/such/file.toml"])
         .output()
         .expect("run testls");
+    assert_eq!(missing.status.code(), Some(2));
+}
+
+/// A `--baseline` report from an earlier scan accepts its findings: a
+/// rescan reports none of them, exits 0 at `--fail-on low` and lists them
+/// as suppressed "in baseline".
+#[test]
+fn baseline_accepts_known_findings() {
+    let addr = serve();
+    let scan = |extra: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_testls"))
+            .arg(addr.to_string())
+            .args(["--sni", "localhost", "--format", "json", "--fail-on", "low"])
+            .args(extra)
+            .output()
+            .expect("run testls")
+    };
+    let first = scan(&[]);
+    assert_eq!(first.status.code(), Some(1), "findings at or above low");
+    let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("baseline.json");
+    std::fs::write(&path, &first.stdout).expect("write baseline");
+
+    let again = scan(&["--baseline", path.to_str().expect("UTF-8 path")]);
+    assert_eq!(again.status.code(), Some(0));
+    let v: serde_json::Value = serde_json::from_slice(&again.stdout).expect("JSON output");
+    assert_eq!(v["findings"], serde_json::json!([]));
+    let suppressed = v["suppressed"].as_array().expect("suppressed");
+    assert!(
+        suppressed
+            .iter()
+            .any(|s| s["id"] == "cookie.insecure" && s["reason"] == "in baseline"),
+        "{suppressed:?}"
+    );
+
+    let missing = scan(&["--baseline", "no/such/baseline.json"]);
     assert_eq!(missing.status.code(), Some(2));
 }

@@ -1,5 +1,6 @@
 //! `testls` command-line interface.
 
+mod baseline;
 mod config;
 mod revocation;
 mod target;
@@ -31,6 +32,7 @@ use testls_report::text::{self, CertificateSection, CipherSection, KeyExchangeSe
 use testls_report::{ColorChoice, Format, Painter, csv, html, json, junit, markdown, sarif};
 use testls_wire::ProtocolVersion;
 
+use baseline::Baseline;
 use config::Config;
 use target::{Host, ProxySpec, ResolveOverride, Target, TargetSpec};
 use testls_report::json::Suppressed;
@@ -123,6 +125,12 @@ struct Cli {
     /// the working directory (which is optional).
     #[arg(long, value_name = "FILE")]
     config: Option<PathBuf>,
+
+    /// Compare with a previous `--format json` report: findings it already
+    /// lists for the same target are set aside as suppressed, so only new
+    /// findings count towards `--fail-on`.
+    #[arg(long, value_name = "FILE")]
+    baseline: Option<PathBuf>,
 
     /// Colour the output: `auto` colours only on a terminal when `NO_COLOR`
     /// is unset.
@@ -300,9 +308,10 @@ fn parse_target_list(text: &str) -> Result<Vec<Target>, String> {
 async fn scan_all(cli: &Cli) -> ExitCode {
     let ready = targets(cli).and_then(|t| {
         let config = Config::load(cli.config.as_deref())?;
-        Ok((t, trust_store(cli)?, config))
+        let baseline = cli.baseline.as_deref().map(Baseline::load).transpose()?;
+        Ok((t, trust_store(cli)?, (config, baseline.unwrap_or_default())))
     });
-    let (targets, store, config) = match ready {
+    let (targets, store, (config, baseline)) = match ready {
         Ok(ready) => ready,
         Err(e) => {
             eprintln!("error: {e}");
@@ -356,7 +365,14 @@ async fn scan_all(cli: &Cli) -> ExitCode {
                 println!();
             }
             scans += 1;
-            let outcome = scan(cli, &store, &config, target, transport(cli, addr, proxy)).await;
+            let outcome = scan(
+                cli,
+                &store,
+                (&config, &baseline),
+                target,
+                transport(cli, addr, proxy),
+            )
+            .await;
             code = code.max(outcome.code);
             documents.extend(outcome.json);
             finding_scans.extend(outcome.findings);
@@ -488,11 +504,12 @@ fn transport(cli: &Cli, addr: SocketAddr, proxy: Option<SocketAddr>) -> Transpor
 }
 
 /// Scans `scan_target` over `transport` with the options in `cli`,
-/// setting aside the findings `config` suppresses.
+/// setting aside the findings the suppressions or the baseline in `rules`
+/// accept.
 async fn scan(
     cli: &Cli,
     store: &TrustStore,
-    config: &Config,
+    rules: (&Config, &Baseline),
     scan_target: &Target,
     transport: Transport,
 ) -> Outcome {
@@ -569,7 +586,7 @@ async fn scan(
     show(format!("\n{}", text::details(&details, paint)));
     findings.extend(details_findings);
 
-    let (findings, suppressed) = triage(findings, config, scan_target, started_at);
+    let (findings, suppressed) = triage(findings, rules, scan_target, started_at);
     show(format!("\n{}", text::findings(&findings, paint)));
     show(text::suppressed(&suppressed, paint));
 
@@ -608,16 +625,21 @@ async fn scan(
 }
 
 /// Drops `ok` findings, sorts the rest most severe first and splits off
-/// those `config` suppresses for `target` on the day of `now`.
+/// those `config` suppresses for `target` on the day of `now`, then those
+/// `baseline` already lists. Both lists stay most severe first.
 fn triage(
     mut findings: Vec<Finding>,
-    config: &Config,
+    (config, baseline): (&Config, &Baseline),
     target: &Target,
     now: i64,
 ) -> (Vec<Finding>, Vec<Suppressed>) {
     findings.retain(|f| f.severity > Severity::Ok);
     findings.sort_by_key(|f| std::cmp::Reverse(f.severity));
-    config.apply(target, findings, config::utc_date(now))
+    let (findings, mut suppressed) = config.apply(target, findings, config::utc_date(now));
+    let (findings, known) = baseline.apply(&target.to_string(), findings);
+    suppressed.extend(known);
+    suppressed.sort_by_key(|s| std::cmp::Reverse(s.finding.severity));
+    (findings, suppressed)
 }
 
 /// Summarises one scan for comparison with the host's other addresses.

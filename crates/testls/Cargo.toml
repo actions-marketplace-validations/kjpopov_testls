@@ -12,6 +12,7 @@ authors.workspace = true
 anstyle-query.workspace = true
 clap = { workspace = true }
 serde.workspace = true
+serde_json.workspace = true
 testls-checks.workspace = true
 testls-probe.workspace = true
 testls-report.workspace = true
@@ -21,7 +22,6 @@ toml.workspace = true
 
 [dev-dependencies]
 rustls.workspace = true
-serde_json.workspace = true
 
 [lints]
 workspace = true
