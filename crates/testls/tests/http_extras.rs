@@ -144,3 +144,30 @@ fn resolve_pins_address() {
     assert_eq!(scanned["sni"], "pinned.invalid");
     assert_eq!(v["http"]["status"], 200, "{}", v["http"]);
 }
+
+/// `--source-ip` scans from the given address and rejects targets that
+/// have no address in its family as a scan error.
+#[test]
+fn source_ip() {
+    let addr = serve();
+    let run = |source: &str| {
+        Command::new(env!("CARGO_BIN_EXE_testls"))
+            .arg(addr.to_string())
+            .args(["--source-ip", source])
+            .args(["--format", "json", "--fail-on", "critical"])
+            .output()
+            .expect("run testls")
+    };
+    let out = run("127.0.0.1");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("JSON output");
+    assert_eq!(v["http"]["status"], 200, "{}", v["http"]);
+
+    let out = run("::1");
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        format!("{stdout}{stderr}").contains("--source-ip ::1"),
+        "{stdout}{stderr}"
+    );
+}

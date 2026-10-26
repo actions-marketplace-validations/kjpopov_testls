@@ -92,7 +92,8 @@ Two connection paths:
 - [x] CIDR ranges (at most 16 host bits per range)
 - [x] `--all-addresses`: scan every A/AAAA address and warn on divergence
 - [x] `--resolve HOST:PORT:ADDR[,ADDR...]`
-- Connection control: proxy support, `--source-ip`
+- [x] `--source-ip`
+- Proxy support
 - Output formats: SARIF, JUnit, Markdown, HTML, CSV
 - `--baseline` and `.testls.toml` suppressions with expiry dates
 - Scan profiles (`--profile quick|default|full`) and policies (`--policy`:
@@ -197,3 +198,4 @@ Not scheduled; pulled into a milestone when someone picks it up.
 | 44 | `--all-addresses` scans each distinct A/AAAA address of a host name as its own report (same SNI, one JSON document each). Addresses whose offered protocols, accepted cipher suites or leaf certificate differ from the first address produce a warning on stderr, not a finding. `--mx` moves to v0.5 | Load balancers and dual-stack hosts often drift apart; a stderr warning flags it without changing the JSON schema or the exit code; MX targets are only useful once SMTP STARTTLS exists |
 | 45 | `--resolve HOST:PORT:ADDR[,ADDR...]` uses curl's syntax and is repeatable; the first entry matching a target's host name and port replaces its DNS lookup (the first address is scanned, or all with `--all-addresses`). Only target lookups are overridden, not OCSP/CRL hosts | Familiar syntax for testing a server before a DNS change or behind a load balancer; keeping the name as target and SNI makes the report match the real deployment |
 | 46 | CodeRabbit is configured in `.coderabbit.yaml` (chill profile, per-crate path instructions, title/changelog/JSON-schema/docstring pre-merge checks as warnings) and auto-approves PRs it rates low merge risk once all threads are resolved and the pre-merge checks pass. Agents push all fixes for a review round in one commit | The config makes the repo rules explicit to the reviewer; approval gives a clear merge signal; one commit per round stays within the 10 reviews per hour budget |
+| 47 | `--source-ip ADDR` binds every connection, target probes and OCSP/CRL fetches alike, to ADDR. Target addresses of the other family are dropped (scan error if none remain); revocation lookups skip them | Multi-homed scanners need one egress address for firewall rules and logs; failing early beats confusing connect errors |

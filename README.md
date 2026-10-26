@@ -55,6 +55,9 @@ testls --all-addresses example.com
 # Scan a host name at a fixed address, e.g. a new server before a DNS change
 testls --resolve example.com:443:192.0.2.10 example.com
 
+# Connect from a chosen local address on a multi-homed host
+testls --source-ip 192.0.2.5 example.com
+
 # JSON output for scripts; exit status 1 if any finding is medium or worse
 testls --format json --fail-on medium example.com:8443
 

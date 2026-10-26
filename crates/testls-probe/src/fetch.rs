@@ -6,6 +6,7 @@
 //! at a caller-chosen size. Redirects are not followed.
 
 use std::fmt::Write as _;
+use std::net::IpAddr;
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -24,6 +25,9 @@ pub struct Fetcher {
     pub read_timeout: Duration,
     /// Largest accepted reply body in bytes.
     pub max_body: usize,
+    /// Local address to connect from; the OS picks one when `None`.
+    /// Resolved addresses of the other family are skipped.
+    pub source: Option<IpAddr>,
 }
 
 /// Reply to a [`Fetcher`] request.
@@ -106,10 +110,13 @@ impl Fetcher {
         .map_err(ProbeError::Connect)?;
         let mut last = ProbeError::Unexpected("host name did not resolve");
         for addr in addrs {
-            match timeout(self.connect_timeout, TcpStream::connect(addr)).await {
-                Ok(Ok(stream)) => return Ok(stream),
-                Ok(Err(e)) => last = ProbeError::Connect(e),
-                Err(_) => last = ProbeError::Timeout,
+            if self.source.is_some_and(|ip| ip.is_ipv4() != addr.is_ipv4()) {
+                last = ProbeError::Unexpected("no address in the source address family");
+                continue;
+            }
+            match crate::connect(addr, self.source, self.connect_timeout).await {
+                Ok(stream) => return Ok(stream),
+                Err(e) => last = e,
             }
         }
         Err(last)
@@ -422,6 +429,7 @@ mod tests {
             connect_timeout: Duration::from_secs(5),
             read_timeout: Duration::from_secs(5),
             max_body: 1024,
+            source: None,
         }
     }
 
@@ -573,6 +581,28 @@ mod tests {
         let r = fetcher().get(&format!("http://{addr}/")).await.unwrap();
         assert_eq!(r.status, 404);
         assert_eq!(r.body, b"");
+    }
+
+    /// With a source address, requests connect from it and resolved
+    /// addresses of the other family are skipped.
+    #[tokio::test]
+    async fn source_address() {
+        let (addr, _task) = serve(b"HTTP/1.1 204 No Content\r\n\r\n".to_vec()).await;
+        let from_v4 = Fetcher {
+            source: Some("127.0.0.1".parse().unwrap()),
+            ..fetcher()
+        };
+        let r = from_v4.get(&format!("http://{addr}/")).await.unwrap();
+        assert_eq!(r.status, 204);
+        let from_v6 = Fetcher {
+            source: Some("::1".parse().unwrap()),
+            ..fetcher()
+        };
+        let r = from_v6.get(&format!("http://{addr}/")).await;
+        assert!(
+            matches!(r, Err(ProbeError::Unexpected(m)) if m.contains("address family")),
+            "{r:?}"
+        );
     }
 
     /// Repeated identical `Content-Length` values are accepted.
