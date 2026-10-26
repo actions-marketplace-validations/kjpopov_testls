@@ -108,18 +108,23 @@ impl Fetcher {
         .await
         .map_err(|_| ProbeError::Timeout)?
         .map_err(ProbeError::Connect)?;
-        let mut last = ProbeError::Unexpected("host name did not resolve");
+        let mut last = None;
+        let mut skipped = false;
         for addr in addrs {
             if self.source.is_some_and(|ip| ip.is_ipv4() != addr.is_ipv4()) {
-                last = ProbeError::Unexpected("no address in the source address family");
+                skipped = true;
                 continue;
             }
             match crate::connect(addr, self.source, self.connect_timeout).await {
                 Ok(stream) => return Ok(stream),
-                Err(e) => last = e,
+                Err(e) => last = Some(e),
             }
         }
-        Err(last)
+        Err(last.unwrap_or(ProbeError::Unexpected(if skipped {
+            "no address in the source address family"
+        } else {
+            "host name did not resolve"
+        })))
     }
 
     /// Reads the final response head and its body (RFC 9112 §6.3).
