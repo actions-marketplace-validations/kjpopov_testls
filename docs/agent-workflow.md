@@ -90,8 +90,9 @@ review body before merging: a maintainer `TODO` review was once missed.
   `gh api graphql -f query='{repository(owner:"kjpopov",name:"testls"){pullRequest(number:N){reviewThreads(first:50){nodes{id isResolved}}}}}'`
   then `gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:"ID"}){thread{isResolved}}}'`.
 - If CodeRabbit pauses or skips: `gh pr comment N -b "@coderabbitai review"`.
-- Changes to `.coderabbit.yaml` only apply once merged; test them first with
-  `@coderabbitai review --preview-config` on the PR.
+- To preview `.coderabbit.yaml` changes, mark the PR as draft
+  (`gh pr ready N --undo`), comment `@coderabbitai review --preview-config`,
+  then `gh pr ready N`.
 
 ## Waiting
 
