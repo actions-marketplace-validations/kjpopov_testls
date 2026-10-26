@@ -58,6 +58,9 @@ testls --resolve example.com:443:192.0.2.10 example.com
 # Connect from a chosen local address on a multi-homed host
 testls --source-ip 192.0.2.5 example.com
 
+# Scan through an HTTP proxy (CONNECT, no authentication)
+testls --proxy proxy.example:3128 example.com
+
 # JSON output for scripts; exit status 1 if any finding is medium or worse
 testls --format json --fail-on medium example.com:8443
 

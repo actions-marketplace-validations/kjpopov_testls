@@ -293,6 +293,38 @@ impl std::str::FromStr for ResolveOverride {
     }
 }
 
+/// A `--proxy [http://]HOST:PORT` value: an HTTP proxy that supports
+/// `CONNECT` (RFC 9110 §9.3.6). Authentication is not supported.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProxySpec(pub Target);
+
+impl std::str::FromStr for ProxySpec {
+    type Err = ParseTargetError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let s = input.trim();
+        let s = match s.split_once("://") {
+            Some((scheme, rest)) if scheme.eq_ignore_ascii_case("http") => rest,
+            Some((scheme, _)) => return Err(err(format!("unsupported proxy scheme `{scheme}`"))),
+            None => s,
+        };
+        let s = s.strip_suffix('/').unwrap_or(s);
+        if s.contains('@') {
+            return Err(err("proxy authentication is not supported"));
+        }
+        if s.contains(['/', '?', '#']) {
+            return Err(err("proxy must be HOST:PORT without a path"));
+        }
+        let target: Target = s.parse()?;
+        // Target parsing defaults the port; a proxy has no standard one.
+        let bare_v6 = matches!(target.host, Host::Ip(IpAddr::V6(_))) && !s.starts_with('[');
+        if bare_v6 || !s.ends_with(&format!(":{}", target.port)) {
+            return Err(err("proxy port is required (HOST:PORT)"));
+        }
+        Ok(Self(target))
+    }
+}
+
 fn validate_name(name: &str) -> Result<String, ParseTargetError> {
     let name = name.strip_suffix('.').unwrap_or(name).to_ascii_lowercase();
     let label_ok = |l: &str| {
@@ -413,6 +445,36 @@ mod tests {
         ] {
             assert!(
                 bad.parse::<ResolveOverride>().is_err(),
+                "{bad} should be rejected"
+            );
+        }
+    }
+
+    /// `--proxy` takes `[http://]HOST:PORT` and rejects anything else.
+    #[test]
+    fn proxy_specs() {
+        for (input, expected) in [
+            ("proxy.example:3128", "proxy.example:3128"),
+            ("HTTP://Proxy.Example:8080/", "proxy.example:8080"),
+            ("192.0.2.1:3128", "192.0.2.1:3128"),
+            ("[2001:db8::1]:3128", "[2001:db8::1]:3128"),
+        ] {
+            let ProxySpec(target) = input.parse().unwrap();
+            assert_eq!(target.to_string(), expected);
+        }
+        for bad in [
+            "proxy.example",
+            "[2001:db8::1]",
+            "2001:db8::1",
+            "::1:3128",
+            "https://proxy.example:3128",
+            "socks5://proxy.example:1080",
+            "http://user:pw@proxy.example:3128",
+            "http://proxy.example:3128/path",
+            "proxy.example:0",
+        ] {
+            assert!(
+                bad.parse::<ProxySpec>().is_err(),
                 "{bad} should be rejected"
             );
         }

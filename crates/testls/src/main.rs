@@ -30,7 +30,7 @@ use testls_report::text::{self, CertificateSection, CipherSection, KeyExchangeSe
 use testls_report::{ColorChoice, Format, Painter, json};
 use testls_wire::ProtocolVersion;
 
-use target::{Host, ResolveOverride, Target, TargetSpec};
+use target::{Host, ProxySpec, ResolveOverride, Target, TargetSpec};
 
 /// TLS/SSL scanner inspired by testssl.sh.
 #[derive(Debug, Parser)]
@@ -108,6 +108,14 @@ struct Cli {
     #[arg(long, value_name = "ADDR")]
     source_ip: Option<IpAddr>,
 
+    /// Tunnel all connections through this HTTP proxy with `CONNECT`
+    /// (`[http://]HOST:PORT`, no authentication). Target names are still
+    /// resolved locally (see `--resolve`); revocation lookups pass host
+    /// names to the proxy. With `--source-ip`, only the connection to the
+    /// proxy is bound and target addresses are not filtered by family.
+    #[arg(long, value_name = "HOST:PORT")]
+    proxy: Option<ProxySpec>,
+
     /// Colour the output: `auto` colours only on a terminal when `NO_COLOR`
     /// is unset.
     #[arg(long, default_value_t = ColorChoice::Auto, value_name = "WHEN",
@@ -171,6 +179,21 @@ async fn addresses(
         }
     }
     Ok(addrs)
+}
+
+/// Resolves `--proxy` to the first address of its host, of the family of
+/// `source` when given; `None` without a proxy.
+async fn proxy_address(
+    proxy: Option<&ProxySpec>,
+    source: Option<IpAddr>,
+) -> std::io::Result<Option<SocketAddr>> {
+    let Some(ProxySpec(proxy)) = proxy else {
+        return Ok(None);
+    };
+    let addrs = addresses(proxy, &[], source)
+        .await
+        .map_err(|e| std::io::Error::new(e.kind(), format!("cannot resolve proxy {proxy}: {e}")))?;
+    Ok(addrs.first().copied())
 }
 
 /// Reports whether stdout is a terminal that can render ANSI colour.
@@ -268,11 +291,20 @@ async fn scan_all(cli: &Cli) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let proxy = match proxy_address(cli.proxy.as_ref(), cli.source_ip).await {
+        Ok(proxy) => proxy,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    // Through a proxy, the source address only has to reach the proxy.
+    let family = cli.source_ip.filter(|_| proxy.is_none());
     let mut code = 0;
     let mut scans = 0;
     let mut documents = Vec::new();
     for target in &targets {
-        let addrs = match addresses(target, &cli.resolve, cli.source_ip).await {
+        let addrs = match addresses(target, &cli.resolve, family).await {
             Ok(mut addrs) => {
                 if !cli.all_addresses {
                     addrs.truncate(1);
@@ -291,7 +323,7 @@ async fn scan_all(cli: &Cli) -> ExitCode {
                 println!();
             }
             scans += 1;
-            let outcome = scan(cli, &store, target, addr).await;
+            let outcome = scan(cli, &store, target, transport(cli, addr, proxy)).await;
             code = code.max(outcome.code);
             documents.extend(outcome.json);
             profiles.extend(outcome.profile.map(|p| (addr, p)));
@@ -381,21 +413,27 @@ fn painter(cli: &Cli) -> Painter {
     ))
 }
 
-/// Builds the transport to `addr` with the timeouts in `cli`.
-fn transport(cli: &Cli, addr: SocketAddr) -> Transport {
+/// Builds the transport to `addr` with the timeouts and source address in
+/// `cli`, tunnelled through the resolved `proxy` when given.
+fn transport(cli: &Cli, addr: SocketAddr, proxy: Option<SocketAddr>) -> Transport {
     let mut transport = Transport::new(addr);
     transport.connect_timeout = Duration::from_secs(cli.connect_timeout);
     transport.read_timeout = Duration::from_secs(cli.read_timeout);
     transport.source = cli.source_ip;
+    transport.proxy = proxy;
     transport
 }
 
-/// Scans `scan_target` at `addr` with the options in `cli`.
-async fn scan(cli: &Cli, store: &TrustStore, scan_target: &Target, addr: SocketAddr) -> Outcome {
+/// Scans `scan_target` over `transport` with the options in `cli`.
+async fn scan(
+    cli: &Cli,
+    store: &TrustStore,
+    scan_target: &Target,
+    transport: Transport,
+) -> Outcome {
     let paint = painter(cli);
     let sni = cli.sni.as_deref().or(scan_target.default_sni());
-
-    let transport = transport(cli, addr);
+    let addr = transport.addr;
 
     let started_at = unix_now();
     let target = scan_target.to_string();
@@ -677,6 +715,7 @@ async fn revocation_section(
         read_timeout: transport.read_timeout,
         max_body: 0,
         source: transport.source,
+        proxy: transport.proxy,
     };
     let urls = chain
         .ok_or_else(|| "certificate chain could not be retrieved".to_owned())
@@ -949,6 +988,25 @@ mod tests {
         );
         let err = addresses(&ip, &[], Some(v6)).await.unwrap_err();
         assert!(err.to_string().contains("--source-ip ::1"), "{err}");
+    }
+
+    /// `--proxy` resolves to one address of the `--source-ip` family.
+    #[tokio::test]
+    async fn proxy_addresses() {
+        assert_eq!(proxy_address(None, None).await.unwrap(), None);
+        let proxy: ProxySpec = "192.0.2.1:3128".parse().unwrap();
+        assert_eq!(
+            proxy_address(Some(&proxy), None).await.unwrap(),
+            Some("192.0.2.1:3128".parse().unwrap())
+        );
+        let err = proxy_address(Some(&proxy), Some("::1".parse().unwrap()))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("cannot resolve proxy 192.0.2.1:3128"),
+            "{err}"
+        );
     }
 
     /// `--file` errors and an empty list are scan errors before any connection.
