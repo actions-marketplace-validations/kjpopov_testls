@@ -623,6 +623,7 @@ version = "0.2.0"
 dependencies = [
  "anstyle-query",
  "clap",
+ "rustls",
  "serde_json",
  "testls-checks",
  "testls-probe",

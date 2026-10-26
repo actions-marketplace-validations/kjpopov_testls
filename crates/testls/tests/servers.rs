@@ -145,6 +145,7 @@ fn modern_server() {
     assert_eq!(s.line("SCTs"), "SCTs    0");
     assert_eq!(s.line("OCSP"), "OCSP     not stapled");
     assert_eq!(s.line("HTTP headers"), "HTTP headers (status 200)");
+    assert!(!s.has("Set-Cookie") && !s.has("Alt-Svc"));
     assert_eq!(
         s.line("Strict-Transport-Security"),
         "Strict-Transport-Security  not set"

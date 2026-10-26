@@ -33,6 +33,10 @@ All notable changes to `testls` are listed here. The format follows
   count (text `SCTs` line, JSON `chain[].scts`). Chains to the bundled
   Mozilla roots are checked against the Baseline Requirements lifetime limit
   and for missing SCTs (`cert.too_long`, `cert.no_sct`, `cert.sct_invalid`).
+- HTTP headers section lists `Server`/`X-Powered-By` banners, `Alt-Svc`
+  alternatives and cookie attributes (JSON `http.banners`, `http.alt_svc`,
+  `http.cookies`), with `header.banner`, `header.alt_svc_invalid` and
+  `cookie.*` findings.
 
 ### Changed
 

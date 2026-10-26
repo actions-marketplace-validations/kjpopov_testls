@@ -15,9 +15,9 @@ use clap::{Parser, Subcommand};
 use testls_checks::{
     Finding, RevocationCheck, Severity, TrustStore, Vulnerability, assess_vulnerabilities,
     baseline_findings, certificate_findings, cipher_findings, describe_certificate,
-    details_findings, explain, explanations, http_findings, intolerance_findings, is_trusted,
-    key_exchange_findings, ocsp_findings, post_quantum_readiness, protocol_findings,
-    revocation_findings, revocation_urls, trust_findings, verify_ocsp_response,
+    details_findings, explain, explanations, http_extra_findings, http_findings,
+    intolerance_findings, is_trusted, key_exchange_findings, ocsp_findings, post_quantum_readiness,
+    protocol_findings, revocation_findings, revocation_urls, trust_findings, verify_ocsp_response,
     vulnerability_findings,
 };
 use testls_probe::{
@@ -490,7 +490,8 @@ async fn revocation_section(
     }
 }
 
-/// Fetches the reply to `GET /` and checks HSTS and security headers.
+/// Fetches the reply to `GET /` and checks HSTS, security headers, banners,
+/// `Alt-Svc`, and cookies.
 ///
 /// A server that does not speak HTTP is common for non-web TLS services,
 /// so a failed fetch is informational.
@@ -500,7 +501,8 @@ async fn http_section(
 ) -> (Result<HttpResponse, String>, Vec<Finding>) {
     match fetch_http_headers(transport, sni).await {
         Ok(response) => {
-            let findings = http_findings(&response);
+            let mut findings = http_findings(&response);
+            findings.extend(http_extra_findings(&response));
             (Ok(response), findings)
         }
         Err(e) => {

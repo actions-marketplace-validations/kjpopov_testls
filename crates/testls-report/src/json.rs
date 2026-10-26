@@ -9,7 +9,8 @@ use std::net::SocketAddr;
 use serde::Serialize;
 use testls_checks::{
     CertStatus, Finding, OcspStatus, PostQuantum, RevocationCheck, RevocationMethod, Vulnerability,
-    cipher_name, cipher_severity, group_name, group_severity, parse_hsts, revocation_reason_name,
+    alt_services, banners, cipher_name, cipher_severity, cookies, group_name, group_severity,
+    parse_hsts, revocation_reason_name,
 };
 use testls_probe::{
     CipherOrder, HandshakeDetails, HttpResponse, Intolerance, ProtocolResult, ProtocolSupport,
@@ -261,9 +262,41 @@ struct HttpJson<'a> {
     /// Parsed `Strict-Transport-Security` policy, or `null` when the header
     /// is missing or invalid.
     hsts: Option<HstsJson>,
+    /// Software banners (`server`, `x-powered-by`) by lowercase name, every
+    /// field value in order.
+    banners: BTreeMap<String, Vec<String>>,
+    /// Alternative services from `Alt-Svc`, or `null` when the header is
+    /// malformed.
+    alt_svc: Option<Vec<AltSvcJson>>,
+    /// Cookies set by the reply, one per `Set-Cookie` header.
+    cookies: Vec<CookieJson>,
     /// Error message when the headers could not be fetched.
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<&'a str>,
+}
+
+/// One alternative service (RFC 7838).
+#[derive(Debug, Serialize)]
+struct AltSvcJson {
+    /// ALPN protocol id, e.g. `h3`.
+    protocol: String,
+    /// Alternative authority, e.g. `:443`.
+    authority: String,
+    /// Freshness lifetime in seconds.
+    max_age: u64,
+}
+
+/// Attributes of one cookie.
+#[derive(Debug, Serialize)]
+struct CookieJson {
+    /// Cookie name.
+    name: String,
+    /// The `Secure` attribute is present.
+    secure: bool,
+    /// The `HttpOnly` attribute is present.
+    http_only: bool,
+    /// `SameSite` value, or `null` when absent.
+    same_site: Option<String>,
 }
 
 /// Parsed `Strict-Transport-Security` policy.
@@ -660,12 +693,42 @@ fn http(section: &Result<HttpResponse, String>) -> HttpJson<'_> {
                     preload: h.preload,
                     preload_eligible: h.preload_eligible(),
                 }),
+            banners: banners(response).into_iter().fold(
+                BTreeMap::new(),
+                |mut map: BTreeMap<String, Vec<String>>, (name, value)| {
+                    map.entry(name.to_ascii_lowercase())
+                        .or_default()
+                        .push(value);
+                    map
+                },
+            ),
+            alt_svc: alt_services(response).ok().map(|list| {
+                list.into_iter()
+                    .map(|a| AltSvcJson {
+                        protocol: a.protocol,
+                        authority: a.authority,
+                        max_age: a.max_age,
+                    })
+                    .collect()
+            }),
+            cookies: cookies(response)
+                .into_iter()
+                .map(|c| CookieJson {
+                    name: c.name,
+                    secure: c.secure,
+                    http_only: c.http_only,
+                    same_site: c.same_site,
+                })
+                .collect(),
             error: None,
         },
         Err(e) => HttpJson {
             status: None,
             headers: BTreeMap::new(),
             hsts: None,
+            banners: BTreeMap::new(),
+            alt_svc: None,
+            cookies: Vec::new(),
             error: Some(e),
         },
     }
@@ -857,7 +920,7 @@ mod tests {
                         "names": ["localhost"], "key": "EC 256 bits", "scts": 0}, {"error": "bad"}],
                     "ocsp": {"stapled": false, "status": null},
                 },
-                "http": {"status": null, "headers": {}, "hsts": null, "error": "reset"},
+                "http": {"status": null, "headers": {}, "hsts": null, "banners": {}, "alt_svc": null, "cookies": [], "error": "reset"},
                 "revocation": null, "vulnerabilities": [],
                 "intolerance": {"protocol": null, "error": "skipped", "tests": {
                     "fragmented": null, "grease": null, "oversized": null, "unknown_extension": null, "unknown_version": null}},
@@ -986,6 +1049,10 @@ mod tests {
                 ),
                 ("strict-transport-security".into(), "max-age=0".into()),
                 ("x-frame-options".into(), "DENY".into()),
+                ("x-powered-by".into(), "PHP/8".into()),
+                ("x-powered-by".into(), "Express".into()),
+                ("alt-svc".into(), "h3=\":443\"".into()),
+                ("set-cookie".into(), "sid=1; Secure; SameSite=Lax".into()),
             ],
         });
         let report = Report {
@@ -1022,6 +1089,11 @@ mod tests {
                     "preload": true,
                     "preload_eligible": true,
                 },
+                "banners": {"x-powered-by": ["PHP/8", "Express"]},
+                "alt_svc": [{"protocol": "h3", "authority": ":443", "max_age": 86_400}],
+                "cookies": [
+                    {"name": "sid", "secure": true, "http_only": false, "same_site": "Lax"},
+                ],
             })
         );
     }
