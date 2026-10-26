@@ -29,6 +29,8 @@ All notable changes to `testls` are listed here. The format follows
   pull request comments, marking findings at or above `--fail-on`.
 - `--format csv` prints one CSV row per finding for spreadsheets and
   scripts, plus a `scan.error` row for each target that failed to scan.
+- `--format html` prints one self-contained HTML page with the same
+  summary and findings as the Markdown report, for sharing and archiving.
 
 ## [0.3.0] - 2026-10-26
 

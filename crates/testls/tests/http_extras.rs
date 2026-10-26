@@ -1,6 +1,6 @@
 //! End-to-end scan of an in-process TLS server that sends banners,
-//! `Alt-Svc` and cookies, checking the JSON, SARIF, JUnit, Markdown and
-//! CSV reports and finding ids.
+//! `Alt-Svc` and cookies, checking the JSON, SARIF, JUnit, Markdown,
+//! CSV and HTML reports and finding ids.
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -240,6 +240,36 @@ fn csv_reports_failures() {
                 && l.contains("cannot resolve: ")
                 && l.ends_with(",true")),
         "{csv}"
+    );
+}
+
+/// `--format html` prints one page with the scanned address, escaped
+/// findings and the failed target.
+#[test]
+fn html_reports_failures() {
+    let addr = serve();
+    let out = Command::new(env!("CARGO_BIN_EXE_testls"))
+        .arg(addr.to_string())
+        .arg("unresolvable.invalid:443")
+        .args(["--sni", "localhost", "--format", "html"])
+        .args(["--fail-on", "low"])
+        .output()
+        .expect("run testls");
+    assert_eq!(out.status.code(), Some(2));
+    let html = String::from_utf8(out.stdout).expect("UTF-8");
+    assert!(html.starts_with("<!DOCTYPE html>\n"), "{html}");
+    assert!(html.ends_with("</html>\n"), "{html}");
+    assert!(
+        html.contains(&format!("<h2>{addr} ({addr})</h2>")),
+        "{html}"
+    );
+    assert!(
+        html.contains("<td class=\"low\">low</td><td><code>cookie.insecure</code></td>"),
+        "{html}"
+    );
+    assert!(
+        html.contains("<td>unresolvable.invalid:443</td><td>cannot resolve: "),
+        "{html}"
     );
 }
 
