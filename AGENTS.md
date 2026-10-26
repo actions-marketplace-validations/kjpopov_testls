@@ -93,7 +93,8 @@ data from IANA registries and RFCs, and cite the source in a comment.
 - Be extremly concise. Sacrifice grammar for the sake of being concise and
   concision.
 - Don't call GitHub APIs or change repository settings. Push branches and let
-  the maintainer handle PRs and CI.
+  the maintainer handle PRs and CI, unless the maintainer allows the `gh`
+  CLI for the session; then follow [docs/agent-workflow.md](docs/agent-workflow.md).
 - Assume podman, not docker, on developer machines (`podman compose ...`).
   CI uses docker.
 - macOS has no `timeout` command; use tool-level timeouts instead.
