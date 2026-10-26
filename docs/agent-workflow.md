@@ -64,16 +64,18 @@ CodeRabbit is happy when either:
     | .commit_id'
   ```
 
-- or, for a PR it rates above `low` merge risk (no auto-approval, see
-  `.coderabbit.yaml`), the latest commit's review has no actionable comments,
+- or, when it withholds approval (merge risk above `low`, see
+  `.coderabbit.yaml`, or an explained pre-merge check failure), the latest commit's review has no actionable comments,
   all CodeRabbit threads are resolved, `gh pr checks` shows "Review
   completed" and the merge state is `CLEAN`;
   mention the risk to the maintainer.
 
 Auto-approval also needs resolved threads and passing pre-merge checks
 (title, changelog, JSON schema, docstrings; listed in the summary comment).
-They are in warning mode, so they never block a merge, but a failing one may
-withhold approval: fix it or explain it in a PR comment. Always read every
+They are in warning mode, so GitHub never blocks on them, but a failing one
+may withhold approval. Fix it if you can; if you explain it in a PR comment
+instead, the PR may merge without approval under the second rule above, and
+you must point the maintainer to the explanation. Always read every
 review body before merging: a maintainer `TODO` review was once missed.
 
 ## Answering comments
