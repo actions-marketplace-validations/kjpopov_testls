@@ -70,6 +70,9 @@ testls --format sarif example.com > testls.sarif
 # JUnit XML for CI test reports; findings at or above --fail-on fail
 testls --format junit --fail-on medium example.com > testls.xml
 
+# Markdown summary for a CI job summary or pull request comment
+testls --format markdown example.com >> "$GITHUB_STEP_SUMMARY"
+
 # Trust the operating system's roots or a private CA instead of Mozilla's
 testls --system-roots intranet.example
 testls --ca-file my-ca.pem 10.0.0.5 --sni intranet.example
@@ -98,6 +101,7 @@ A web service (`testls serve`, REST API and browser UI) is planned for v0.6.
 | Output | Human-readable text and JSON, CI-friendly exit codes | v0.1 |
 | SARIF | SARIF 2.1.0 log for code-scanning tools | v0.4 |
 | JUnit | JUnit XML for CI test reports | v0.4 |
+| Markdown | Markdown summary for CI job summaries and PR comments | v0.4 |
 | Key exchange | Supported groups (X25519, ECDHE curves, ML-KEM hybrids) | v0.2 |
 | HTTP headers | HSTS, preload, header hygiene | v0.2 |
 | Revocation | OCSP stapling, OCSP/CRL | v0.2 |
