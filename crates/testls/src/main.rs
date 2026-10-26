@@ -355,12 +355,7 @@ async fn scan_all(cli: &Cli) -> ExitCode {
     let mut failures = Vec::new();
     for target in &targets {
         let addrs = match addresses(target, &cli.resolve, family).await {
-            Ok(mut addrs) => {
-                if !(cli.all_addresses || cli.profile.full()) {
-                    addrs.truncate(1);
-                }
-                addrs
-            }
+            Ok(addrs) => selected(cli, addrs),
             Err(e) => {
                 scans += 1;
                 let outcome = Outcome::failed(target, &format!("cannot resolve: {e}"));
@@ -500,6 +495,15 @@ fn painter(cli: &Cli) -> Painter {
         cli.color != ColorChoice::Never && colour_terminal(),
         std::env::var("NO_COLOR").ok().as_deref(),
     ))
+}
+
+/// Keeps every resolved address with `--all-addresses` or `--profile full`,
+/// otherwise only the first.
+fn selected(cli: &Cli, mut addrs: Vec<SocketAddr>) -> Vec<SocketAddr> {
+    if !(cli.all_addresses || cli.profile.full()) {
+        addrs.truncate(1);
+    }
+    addrs
 }
 
 /// Builds the transport to `addr` with the timeouts and source address in
@@ -1152,6 +1156,34 @@ mod tests {
                 "[2001:db8::1]:443 differs from 192.0.2.1:443 in protocols, cipher suites, certificate"
             ]
         );
+    }
+
+    /// Only `--all-addresses` and `--profile full` scan every resolved address.
+    #[test]
+    fn address_selection() {
+        let addrs: Vec<SocketAddr> = vec![
+            "192.0.2.1:443".parse().unwrap(),
+            "192.0.2.2:443".parse().unwrap(),
+        ];
+        for (args, count) in [
+            (&["testls", "a.example"][..], 1),
+            (&["testls", "--profile", "quick", "a.example"], 1),
+            (&["testls", "--profile", "full", "a.example"], 2),
+            (&["testls", "--all-addresses", "a.example"], 2),
+            (
+                &[
+                    "testls",
+                    "--all-addresses",
+                    "--profile",
+                    "quick",
+                    "a.example",
+                ],
+                2,
+            ),
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert_eq!(selected(&cli, addrs.clone()).len(), count, "{args:?}");
+        }
     }
 
     /// IP targets and `localhost` resolve without duplicates; a matching
