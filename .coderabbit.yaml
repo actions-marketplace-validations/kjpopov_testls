@@ -1,0 +1,86 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit settings. Reference: https://docs.coderabbit.ai/reference/configuration
+language: en-GB
+tone_instructions: >-
+  Be concise and technical. Cite the RFC or IANA registry section when
+  questioning protocol behaviour.
+
+reviews:
+  profile: chill
+  review_details: true
+  in_progress_fortune: false
+  poem: false
+  suggested_reviewers: false
+  enable_prompt_for_ai_agents: true
+  path_filters:
+    - "!crates/testls-data/src/generated.rs"
+    - "!**/Cargo.lock"
+  path_instructions:
+    - path: "crates/testls-wire/**/*.rs"
+      instructions: >-
+        Parses untrusted network input. Flag any panic path (indexing,
+        slicing, unwrap, arithmetic overflow) reachable from peer bytes.
+    - path: "crates/testls-*/**/*.rs"
+      instructions: >-
+        New protocol data tables and checks must cite their source (RFC or
+        IANA registry section) in a comment. testls is a clean-room
+        project: flag anything that looks copied from testssl.sh.
+    - path: "crates/testls/src/main.rs"
+      instructions: >-
+        Exit codes are a CLI contract: 0 = no findings at or above
+        --fail-on, 1 = findings at or above it, 2 = scan error.
+    - path: "crates/testls-report/**/*.rs"
+      instructions: >-
+        JSON output must match docs/json-schema.md; flag fields that are
+        added, renamed or removed without a matching schema change.
+    - path: "crates/testls/tests/**/*.rs"
+      instructions: >-
+        Tests that need the local servers must carry
+        #[ignore = "needs tests/servers running"].
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_pause_after_reviewed_commits: 0
+  auto_approvals:
+    enabled: true
+    max_merge_risk: low
+  pre_merge_checks:
+    docstrings:
+      mode: warning
+      threshold: 80
+    title:
+      mode: warning
+      requirements: >-
+        Short imperative subject, optionally prefixed with the area, like
+        "checks: add severity model" or "cli: report findings".
+    custom_checks:
+      - name: Changelog entry
+        mode: warning
+        instructions: >-
+          Pass if the PR changes no user-visible behaviour (CLI flags,
+          output, findings, exit codes) or if CHANGELOG.md gains an entry
+          under "Unreleased". Fail otherwise.
+      - name: JSON schema in sync
+        mode: warning
+        instructions: >-
+          Pass if the PR does not change JSON output fields in
+          crates/testls-report, or if docs/json-schema.md is updated to
+          match. Fail otherwise.
+  tools:
+    clippy:
+      enabled: true
+    markdownlint:
+      enabled: true
+    actionlint:
+      enabled: true
+    shellcheck:
+      enabled: true
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "CONTRIBUTING.md"
+      - "docs/agent-workflow.md"
+  learnings:
+    scope: local

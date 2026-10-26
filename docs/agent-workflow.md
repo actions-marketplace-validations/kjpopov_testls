@@ -14,8 +14,9 @@ otherwise push branches and stop (see [AGENTS.md](../AGENTS.md)).
    integration tests for scanner changes.
 4. `git push -u origin BRANCH`, then
    `gh pr create --base main --title "area: subject" --body "..."`.
-5. Wait for CI and CodeRabbit (5-10 min), fix comments, repeat.
-6. Merge when green and CodeRabbit is happy (see below):
+5. Wait for CI and CodeRabbit (5-10 min), fix comments, repeat. One review
+   round = one fix commit (see "Answering comments").
+6. Merge when green and CodeRabbit has approved (see below):
    `gh pr merge N --merge --delete-branch`, then pull `main`.
 
 Stacked branches: open the PR for the next layer only after the lower one is
@@ -51,23 +52,38 @@ gh api repos/kjpopov/testls/pulls/N/comments > target/prN.json
 jq -r '.[] | (.id|tostring) + " " + .path + ":" + (.line|tostring)' target/prN.json
 ```
 
-CodeRabbit is happy when the latest commit's review has no actionable
-comments ("No actionable comments were generated" in its summary comment),
-`gh pr checks` shows "Review completed" and the merge state is `CLEAN`.
-Always read every review body before merging: a maintainer `TODO` review was
-once missed.
+CodeRabbit is happy when it has approved the latest commit:
+
+```sh
+gh pr view N --json reviewDecision,mergeStateStatus   # APPROVED + CLEAN
+```
+
+It auto-approves (`.coderabbit.yaml`) once threads are resolved, the latest
+commit is reviewed, pre-merge checks pass and merge risk is `low` or below.
+No approval for a higher-risk PR is not a bug: it then counts as happy when
+the latest review has no actionable comments, `gh pr checks` shows "Review
+completed" and the merge state is `CLEAN`; mention the risk to the
+maintainer. Always read every review body before merging: a maintainer
+`TODO` review was once missed. Pre-merge check warnings (title, changelog,
+JSON schema, docstrings) are in the summary comment; fix or explain them.
 
 ## Answering comments
 
+- Collect every comment of a round (inline, outside-diff, nitpick) first,
+  then push **all fixes in one commit**: each push triggers a review and the
+  plan allows 10 reviews per hour. Each inline comment has a "Prompt for AI
+  Agents" section; use it as the fix spec, but verify against the code.
 - Fix in a new commit (don't force-push over reviewed commits), then reply:
   `gh api repos/kjpopov/testls/pulls/N/comments/ID/replies -f body="Fixed in abc1234: ..."`.
 - Outside-diff/nitpick items have no thread: answer with `gh pr comment N -b "..."`.
 - Declining is fine with a reason (RFC citation, scope); CodeRabbit usually
-  accepts and resolves the thread.
+  accepts, resolves the thread and stores a learning so it won't ask again.
 - CodeRabbit resolves threads after a fix reply. Leftovers:
   `gh api graphql -f query='{repository(owner:"kjpopov",name:"testls"){pullRequest(number:N){reviewThreads(first:50){nodes{id isResolved}}}}}'`
   then `gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:"ID"}){thread{isResolved}}}'`.
 - If CodeRabbit pauses or skips: `gh pr comment N -b "@coderabbitai review"`.
+- Changes to `.coderabbit.yaml` only apply once merged; test them first with
+  `@coderabbitai review --preview-config` on the PR.
 
 ## Waiting
 
