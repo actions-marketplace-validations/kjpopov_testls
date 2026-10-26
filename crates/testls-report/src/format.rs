@@ -13,11 +13,13 @@ pub enum Format {
     Json,
     /// One SARIF 2.1.0 log printed when the scan finishes.
     Sarif,
+    /// One JUnit XML document printed when the scan finishes.
+    Junit,
 }
 
 impl Format {
     /// All formats, in the order shown in `--help`.
-    pub const ALL: [Self; 3] = [Self::Text, Self::Json, Self::Sarif];
+    pub const ALL: [Self; 4] = [Self::Text, Self::Json, Self::Sarif, Self::Junit];
 
     /// Lower-case name, as used on the command line.
     #[must_use]
@@ -26,6 +28,7 @@ impl Format {
             Self::Text => "text",
             Self::Json => "json",
             Self::Sarif => "sarif",
+            Self::Junit => "junit",
         }
     }
 }
@@ -53,7 +56,7 @@ impl std::error::Error for ParseFormatError {}
 impl FromStr for Format {
     type Err = ParseFormatError;
 
-    /// Parses `text`, `json` or `sarif`.
+    /// Parses `text`, `json`, `sarif` or `junit`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::ALL
             .into_iter()
