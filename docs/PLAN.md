@@ -85,6 +85,7 @@ Two connection paths:
 - [x] Certificate lifetime against the CA/Browser Forum Baseline Requirements
   (publicly trusted certificates only) and embedded SCT parsing
 - [x] HTTP extras: `Alt-Svc`, `Server`/`X-Powered-By` banners, cookie flags
+- [x] Released as v0.3.0
 
 ### v0.4 — Workflow
 - Multiple targets: `--file`, CIDR ranges, `--mx`; scan every A/AAAA address
