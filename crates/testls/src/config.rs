@@ -6,7 +6,7 @@
 //! ```toml
 //! [[suppress]]
 //! id = "cookie.insecure"
-//! target = "example.com"     # optional, defaults to every target
+//! target = "example.com"     # optional (CIDR allowed), defaults to every target
 //! reason = "legacy app, replaced in Q1"
 //! expires = 2026-12-31       # optional, last day the entry applies (UTC)
 //! ```
@@ -17,7 +17,7 @@ use serde::Deserialize;
 use testls_checks::Finding;
 use testls_report::json::Suppressed;
 
-use crate::target::Target;
+use crate::target::{Target, TargetSpec};
 
 /// File looked up in the working directory when `--config` is not given.
 pub const DEFAULT_PATH: &str = ".testls.toml";
@@ -37,17 +37,19 @@ pub struct Config {
 pub struct Suppression {
     /// Finding id to suppress, as shown by `testls explain`.
     pub id: String,
-    /// Target the entry is limited to; every target when absent.
+    /// Target or CIDR range the entry is limited to; every target when
+    /// absent.
     #[serde(default, deserialize_with = "target")]
-    pub target: Option<Target>,
+    pub target: Option<TargetSpec>,
     /// Why the finding is accepted.
     pub reason: String,
     /// Last day (UTC) the entry applies; forever when absent.
     pub expires: Option<toml::value::Datetime>,
 }
 
-/// Deserializes an optional target string with the CLI target syntax.
-fn target<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<Target>, D::Error> {
+/// Deserializes an optional target string with the CLI target syntax,
+/// including CIDR ranges.
+fn target<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<TargetSpec>, D::Error> {
     let s = String::deserialize(de)?;
     s.parse().map(Some).map_err(serde::de::Error::custom)
 }
@@ -144,7 +146,11 @@ impl Suppression {
 
     /// Whether the entry covers `finding` on `target`.
     fn matches(&self, target: &Target, finding: &Finding) -> bool {
-        self.id == finding.id && self.target.as_ref().is_none_or(|t| t == target)
+        self.id == finding.id
+            && self
+                .target
+                .as_ref()
+                .is_none_or(|spec| spec.0.contains(target))
     }
 
     /// The expiry date as written, for messages.
@@ -243,6 +249,28 @@ mod tests {
         let expired: Vec<_> = config.expired(TODAY).map(|s| s.id.as_str()).collect();
         assert_eq!(expired, ["protocol.tls10"]);
         assert_eq!(config.suppress[2].expires_text(), "2026-10-25");
+    }
+
+    /// A CIDR target covers every address in its range and nothing else.
+    #[test]
+    fn cidr_target() {
+        let config = parse(
+            r#"
+            [[suppress]]
+            id = "cookie.insecure"
+            target = "192.0.2.0/30"
+            reason = "range"
+            "#,
+        );
+        let target = |s: &str| s.parse::<Target>().expect("target");
+        let kept = |t: &str| {
+            config
+                .apply(&target(t), vec![finding("cookie.insecure")], TODAY)
+                .0
+        };
+        assert_eq!(kept("192.0.2.3").len(), 0);
+        assert_eq!(kept("192.0.2.4").len(), 1);
+        assert_eq!(kept("192.0.2.3:8443").len(), 1);
     }
 
     /// Bad entries are rejected with a message naming the problem.
