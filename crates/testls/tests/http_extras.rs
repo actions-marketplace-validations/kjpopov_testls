@@ -1,6 +1,7 @@
 //! End-to-end scan of an in-process TLS server that sends banners,
 //! `Alt-Svc` and cookies, checking the JSON, SARIF, JUnit, Markdown,
-//! CSV and HTML reports, finding ids, suppressions and baselines.
+//! CSV and HTML reports, finding ids, suppressions, baselines, profiles
+//! and policies.
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -528,4 +529,64 @@ fn profiles_select_probes() {
     let full = run("full");
     assert!(full["revocation"].is_object(), "{}", full["revocation"]);
     assert_eq!(full["http"]["status"], 200);
+}
+
+/// `--policy` adds `policy.*` findings for what the policy does not allow,
+/// and `policy.incomplete` when the quick profile skips parts of it.
+#[test]
+fn policy_reports_deviations() {
+    let addr = serve();
+    let run = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_testls"))
+            .arg(addr.to_string())
+            .args(["--sni", "localhost", "--format", "json"])
+            .args(args)
+            .output()
+            .expect("run testls");
+        let v = serde_json::from_slice::<serde_json::Value>(&out.stdout).expect("JSON output");
+        let findings: Vec<(String, String)> = v["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .filter(|f| f["id"].as_str().is_some_and(|id| id.starts_with("policy.")))
+            .map(|f| {
+                (
+                    f["id"].as_str().unwrap_or_default().to_owned(),
+                    f["message"].as_str().unwrap_or_default().to_owned(),
+                )
+            })
+            .collect();
+        (out.status.code(), findings)
+    };
+
+    let (code, findings) = run(&["--fail-on", "medium", "--policy", "mozilla-modern"]);
+    assert_eq!(code, Some(1));
+    let ids: Vec<&str> = findings.iter().map(|(id, _)| id.as_str()).collect();
+    assert!(ids.contains(&"policy.protocol"), "{findings:?}");
+    assert!(ids.contains(&"policy.hsts"), "{findings:?}");
+    assert!(!ids.contains(&"policy.incomplete"), "{findings:?}");
+    assert!(
+        findings
+            .iter()
+            .all(|(_, m)| m.ends_with("which mozilla-modern does not allow")),
+        "{findings:?}"
+    );
+
+    let (code, findings) = run(&[
+        "--fail-on",
+        "critical",
+        "--profile",
+        "quick",
+        "--policy",
+        "mozilla-intermediate",
+    ]);
+    assert_eq!(code, Some(0));
+    assert!(
+        findings.iter().any(|(id, m)| id == "policy.incomplete"
+            && m.contains("key exchange groups, HSTS not measured")),
+        "{findings:?}"
+    );
+
+    let (_, findings) = run(&["--fail-on", "critical"]);
+    assert_eq!(findings, []);
 }

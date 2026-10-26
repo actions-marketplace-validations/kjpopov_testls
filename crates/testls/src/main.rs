@@ -16,12 +16,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use clap::builder::TypedValueParser as _;
 use clap::{Parser, Subcommand};
 use testls_checks::{
-    Finding, RevocationCheck, Severity, TrustStore, Vulnerability, assess_vulnerabilities,
-    baseline_findings, certificate_findings, cipher_findings, describe_certificate,
-    details_findings, explain, explanations, http_extra_findings, http_findings,
-    intolerance_findings, is_trusted, key_exchange_findings, ocsp_findings, post_quantum_readiness,
-    protocol_findings, revocation_findings, revocation_urls, trust_findings, verify_ocsp_response,
-    vulnerability_findings,
+    Finding, Policy, PolicyInput, RevocationCheck, Severity, TrustStore, Vulnerability,
+    assess_vulnerabilities, baseline_findings, certificate_findings, cipher_findings,
+    describe_certificate, details_findings, explain, explanations, http_extra_findings,
+    http_findings, intolerance_findings, is_trusted, key_exchange_findings, ocsp_findings,
+    policy_findings, post_quantum_readiness, protocol_findings, revocation_findings,
+    revocation_urls, trust_findings, verify_ocsp_response, vulnerability_findings,
 };
 use testls_probe::{
     CipherResult, Fetcher, HandshakeDetails, HttpResponse, Intolerance, KeyExchangeResult,
@@ -105,6 +105,13 @@ struct Cli {
           value_parser = clap::builder::PossibleValuesParser::new(ScanProfile::ALL.map(ScanProfile::as_str))
               .map(|s| s.parse::<ScanProfile>().expect("listed value")))]
     profile: ScanProfile,
+
+    /// Also report everything a configuration policy does not allow, as
+    /// `policy.*` findings. Repeat to check several policies.
+    #[arg(long = "policy", value_name = "POLICY",
+          value_parser = clap::builder::PossibleValuesParser::new(Policy::ALL.map(Policy::as_str))
+              .map(|s| s.parse::<Policy>().expect("listed value")))]
+    policies: Vec<Policy>,
 
     /// Scan every A/AAAA address a host name resolves to, and warn when
     /// the addresses differ in protocols, cipher suites or certificate.
@@ -574,9 +581,9 @@ async fn scan(
     findings.extend(cert_findings);
 
     let revocation = if cli.revocation || cli.profile.full() {
-        let (section, revocation_findings) = revocation_section(&transport, chain.as_deref()).await;
+        let (section, more) = revocation_section(&transport, chain.as_deref()).await;
         show(format!("\n{}", text::revocation(&section, paint)));
-        findings.extend(revocation_findings);
+        findings.extend(more);
         Some(section)
     } else {
         None
@@ -592,6 +599,8 @@ async fn scan(
         &show,
     )
     .await;
+    let measured_parts = (&protocols[..], &ciphers[..], &key_exchange[..]);
+    findings.extend(policy_section(cli, measured_parts, chain.as_deref(), &http));
 
     let (findings, suppressed) = triage(findings, rules, scan_target, started_at);
     show(format!("\n{}", text::findings(&findings, paint)));
@@ -629,6 +638,45 @@ async fn scan(
         failure: None,
         profile: Some(profile(&protocols, &ciphers, chain.as_deref())),
     }
+}
+
+/// `policy.*` findings for each `--policy`. Cipher suites or key exchange
+/// groups count as measured only if every version was probed successfully
+/// (the quick profile skips key exchange).
+fn policy_section(
+    cli: &Cli,
+    (protocols, ciphers, key_exchange): (
+        &[ProtocolResult],
+        &[CipherSection],
+        &[KeyExchangeSection],
+    ),
+    chain: Option<&[Vec<u8>]>,
+    http: &Result<HttpResponse, String>,
+) -> Vec<Finding> {
+    let ciphers = complete(ciphers, |s| &s.outcome);
+    let key_exchange = complete(key_exchange, |s| &s.outcome).filter(|_| cli.profile.deep());
+    let input = PolicyInput {
+        protocols,
+        ciphers: ciphers.as_deref(),
+        key_exchange: key_exchange.as_deref(),
+        chain,
+        http: http.as_ref().ok(),
+    };
+    cli.policies
+        .iter()
+        .flat_map(|&p| policy_findings(p, &input))
+        .collect()
+}
+
+/// The results of every section, or `None` if any of them failed.
+fn complete<S, T: Clone>(
+    sections: &[S],
+    outcome: impl Fn(&S) -> &Result<T, String>,
+) -> Option<Vec<T>> {
+    sections
+        .iter()
+        .map(|s| outcome(s).as_ref().ok().cloned())
+        .collect()
 }
 
 /// Drops `ok` findings, sorts the rest most severe first and splits off

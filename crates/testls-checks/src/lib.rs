@@ -11,6 +11,7 @@ mod http_extras;
 mod intolerance;
 mod key_exchange;
 mod ocsp;
+mod policy;
 mod post_quantum;
 mod protocols;
 mod revocation;
@@ -32,6 +33,7 @@ pub use ocsp::{
     CertStatus, OcspStatus, display_time, ocsp_findings, ocsp_request, revocation_reason_name,
     verify_ocsp_response,
 };
+pub use policy::{Policy, PolicyInput, policy_findings};
 pub use post_quantum::{GroupKind, PostQuantum, PqStatus, group_kind, post_quantum_readiness};
 pub use protocols::{protocol_findings, protocol_severity};
 pub use revocation::{
