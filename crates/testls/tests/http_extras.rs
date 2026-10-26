@@ -601,6 +601,20 @@ fn policy_reports_deviations() {
         "{findings:?}"
     );
 
+    let (_, findings) = run(&["--fail-on", "critical", "--policy", "cnsa-2.0"]);
+    for id in ["policy.cipher", "policy.cert_key", "policy.cert_signature"] {
+        assert!(
+            findings.iter().any(|(i, _)| i == id),
+            "{id} missing: {findings:?}"
+        );
+    }
+    assert!(
+        findings.iter().all(|(id, m)| id != "policy.hsts"
+            && id != "policy.incomplete"
+            && m.ends_with("which cnsa-2.0 does not allow")),
+        "{findings:?}"
+    );
+
     let (_, findings) = run(&["--fail-on", "critical"]);
     assert_eq!(findings, []);
 }
