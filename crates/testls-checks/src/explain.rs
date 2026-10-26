@@ -574,6 +574,55 @@ const EXPLANATIONS: &[Explanation] = &[
         "Early data is not protected against replay; only enable 0-RTT for idempotent requests and with application-level replay protection.",
         "RFC 8446 §8, §E.5",
     ),
+    // Compliance policies (--policy).
+    entry(
+        "policy.cert_key",
+        "Certificate key type or size outside the policy",
+        "The chosen policy limits leaf keys, e.g. Mozilla modern allows only ECDSA on P-256 or P-384 and intermediate also RSA of at least 2048 bits. Reissue the certificate with an allowed key.",
+        "Mozilla Server Side TLS 6.0",
+    ),
+    entry(
+        "policy.cert_lifespan",
+        "Certificate validity period longer than the policy allows",
+        "Shorter certificate lifetimes limit the damage of a compromised key; Mozilla modern allows 90 days and intermediate 366 days.",
+        "Mozilla Server Side TLS 6.0",
+    ),
+    entry(
+        "policy.cert_signature",
+        "Certificate signature algorithm outside the policy",
+        "The chosen policy lists the signature algorithms the leaf certificate may use, e.g. ECDSA with SHA-2 and, for Mozilla intermediate, sha256WithRSAEncryption.",
+        "Mozilla Server Side TLS 6.0",
+    ),
+    entry(
+        "policy.cipher",
+        "Cipher suite outside the policy",
+        "The server accepts a cipher suite the chosen policy does not list. It may not be broken, but disabling it brings the configuration in line with the policy.",
+        "Mozilla Server Side TLS 6.0",
+    ),
+    entry(
+        "policy.group",
+        "Key exchange group outside the policy",
+        "The server accepts a named group the chosen policy does not list; Mozilla allows X25519MLKEM768, x25519, secp256r1 and secp384r1.",
+        "Mozilla Server Side TLS 6.0",
+    ),
+    entry(
+        "policy.hsts",
+        "HSTS missing or shorter than the policy requires",
+        "Mozilla asks for Strict-Transport-Security with a max-age of at least two years (63072000 seconds).",
+        "Mozilla Server Side TLS 6.0; RFC 6797",
+    ),
+    entry(
+        "policy.incomplete",
+        "Policy could not be fully checked",
+        "Parts of the scan the policy depends on were skipped or failed, so compliance is unknown for them. Rerun without --profile quick or fix the reported errors.",
+        "testls",
+    ),
+    entry(
+        "policy.protocol",
+        "Protocol version outside the policy",
+        "The server offers a protocol version the chosen policy does not allow; Mozilla modern allows only TLSv1.3 and intermediate TLSv1.2 and TLSv1.3.",
+        "Mozilla Server Side TLS 6.0",
+    ),
 ];
 
 /// All finding explanations, grouped by area.
@@ -599,7 +648,7 @@ mod tests {
     use super::*;
 
     /// Area prefixes that finding ids start with.
-    const AREAS: [&str; 14] = [
+    const AREAS: [&str; 15] = [
         "cert",
         "cipher",
         "cookie",
@@ -611,6 +660,7 @@ mod tests {
         "http",
         "intolerance",
         "ocsp",
+        "policy",
         "protocol",
         "revocation",
         "vuln",
@@ -655,6 +705,7 @@ mod tests {
             include_str!("intolerance.rs"),
             include_str!("key_exchange.rs"),
             include_str!("ocsp.rs"),
+            include_str!("policy.rs"),
             include_str!("post_quantum.rs"),
             include_str!("protocols.rs"),
             include_str!("revocation.rs"),

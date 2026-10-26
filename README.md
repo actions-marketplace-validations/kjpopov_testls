@@ -91,6 +91,9 @@ testls --revocation example.com
 testls --profile quick example.com
 testls --profile full example.com
 
+# Report everything Mozilla's "intermediate" configuration does not allow
+testls --policy mozilla-intermediate --fail-on medium example.com
+
 # Explain a finding id shown in brackets, or list all ids
 testls explain hsts.missing
 ```
@@ -137,6 +140,7 @@ A web service (`testls serve`, REST API and browser UI) is planned for v0.6.
 | Suppressions | `.testls.toml` entries with reason and expiry date | v0.4 |
 | Baseline | `--baseline` report: fail only on new findings | v0.4 |
 | Profiles | `--profile quick\|default\|full` scan depth | v0.4 |
+| Policies | `--policy mozilla-modern\|mozilla-intermediate` compliance findings | v0.4 |
 | Key exchange | Supported groups (X25519, ECDHE curves, ML-KEM hybrids) | v0.2 |
 | HTTP headers | HSTS, preload, header hygiene | v0.2 |
 | Revocation | OCSP stapling, OCSP/CRL | v0.2 |
