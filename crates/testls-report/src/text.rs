@@ -19,6 +19,7 @@ use testls_probe::{
 use testls_wire::ProtocolVersion;
 
 use crate::Painter;
+use crate::json::Suppressed;
 
 /// Cipher suites offered for one protocol version, or why they could not be
 /// enumerated.
@@ -483,6 +484,28 @@ pub fn findings(findings: &[Finding], paint: Painter) -> String {
             paint.severity(f.severity, &label),
             f.message,
             f.id
+        );
+    }
+    out
+}
+
+/// Renders findings hidden by suppressions with their reasons, after a
+/// blank line; empty when there are none.
+#[must_use]
+pub fn suppressed(suppressed: &[Suppressed], paint: Painter) -> String {
+    if suppressed.is_empty() {
+        return String::new();
+    }
+    let mut out = format!("\n{}\n", paint.heading("Suppressed"));
+    for s in suppressed {
+        let f = &s.finding;
+        let _ = writeln!(
+            out,
+            "  {:<8} {} [{}] ({})",
+            f.severity.as_str(),
+            f.message,
+            f.id,
+            s.reason
         );
     }
     out
@@ -976,5 +999,19 @@ mod tests {
             "Findings\n  medium   TLS 1.0 is offered [protocol.tls10]\n"
         );
         assert!(findings(&list, Painter::new(true)).contains("\x1b[33mmedium  \x1b[0m TLS 1.0"));
+    }
+
+    /// Suppressed findings list their reasons; nothing when there are none.
+    #[test]
+    fn suppressed_lines() {
+        assert_eq!(suppressed(&[], PLAIN), "");
+        let list = [Suppressed {
+            finding: Finding::new("protocol.tls10", Severity::Medium, "TLS 1.0 is offered"),
+            reason: "legacy clients".to_owned(),
+        }];
+        assert_eq!(
+            suppressed(&list, PLAIN),
+            "\nSuppressed\n  medium   TLS 1.0 is offered [protocol.tls10] (legacy clients)\n"
+        );
     }
 }

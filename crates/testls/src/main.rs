@@ -1,5 +1,6 @@
 //! `testls` command-line interface.
 
+mod config;
 mod revocation;
 mod target;
 
@@ -30,7 +31,9 @@ use testls_report::text::{self, CertificateSection, CipherSection, KeyExchangeSe
 use testls_report::{ColorChoice, Format, Painter, csv, html, json, junit, markdown, sarif};
 use testls_wire::ProtocolVersion;
 
+use config::Config;
 use target::{Host, ProxySpec, ResolveOverride, Target, TargetSpec};
+use testls_report::json::Suppressed;
 
 /// TLS/SSL scanner inspired by testssl.sh.
 #[derive(Debug, Parser)]
@@ -115,6 +118,11 @@ struct Cli {
     /// proxy is bound and target addresses are not filtered by family.
     #[arg(long, value_name = "HOST:PORT")]
     proxy: Option<ProxySpec>,
+
+    /// Read suppressions from this TOML file instead of `.testls.toml` in
+    /// the working directory (which is optional).
+    #[arg(long, value_name = "FILE")]
+    config: Option<PathBuf>,
 
     /// Colour the output: `auto` colours only on a terminal when `NO_COLOR`
     /// is unset.
@@ -290,13 +298,28 @@ fn parse_target_list(text: &str) -> Result<Vec<Target>, String> {
 /// documents otherwise; SARIF and JUnit output is one document covering
 /// all targets.
 async fn scan_all(cli: &Cli) -> ExitCode {
-    let (targets, store) = match targets(cli).and_then(|t| Ok((t, trust_store(cli)?))) {
+    let ready = targets(cli).and_then(|t| {
+        let config = Config::load(cli.config.as_deref())?;
+        Ok((t, trust_store(cli)?, config))
+    });
+    let (targets, store, config) = match ready {
         Ok(ready) => ready,
         Err(e) => {
             eprintln!("error: {e}");
             return ExitCode::from(2);
         }
     };
+    let today = config::utc_date(unix_now());
+    for s in config.expired(today) {
+        eprintln!(
+            "warning: suppression of {} expired on {}; the finding is reported again",
+            s.id,
+            s.expires_text()
+        );
+    }
+    for id in config.unknown_ids() {
+        eprintln!("warning: suppression of unknown finding id {id}");
+    }
     let proxy = match proxy_address(cli.proxy.as_ref(), cli.source_ip).await {
         Ok(proxy) => proxy,
         Err(e) => {
@@ -333,7 +356,7 @@ async fn scan_all(cli: &Cli) -> ExitCode {
                 println!();
             }
             scans += 1;
-            let outcome = scan(cli, &store, target, transport(cli, addr, proxy)).await;
+            let outcome = scan(cli, &store, &config, target, transport(cli, addr, proxy)).await;
             code = code.max(outcome.code);
             documents.extend(outcome.json);
             finding_scans.extend(outcome.findings);
@@ -464,10 +487,12 @@ fn transport(cli: &Cli, addr: SocketAddr, proxy: Option<SocketAddr>) -> Transpor
     transport
 }
 
-/// Scans `scan_target` over `transport` with the options in `cli`.
+/// Scans `scan_target` over `transport` with the options in `cli`,
+/// setting aside the findings `config` suppresses.
 async fn scan(
     cli: &Cli,
     store: &TrustStore,
+    config: &Config,
     scan_target: &Target,
     transport: Transport,
 ) -> Outcome {
@@ -544,9 +569,9 @@ async fn scan(
     show(format!("\n{}", text::details(&details, paint)));
     findings.extend(details_findings);
 
-    findings.retain(|f| f.severity > Severity::Ok);
-    findings.sort_by_key(|f| std::cmp::Reverse(f.severity));
+    let (findings, suppressed) = triage(findings, config, scan_target, started_at);
     show(format!("\n{}", text::findings(&findings, paint)));
+    show(text::suppressed(&suppressed, paint));
 
     let json = (cli.format == Format::Json).then(|| {
         json::render(&json::Report {
@@ -565,6 +590,7 @@ async fn scan(
             intolerance: &intolerance,
             details: &details,
             findings: &findings,
+            suppressed: &suppressed,
         })
     });
     let finding_scan = cli.format.is_summary().then(|| sarif::Scan {
@@ -579,6 +605,19 @@ async fn scan(
         failure: None,
         profile: Some(profile(&protocols, &ciphers, chain.as_deref())),
     }
+}
+
+/// Drops `ok` findings, sorts the rest most severe first and splits off
+/// those `config` suppresses for `target` on the day of `now`.
+fn triage(
+    mut findings: Vec<Finding>,
+    config: &Config,
+    target: &Target,
+    now: i64,
+) -> (Vec<Finding>, Vec<Suppressed>) {
+    findings.retain(|f| f.severity > Severity::Ok);
+    findings.sort_by_key(|f| std::cmp::Reverse(f.severity));
+    config.apply(target, findings, config::utc_date(now))
 }
 
 /// Summarises one scan for comparison with the host's other addresses.

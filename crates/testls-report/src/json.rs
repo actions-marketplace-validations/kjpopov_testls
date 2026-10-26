@@ -59,6 +59,18 @@ pub struct Report<'a> {
     pub details: &'a Result<HandshakeDetails, String>,
     /// Findings, most severe first.
     pub findings: &'a [Finding],
+    /// Findings hidden by a suppression, most severe first.
+    pub suppressed: &'a [Suppressed],
+}
+
+/// A finding accepted by a suppression entry, kept out of the findings
+/// and the exit code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Suppressed {
+    /// The finding as the checks reported it.
+    pub finding: Finding,
+    /// Why the finding is accepted.
+    pub reason: String,
 }
 
 /// Top-level JSON document.
@@ -94,6 +106,8 @@ struct Document<'a> {
     details: DetailsJson<'a>,
     /// Findings, most severe first.
     findings: Vec<FindingJson<'a>>,
+    /// Suppressed findings, most severe first.
+    suppressed: Vec<SuppressedJson<'a>>,
 }
 
 /// Name and version of the producing tool.
@@ -417,6 +431,25 @@ struct FindingJson<'a> {
     message: &'a str,
 }
 
+/// One suppressed finding.
+#[derive(Debug, Serialize)]
+struct SuppressedJson<'a> {
+    /// The finding itself.
+    #[serde(flatten)]
+    finding: FindingJson<'a>,
+    /// Why it is accepted.
+    reason: &'a str,
+}
+
+/// Converts a finding to its JSON form.
+fn finding(f: &Finding) -> FindingJson<'_> {
+    FindingJson {
+        id: &f.id,
+        severity: f.severity.as_str(),
+        message: &f.message,
+    }
+}
+
 /// Renders `report` as pretty-printed JSON followed by a newline.
 ///
 /// # Panics
@@ -447,13 +480,13 @@ pub fn render(report: &Report<'_>) -> String {
         vulnerabilities: report.vulnerabilities.iter().map(vulnerability).collect(),
         intolerance: intolerance(report.intolerance),
         details: details(report.details),
-        findings: report
-            .findings
+        findings: report.findings.iter().map(finding).collect(),
+        suppressed: report
+            .suppressed
             .iter()
-            .map(|f| FindingJson {
-                id: &f.id,
-                severity: f.severity.as_str(),
-                message: &f.message,
+            .map(|s| SuppressedJson {
+                finding: finding(&s.finding),
+                reason: &s.reason,
             })
             .collect(),
     };
@@ -913,6 +946,7 @@ mod tests {
             intolerance: &Err("skipped".into()),
             details: &Err("skipped".into()),
             findings: &[Finding::new("cert.untrusted", Severity::High, "untrusted")],
+            suppressed: &[],
         };
         assert_eq!(
             value(&report),
@@ -947,6 +981,7 @@ mod tests {
                 "details": {"protocol": null, "extended_master_secret": null, "downgrade_sentinel": null,
                     "session_tickets": null, "max_early_data": null, "error": "skipped"},
                 "findings": [{"id": "cert.untrusted", "severity": "high", "message": "untrusted"}],
+                "suppressed": [],
             })
         );
     }
@@ -1000,6 +1035,7 @@ mod tests {
             intolerance: &Err("skipped".into()),
             details: &Err("skipped".into()),
             findings: &[],
+            suppressed: &[],
         };
         assert_eq!(
             value(&report)["key_exchange"],
@@ -1039,7 +1075,8 @@ mod tests {
         assert_eq!(render_array(&[]), "[]\n");
     }
 
-    /// Missing SNI is `null` and a failed certificate fetch carries the error.
+    /// Missing SNI is `null`, a failed certificate fetch carries the error,
+    /// and suppressed findings keep their reason.
     #[test]
     fn errors_and_nulls() {
         let certificate = Err("refused".into());
@@ -1060,6 +1097,10 @@ mod tests {
             intolerance: &Err("skipped".into()),
             details: &Err("skipped".into()),
             findings: &[],
+            suppressed: &[Suppressed {
+                finding: Finding::new("hsts.missing", Severity::Medium, "no HSTS"),
+                reason: "internal".to_owned(),
+            }],
         };
         let v = value(&report);
         assert_eq!(v["target"]["sni"], Value::Null);
@@ -1068,6 +1109,11 @@ mod tests {
             json!({"protocol": null, "chain": [], "ocsp": null, "error": "refused"})
         );
         assert_eq!(v["findings"], json!([]));
+        assert_eq!(
+            v["suppressed"],
+            json!([{"id": "hsts.missing", "severity": "medium", "message": "no HSTS",
+                "reason": "internal"}])
+        );
     }
 
     /// The HTTP section lists every security header and the parsed HSTS
@@ -1106,6 +1152,7 @@ mod tests {
             intolerance: &Err("skipped".into()),
             details: &Err("skipped".into()),
             findings: &[],
+            suppressed: &[],
         };
         assert_eq!(
             value(&report)["http"],

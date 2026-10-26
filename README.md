@@ -90,6 +90,18 @@ testls --revocation example.com
 testls explain hsts.missing
 ```
 
+To accept a known finding, add it to `.testls.toml` in the working directory
+(or pass `--config FILE`). Suppressed findings are listed separately, do not
+count towards `--fail-on` and come back after `expires`:
+
+```toml
+[[suppress]]
+id = "cookie.insecure"
+target = "example.com"       # optional, default: every target
+reason = "legacy app, replaced in Q1"
+expires = 2026-12-31         # optional, last day (UTC) the entry applies
+```
+
 Exit status is `0` when no finding reaches `--fail-on` (default `high`), `1`
 when one does, and `2` when the scan itself fails. Run `testls --help` for all
 options; the JSON format is described in
@@ -110,6 +122,7 @@ A web service (`testls serve`, REST API and browser UI) is planned for v0.6.
 | Markdown | Markdown summary for CI job summaries and PR comments | v0.4 |
 | CSV | One row per finding for spreadsheets and scripts | v0.4 |
 | HTML | Self-contained HTML report to share or archive | v0.4 |
+| Suppressions | `.testls.toml` entries with reason and expiry date | v0.4 |
 | Key exchange | Supported groups (X25519, ECDHE curves, ML-KEM hybrids) | v0.2 |
 | HTTP headers | HSTS, preload, header hygiene | v0.2 |
 | Revocation | OCSP stapling, OCSP/CRL | v0.2 |

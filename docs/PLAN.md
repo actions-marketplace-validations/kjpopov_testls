@@ -99,7 +99,8 @@ Two connection paths:
 - [x] Markdown output (`--format markdown`)
 - [x] CSV output (`--format csv`)
 - [x] HTML output (`--format html`)
-- `--baseline` and `.testls.toml` suppressions with expiry dates
+- [x] `.testls.toml` suppressions with expiry dates
+- `--baseline`
 - Scan profiles (`--profile quick|default|full`) and policies (`--policy`:
   Mozilla, PCI DSS, NIST SP 800-52r2, BSI TR-02102-2, CNSA 2.0)
 - Packaging: Homebrew, Scoop/winget, `cargo binstall`, container image,
@@ -208,3 +209,4 @@ Not scheduled; pulled into a milestone when someone picks it up.
 | 51 | `--format markdown` prints one GitHub Flavored Markdown document for the whole run: a summary line, a table of finding counts per severity for each scanned address, one section per address with its findings most severe first (❌ marks those at or above `--fail-on`), and a table of targets whose scan failed. Text is backslash-escaped so messages cannot break tables or inject HTML | Fits `$GITHUB_STEP_SUMMARY` and PR comments without post-processing; it reuses the SARIF/JUnit inputs, so all summary formats agree |
 | 52 | `--format csv` prints one RFC 4180 document for the whole run: a header row, then one row per finding (`target,address,severity,id,message,failing`), most severe first per address, and a `scan.error` row per target whose scan failed. Fields that start with `=`, `+`, `-`, `@`, tab or CR get a leading `'` | Flat rows load straight into spreadsheets and `awk`/`csvkit`; the prefix stops scanned server text (cookie names, banners) from running as spreadsheet formulas (CSV injection) |
 | 53 | `--format html` prints one self-contained HTML page with the Markdown report's layout: summary line, counts table, one findings table per address (failing rows highlighted) and scan errors. Styles are inline, nothing is loaded, and a `Content-Security-Policy` meta tag (`default-src 'none'; style-src 'unsafe-inline'`) forbids scripts; all scanned text is HTML-escaped | One file to attach to tickets or archive as a CI artefact, viewable offline; the CSP is defence in depth against server-controlled text running as script in the reader's browser |
+| 54 | Suppressions live in `.testls.toml` in the working directory (optional) or the file given by `--config` (must exist). Each `[[suppress]]` entry needs a finding `id` and a non-empty `reason`, and may limit itself to one `target` (CLI target syntax) and set `expires`, a TOML date that is the last UTC day the entry applies. A suppressed finding moves to a separate list (text section, JSON `suppressed` with the reason) and no longer counts towards `--fail-on` or the summary formats; expired entries and unknown ids warn on stderr. Parsed with the `toml` crate, unknown keys rejected | A mandatory reason and expiry date keep accepted risks visible and temporary; dates without times avoid time-zone surprises; rejecting unknown keys catches typos that would silently stop a suppression |

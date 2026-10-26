@@ -405,3 +405,60 @@ fn source_ip() {
         "{stdout}{stderr}"
     );
 }
+
+/// `--config` suppressions move matching findings into `suppressed` with
+/// their reason, and expired or unknown entries are warned about.
+#[test]
+fn config_suppresses_findings() {
+    let addr = serve();
+    let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("suppress.toml");
+    std::fs::write(
+        &path,
+        format!(
+            "[[suppress]]\nid = \"cookie.insecure\"\ntarget = \"{addr}\"\nreason = \"legacy app\"\n\n\
+             [[suppress]]\nid = \"cookie.no_httponly\"\nreason = \"old\"\nexpires = 2000-01-01\n\n\
+             [[suppress]]\nid = \"no.such.id\"\nreason = \"typo\"\n"
+        ),
+    )
+    .expect("write config");
+    let out = Command::new(env!("CARGO_BIN_EXE_testls"))
+        .arg(addr.to_string())
+        .args([
+            "--sni",
+            "localhost",
+            "--format",
+            "json",
+            "--fail-on",
+            "critical",
+        ])
+        .arg("--config")
+        .arg(&path)
+        .output()
+        .expect("run testls");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("JSON output");
+    let ids: Vec<&str> = v["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .filter_map(|f| f["id"].as_str())
+        .collect();
+    assert!(!ids.contains(&"cookie.insecure"), "{ids:?}");
+    assert!(ids.contains(&"cookie.no_httponly"), "{ids:?}");
+    let suppressed = v["suppressed"].as_array().expect("suppressed");
+    assert_eq!(suppressed.len(), 1, "{suppressed:?}");
+    assert_eq!(suppressed[0]["id"], "cookie.insecure");
+    assert_eq!(suppressed[0]["reason"], "legacy app");
+    assert!(
+        stderr.contains("cookie.no_httponly expired on 2000-01-01"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("unknown finding id no.such.id"), "{stderr}");
+
+    let missing = Command::new(env!("CARGO_BIN_EXE_testls"))
+        .arg(addr.to_string())
+        .args(["--config", "no/such/file.toml"])
+        .output()
+        .expect("run testls");
+    assert_eq!(missing.status.code(), Some(2));
+}
