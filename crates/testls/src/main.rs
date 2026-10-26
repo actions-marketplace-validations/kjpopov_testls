@@ -27,7 +27,7 @@ use testls_probe::{
     probe_key_exchange,
 };
 use testls_report::text::{self, CertificateSection, CipherSection, KeyExchangeSection};
-use testls_report::{ColorChoice, Format, Painter, json, sarif};
+use testls_report::{ColorChoice, Format, Painter, json, junit, sarif};
 use testls_wire::ProtocolVersion;
 
 use target::{Host, ProxySpec, ResolveOverride, Target, TargetSpec};
@@ -125,7 +125,8 @@ struct Cli {
 
     /// Output format: `text` prints sections as they finish, `json` prints
     /// one document at the end, `sarif` prints one SARIF 2.1.0 log of the
-    /// findings at the end.
+    /// findings at the end, `junit` prints one JUnit XML document at the
+    /// end with findings at or above `--fail-on` as failures.
     #[arg(long, default_value_t = Format::Text, value_name = "FORMAT",
           value_parser = clap::builder::PossibleValuesParser::new(Format::ALL.map(Format::as_str))
               .map(|s| s.parse::<Format>().expect("listed value")))]
@@ -283,7 +284,8 @@ fn parse_target_list(text: &str) -> Result<Vec<Target>, String> {
 /// Scans every target in turn. The exit code is 2 if any scan failed,
 /// else 1 if any target has a finding at or above `--fail-on`, else 0.
 /// JSON output is one document for a single target and an array of
-/// documents otherwise; SARIF output is one log covering all targets.
+/// documents otherwise; SARIF and JUnit output is one document covering
+/// all targets.
 async fn scan_all(cli: &Cli) -> ExitCode {
     let (targets, store) = match targets(cli).and_then(|t| Ok((t, trust_store(cli)?))) {
         Ok(ready) => ready,
@@ -304,7 +306,8 @@ async fn scan_all(cli: &Cli) -> ExitCode {
     let mut code = 0;
     let mut scans = 0;
     let mut documents = Vec::new();
-    let mut sarif_scans = Vec::new();
+    let mut finding_scans = Vec::new();
+    let mut failures = Vec::new();
     for target in &targets {
         let addrs = match addresses(target, &cli.resolve, family).await {
             Ok(mut addrs) => {
@@ -315,7 +318,9 @@ async fn scan_all(cli: &Cli) -> ExitCode {
             }
             Err(e) => {
                 scans += 1;
-                code = code.max(Outcome::failed(target, &format!("cannot resolve: {e}")).code);
+                let outcome = Outcome::failed(target, &format!("cannot resolve: {e}"));
+                code = code.max(outcome.code);
+                failures.extend(outcome.failure);
                 continue;
             }
         };
@@ -328,7 +333,8 @@ async fn scan_all(cli: &Cli) -> ExitCode {
             let outcome = scan(cli, &store, target, transport(cli, addr, proxy)).await;
             code = code.max(outcome.code);
             documents.extend(outcome.json);
-            sarif_scans.extend(outcome.sarif);
+            finding_scans.extend(outcome.findings);
+            failures.extend(outcome.failure);
             profiles.extend(outcome.profile.map(|p| (addr, p)));
         }
         for warning in divergence(&profiles) {
@@ -339,7 +345,10 @@ async fn scan_all(cli: &Cli) -> ExitCode {
         print!("{}", json_output(scans, &documents));
     }
     if cli.format == Format::Sarif {
-        print!("{}", sarif::render(&sarif_scans, code < 2));
+        print!("{}", sarif::render(&finding_scans, code < 2));
+    }
+    if cli.format == Format::Junit {
+        print!("{}", junit::render(&finding_scans, &failures, cli.fail_on));
     }
     ExitCode::from(code)
 }
@@ -395,8 +404,11 @@ struct Outcome {
     code: u8,
     /// Rendered JSON document, when `--format json` and the scan ran.
     json: Option<String>,
-    /// Findings for the SARIF log, when `--format sarif` and the scan ran.
-    sarif: Option<sarif::Scan>,
+    /// Findings for SARIF or JUnit output, when one of those formats is
+    /// chosen and the scan ran.
+    findings: Option<sarif::Scan>,
+    /// Why the scan failed, for JUnit output.
+    failure: Option<junit::Failure>,
     /// Summary compared across a host's addresses, when the scan ran.
     profile: Option<Profile>,
 }
@@ -408,7 +420,11 @@ impl Outcome {
         Self {
             code: 2,
             json: None,
-            sarif: None,
+            findings: None,
+            failure: Some(junit::Failure {
+                target: target.to_string(),
+                error: error.to_owned(),
+            }),
             profile: None,
         }
     }
@@ -536,7 +552,7 @@ async fn scan(
             findings: &findings,
         })
     });
-    let sarif = (cli.format == Format::Sarif).then(|| sarif::Scan {
+    let finding_scan = matches!(cli.format, Format::Sarif | Format::Junit).then(|| sarif::Scan {
         target: target.clone(),
         addr,
         findings: findings.clone(),
@@ -544,7 +560,8 @@ async fn scan(
     Outcome {
         code: u8::from(findings.iter().any(|f| f.severity >= cli.fail_on)),
         json,
-        sarif,
+        findings: finding_scan,
+        failure: None,
         profile: Some(profile(&protocols, &ciphers, chain.as_deref())),
     }
 }

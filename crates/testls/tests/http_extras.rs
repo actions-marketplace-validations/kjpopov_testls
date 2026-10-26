@@ -162,6 +162,32 @@ fn sarif_reports_findings() {
     );
 }
 
+/// `--format junit` prints one XML document with a suite per address and
+/// failures where the exit code fails; unresolvable targets are errors.
+#[test]
+fn junit_reports_failures() {
+    let addr = serve();
+    let out = Command::new(env!("CARGO_BIN_EXE_testls"))
+        .arg(addr.to_string())
+        .arg("unresolvable.invalid:443")
+        .args(["--sni", "localhost", "--format", "junit"])
+        .args(["--fail-on", "low"])
+        .output()
+        .expect("run testls");
+    assert_eq!(out.status.code(), Some(2));
+    let xml = String::from_utf8(out.stdout).expect("UTF-8");
+    assert!(xml.starts_with("<?xml "), "{xml}");
+    assert!(xml.ends_with("</testsuites>\n"), "{xml}");
+    assert!(xml.contains(&format!("({addr})")), "{xml}");
+    assert!(xml.contains("<testcase name=\"cookie.insecure\""), "{xml}");
+    assert!(xml.contains("<failure "), "{xml}");
+    assert!(
+        xml.contains("<testsuite name=\"unresolvable.invalid:443\""),
+        "{xml}"
+    );
+    assert!(xml.contains("<error message=\"cannot resolve: "), "{xml}");
+}
+
 /// `--resolve` connects a host name that does not exist to the local
 /// server and keeps the name as target and SNI.
 #[test]
