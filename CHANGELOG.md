@@ -44,6 +44,9 @@ All notable changes to `testls` are listed here. The format follows
 - `--policy mozilla-modern|mozilla-intermediate` (repeatable) reports what
   the Mozilla Server Side TLS 6.0 profile does not allow as `policy.*`
   findings; parts the scan did not measure give `policy.incomplete`.
+- `--policy nist-800-52r2` checks against NIST SP 800-52r2 for government
+  servers: TLSv1.2 and TLSv1.3 (both required), the listed suites and groups, RSA of at
+  least 2048 bits or ECDSA on P-256/P-384.
 
 ## [0.3.0] - 2026-10-26
 
