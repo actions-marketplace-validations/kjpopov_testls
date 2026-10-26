@@ -46,6 +46,7 @@ gh api repos/kjpopov/testls/pulls/N/reviews/ID --jq .body   # read one body
 Inline comments (save to a file, then `jq`, to avoid shell quoting issues):
 
 ```sh
+mkdir -p target
 gh api repos/kjpopov/testls/pulls/N/comments > target/prN.json
 jq -r '.[] | (.id|tostring) + " " + .path + ":" + (.line|tostring)' target/prN.json
 ```
