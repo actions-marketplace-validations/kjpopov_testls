@@ -90,7 +90,7 @@ Two connection paths:
 ### v0.4 — Workflow
 - [x] Multiple targets on the command line and with `--file`
 - [x] CIDR ranges (at most 16 host bits per range)
-- `--mx`; scan every A/AAAA address and report divergence
+- [x] `--all-addresses`: scan every A/AAAA address and warn on divergence
 - Connection control: `--resolve`, proxy support, `--source-ip`
 - Output formats: SARIF, JUnit, Markdown, HTML, CSV
 - `--baseline` and `.testls.toml` suppressions with expiry dates
@@ -101,6 +101,7 @@ Two connection paths:
 
 ### v0.5 — STARTTLS, intrusive probes, grading
 - STARTTLS (SMTP, IMAP, POP3, FTP, XMPP, LDAP, PostgreSQL, MySQL)
+- `--mx`: scan a domain's mail exchangers (needs SMTP STARTTLS)
 - Intrusive checks behind `--intrusive`: Heartbleed, CCS injection,
   Ticketbleed, ROBOT
 - Application-layer checks: BREACH, ALPACA, Opossum
@@ -192,3 +193,4 @@ Not scheduled; pulled into a milestone when someone picks it up.
 | 41 | HTTP extras reuse the single `GET /` reply: `Server` values with a version and any `X-Powered-By` are info (`header.banner`); cookies lacking `Secure` or using `SameSite=None` without it are low, missing `HttpOnly` or `SameSite` info; a malformed `Alt-Svc` is info. Header text is shown with control characters replaced | No extra requests; banners and cookie flags are hardening hints, while a cookie sent over plain HTTP is a real exposure |
 | 42 | Several targets (positional and `--file`, one per line with `#` comments) are scanned one after another with one trust store. Text output prints the sections per target; JSON prints the usual document for one target and an array of documents for more, leaving out targets whose scan failed. The exit code is the worst per target (2 over 1 over 0). A bad `--file` line stops the run before any connection | A single target keeps the schema-1 document unchanged for existing scripts; sequential scans keep the per-server politeness of a single scan; failing early on a typo avoids a half-finished batch |
 | 43 | A CIDR target (`192.0.2.0/28`, `192.0.2.0/28:8443`, `[2001:db8::/120]:8443`) expands to every address in the range, including network and broadcast addresses, scanned without SNI. A range may have at most 16 host bits (65,536 addresses) | Plain expansion keeps results predictable; the cap stops a typo such as `/8` from starting a scan of millions of hosts |
+| 44 | `--all-addresses` scans each distinct A/AAAA address of a host name as its own report (same SNI, one JSON document each). Addresses whose offered protocols, accepted cipher suites or leaf certificate differ from the first address produce a warning on stderr, not a finding. `--mx` moves to v0.5 | Load balancers and dual-stack hosts often drift apart; a stderr warning flags it without changing the JSON schema or the exit code; MX targets are only useful once SMTP STARTTLS exists |

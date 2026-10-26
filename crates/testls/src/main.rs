@@ -91,6 +91,11 @@ struct Cli {
     #[arg(long)]
     revocation: bool,
 
+    /// Scan every A/AAAA address a host name resolves to, and warn when
+    /// the addresses differ in protocols, cipher suites or certificate.
+    #[arg(long)]
+    all_addresses: bool,
+
     /// Colour the output: `auto` colours only on a terminal when `NO_COLOR`
     /// is unset.
     #[arg(long, default_value_t = ColorChoice::Auto, value_name = "WHEN",
@@ -125,6 +130,24 @@ async fn resolve(target: &Target) -> std::io::Result<SocketAddr> {
             .next()
             .ok_or_else(|| std::io::Error::other("no addresses found")),
     }
+}
+
+/// Resolves the target to every distinct socket address it maps to, in
+/// resolver order.
+async fn addresses(target: &Target) -> std::io::Result<Vec<SocketAddr>> {
+    let Host::Name(name) = &target.host else {
+        return Ok(vec![resolve(target).await?]);
+    };
+    let mut addrs = Vec::new();
+    for addr in tokio::net::lookup_host((name.as_str(), target.port)).await? {
+        if !addrs.contains(&addr) {
+            addrs.push(addr);
+        }
+    }
+    if addrs.is_empty() {
+        return Err(std::io::Error::other("no addresses found"));
+    }
+    Ok(addrs)
 }
 
 /// Reports whether stdout is a terminal that can render ANSI colour.
@@ -223,19 +246,75 @@ async fn scan_all(cli: &Cli) -> ExitCode {
         }
     };
     let mut code = 0;
+    let mut scans = 0;
     let mut documents = Vec::new();
-    for (i, target) in targets.iter().enumerate() {
-        if i > 0 && cli.format == Format::Text {
-            println!();
+    for target in &targets {
+        let resolved = if cli.all_addresses {
+            addresses(target).await
+        } else {
+            resolve(target).await.map(|addr| vec![addr])
+        };
+        let addrs = match resolved {
+            Ok(addrs) => addrs,
+            Err(e) => {
+                scans += 1;
+                code = code.max(Outcome::failed(target, &format!("cannot resolve: {e}")).code);
+                continue;
+            }
+        };
+        let mut profiles = Vec::new();
+        for addr in addrs {
+            if scans > 0 && cli.format == Format::Text {
+                println!();
+            }
+            scans += 1;
+            let outcome = scan(cli, &store, target, addr).await;
+            code = code.max(outcome.code);
+            documents.extend(outcome.json);
+            profiles.extend(outcome.profile.map(|p| (addr, p)));
         }
-        let outcome = scan(cli, &store, target).await;
-        code = code.max(outcome.code);
-        documents.extend(outcome.json);
+        for warning in divergence(&profiles) {
+            eprintln!("warning: {target}: {warning}");
+        }
     }
     if cli.format == Format::Json {
-        print!("{}", json_output(targets.len(), &documents));
+        print!("{}", json_output(scans, &documents));
     }
     ExitCode::from(code)
+}
+
+/// What must match across the addresses of one host: offered protocols,
+/// accepted cipher suites per protocol, and the leaf certificate.
+#[derive(Debug, PartialEq, Eq)]
+struct Profile {
+    /// Protocol versions the address offers.
+    protocols: Vec<ProtocolVersion>,
+    /// Accepted cipher suites per protocol, sorted; `None` if enumeration
+    /// failed.
+    suites: Vec<(ProtocolVersion, Option<Vec<u32>>)>,
+    /// DER of the leaf certificate, if one was retrieved.
+    leaf: Option<Vec<u8>>,
+}
+
+/// Describes how each address differs from the first scanned address.
+fn divergence(profiles: &[(SocketAddr, Profile)]) -> Vec<String> {
+    let Some(((first_addr, first), rest)) = profiles.split_first() else {
+        return Vec::new();
+    };
+    rest.iter()
+        .filter_map(|(addr, p)| {
+            let aspects: Vec<&str> = [
+                (p.protocols != first.protocols, "protocols"),
+                (p.suites != first.suites, "cipher suites"),
+                (p.leaf != first.leaf, "certificate"),
+            ]
+            .into_iter()
+            .filter_map(|(differs, aspect)| differs.then_some(aspect))
+            .collect();
+            (!aspects.is_empty())
+                .then(|| format!("{addr} differs from {first_addr} in {}", aspects.join(", ")))
+        })
+        .collect()
 }
 
 /// Combines the JSON documents of a run: the document itself for one
@@ -255,6 +334,8 @@ struct Outcome {
     code: u8,
     /// Rendered JSON document, when `--format json` and the scan ran.
     json: Option<String>,
+    /// Summary compared across a host's addresses, when the scan ran.
+    profile: Option<Profile>,
 }
 
 impl Outcome {
@@ -264,6 +345,7 @@ impl Outcome {
         Self {
             code: 2,
             json: None,
+            profile: None,
         }
     }
 }
@@ -284,13 +366,9 @@ fn transport(cli: &Cli, addr: SocketAddr) -> Transport {
     transport
 }
 
-/// Scans `scan_target` with the options in `cli`.
-async fn scan(cli: &Cli, store: &TrustStore, scan_target: &Target) -> Outcome {
+/// Scans `scan_target` at `addr` with the options in `cli`.
+async fn scan(cli: &Cli, store: &TrustStore, scan_target: &Target, addr: SocketAddr) -> Outcome {
     let paint = painter(cli);
-    let addr = match resolve(scan_target).await {
-        Ok(addr) => addr,
-        Err(e) => return Outcome::failed(scan_target, &format!("cannot resolve: {e}")),
-    };
     let sni = cli.sni.as_deref().or(scan_target.default_sni());
 
     let transport = transport(cli, addr);
@@ -390,6 +468,34 @@ async fn scan(cli: &Cli, store: &TrustStore, scan_target: &Target) -> Outcome {
     Outcome {
         code: u8::from(findings.iter().any(|f| f.severity >= cli.fail_on)),
         json,
+        profile: Some(profile(&protocols, &ciphers, chain.as_deref())),
+    }
+}
+
+/// Summarises one scan for comparison with the host's other addresses.
+fn profile(
+    protocols: &[ProtocolResult],
+    ciphers: &[CipherSection],
+    chain: Option<&[Vec<u8>]>,
+) -> Profile {
+    Profile {
+        protocols: protocols
+            .iter()
+            .filter(|r| r.support == ProtocolSupport::Supported)
+            .map(|r| r.version)
+            .collect(),
+        suites: ciphers
+            .iter()
+            .map(|s| {
+                let suites = s.outcome.as_ref().ok().map(|c| {
+                    let mut suites = c.suites.clone();
+                    suites.sort_unstable();
+                    suites
+                });
+                (s.version, suites)
+            })
+            .collect(),
+        leaf: chain.and_then(<[_]>::first).cloned(),
     }
 }
 
@@ -747,6 +853,55 @@ mod tests {
         assert_eq!(json_output(1, std::slice::from_ref(&doc)), doc);
         assert_eq!(json_output(2, &[]), "[]\n");
         assert!(json_output(2, &[doc]).starts_with("[\n"));
+    }
+
+    /// Divergence names each address that differs from the first and how.
+    #[test]
+    fn divergence_report() {
+        let profile = |protocols: Vec<ProtocolVersion>, leaf: &[u8]| Profile {
+            protocols,
+            suites: vec![(ProtocolVersion::TLS12, Some(vec![0xc02f]))],
+            leaf: Some(leaf.to_vec()),
+        };
+        let a: SocketAddr = "192.0.2.1:443".parse().unwrap();
+        let b: SocketAddr = "192.0.2.2:443".parse().unwrap();
+        let c: SocketAddr = "[2001:db8::1]:443".parse().unwrap();
+        assert_eq!(divergence(&[]), Vec::<String>::new());
+        let same = [
+            (a, profile(vec![ProtocolVersion::TLS12], b"x")),
+            (b, profile(vec![ProtocolVersion::TLS12], b"x")),
+        ];
+        assert_eq!(divergence(&same), Vec::<String>::new());
+        let mut odd = profile(vec![ProtocolVersion::TLS12, ProtocolVersion::TLS13], b"y");
+        odd.suites[0].1 = None;
+        let mixed = [
+            (a, profile(vec![ProtocolVersion::TLS12], b"x")),
+            (b, profile(vec![ProtocolVersion::TLS12], b"x")),
+            (c, odd),
+        ];
+        assert_eq!(
+            divergence(&mixed),
+            [
+                "[2001:db8::1]:443 differs from 192.0.2.1:443 in protocols, cipher suites, certificate"
+            ]
+        );
+    }
+
+    /// IP targets and `localhost` resolve without duplicates.
+    #[tokio::test]
+    async fn address_lists() {
+        let ip: Target = "192.0.2.1:8443".parse().unwrap();
+        assert_eq!(
+            addresses(&ip).await.unwrap(),
+            ["192.0.2.1:8443".parse::<SocketAddr>().unwrap()]
+        );
+        let local: Target = "localhost:443".parse().unwrap();
+        let addrs = addresses(&local).await.unwrap();
+        assert_ne!(addrs, Vec::new());
+        assert!(addrs.iter().all(|a| a.ip().is_loopback()));
+        let mut unique = addrs.clone();
+        unique.dedup();
+        assert_eq!(unique.len(), addrs.len());
     }
 
     /// `--file` errors and an empty list are scan errors before any connection.
