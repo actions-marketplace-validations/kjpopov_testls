@@ -97,7 +97,8 @@ Two connection paths:
 - [x] SARIF output (`--format sarif`)
 - [x] JUnit output (`--format junit`)
 - [x] Markdown output (`--format markdown`)
-- Output formats: HTML, CSV
+- [x] CSV output (`--format csv`)
+- Output formats: HTML
 - `--baseline` and `.testls.toml` suppressions with expiry dates
 - Scan profiles (`--profile quick|default|full`) and policies (`--policy`:
   Mozilla, PCI DSS, NIST SP 800-52r2, BSI TR-02102-2, CNSA 2.0)
@@ -205,3 +206,4 @@ Not scheduled; pulled into a milestone when someone picks it up.
 | 49 | `--format sarif` prints one SARIF 2.1.0 log for the whole run: one rule per finding id (text from `testls explain`), one result per finding with `level` error (critical/high), warning (medium/low) or note, a `security-severity` property for GitHub code scanning, the location `https://TARGET/` and a stable `primaryLocationLineHash` fingerprint of id, target and message. `executionSuccessful` is false when any scan failed | Code-scanning tools need SARIF to track TLS findings across runs; findings have no source file, so the target URI stands in as the location and the fingerprint keeps alerts stable |
 | 50 | `--format junit` prints one JUnit XML document for the whole run: a `<testsuite>` per scanned address (`TARGET (ADDR)`), a `<testcase>` per finding named by its id, a `<failure>` when its severity is at or above `--fail-on` (others pass with the message in `<system-out>`), and a suite with one `<error>` case per target whose scan failed. Written by hand with XML escaping, no XML crate | CI systems render JUnit natively; tying failures to `--fail-on` makes the report agree with the exit code, and the format is small enough not to need a dependency |
 | 51 | `--format markdown` prints one GitHub Flavored Markdown document for the whole run: a summary line, a table of finding counts per severity for each scanned address, one section per address with its findings most severe first (❌ marks those at or above `--fail-on`), and a table of targets whose scan failed. Text is backslash-escaped so messages cannot break tables or inject HTML | Fits `$GITHUB_STEP_SUMMARY` and PR comments without post-processing; it reuses the SARIF/JUnit inputs, so all summary formats agree |
+| 52 | `--format csv` prints one RFC 4180 document for the whole run: a header row, then one row per finding (`target,address,severity,id,message,failing`), most severe first per address, and a `scan.error` row per target whose scan failed. Fields that start with `=`, `+`, `-`, `@`, tab or CR get a leading `'` | Flat rows load straight into spreadsheets and `awk`/`csvkit`; the prefix stops scanned server text (cookie names, banners) from running as spreadsheet formulas (CSV injection) |

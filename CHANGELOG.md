@@ -27,6 +27,8 @@ All notable changes to `testls` are listed here. The format follows
   findings at or above `--fail-on` are failures, failed scans are errors.
 - `--format markdown` prints one Markdown summary for CI job summaries and
   pull request comments, marking findings at or above `--fail-on`.
+- `--format csv` prints one CSV row per finding for spreadsheets and
+  scripts, plus a `scan.error` row for each target that failed to scan.
 
 ## [0.3.0] - 2026-10-26
 

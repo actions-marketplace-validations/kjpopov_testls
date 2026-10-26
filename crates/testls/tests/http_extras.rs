@@ -1,6 +1,6 @@
 //! End-to-end scan of an in-process TLS server that sends banners,
-//! `Alt-Svc` and cookies, checking the JSON, SARIF, JUnit and
-//! Markdown reports and finding ids.
+//! `Alt-Svc` and cookies, checking the JSON, SARIF, JUnit, Markdown and
+//! CSV reports and finding ids.
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -209,6 +209,37 @@ fn markdown_reports_failures() {
     assert!(
         md.contains("| unresolvable.invalid:443 | cannot resolve: "),
         "{md}"
+    );
+}
+
+/// `--format csv` prints one row per finding, flags findings at or above
+/// `--fail-on` and adds a `scan.error` row for targets that failed to scan.
+#[test]
+fn csv_reports_failures() {
+    let addr = serve();
+    let out = Command::new(env!("CARGO_BIN_EXE_testls"))
+        .arg(addr.to_string())
+        .arg("unresolvable.invalid:443")
+        .args(["--sni", "localhost", "--format", "csv"])
+        .args(["--fail-on", "low"])
+        .output()
+        .expect("run testls");
+    assert_eq!(out.status.code(), Some(2));
+    let csv = String::from_utf8(out.stdout).expect("UTF-8");
+    assert!(
+        csv.starts_with("target,address,severity,id,message,failing\r\n"),
+        "{csv}"
+    );
+    assert!(
+        csv.contains(&format!("{addr},{addr},low,cookie.insecure,")),
+        "{csv}"
+    );
+    assert!(
+        csv.lines()
+            .any(|l| l.starts_with("unresolvable.invalid:443,,,scan.error,")
+                && l.contains("cannot resolve: ")
+                && l.ends_with(",true")),
+        "{csv}"
     );
 }
 

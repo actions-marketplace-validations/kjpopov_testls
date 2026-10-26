@@ -1,6 +1,6 @@
 [package]
 name = "testls-report"
-description = "Text, JSON, SARIF, JUnit and Markdown report renderers and exit-code policy."
+description = "Text, JSON, SARIF, JUnit, Markdown and CSV report renderers and exit-code policy."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
