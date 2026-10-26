@@ -226,12 +226,19 @@ async fn scan_all(cli: &Cli) -> ExitCode {
         documents.extend(outcome.json);
     }
     if cli.format == Format::Json {
-        match documents.as_slice() {
-            [one] if targets.len() == 1 => print!("{one}"),
-            many => print!("{}", json::render_array(many)),
-        }
+        print!("{}", json_output(targets.len(), &documents));
     }
     ExitCode::from(code)
+}
+
+/// Combines the JSON documents of a run: the document itself for one
+/// target (nothing if its scan failed), else an array of the documents.
+fn json_output(targets: usize, documents: &[String]) -> String {
+    if targets == 1 {
+        documents.concat()
+    } else {
+        json::render_array(documents)
+    }
 }
 
 /// Result of scanning one target.
@@ -713,6 +720,17 @@ mod tests {
         let err = parse_target_list("a.example\nhttp://b.example\n").unwrap_err();
         assert!(err.starts_with("2: "), "{err}");
         assert_eq!(parse_target_list("# only\n").expect("empty"), vec![]);
+    }
+
+    /// A failed single target prints no JSON; failed targets in a run of
+    /// several leave an array, empty if all failed.
+    #[test]
+    fn json_outputs() {
+        let doc = "{}\n".to_string();
+        assert_eq!(json_output(1, &[]), "");
+        assert_eq!(json_output(1, std::slice::from_ref(&doc)), doc);
+        assert_eq!(json_output(2, &[]), "[]\n");
+        assert!(json_output(2, &[doc]).starts_with("[\n"));
     }
 
     /// `--file` errors and an empty list are scan errors before any connection.
