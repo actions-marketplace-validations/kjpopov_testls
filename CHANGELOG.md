@@ -15,6 +15,8 @@ All notable changes to `testls` are listed here. The format follows
   (at most 16 host bits).
 - `--all-addresses` scans every A/AAAA address of a host name and warns on
   stderr when they differ in protocols, cipher suites or certificate.
+- `--resolve HOST:PORT:ADDR[,ADDR...]` connects to the given addresses
+  instead of looking up the target host name, keeping the name for SNI.
 
 ## [0.3.0] - 2026-10-26
 

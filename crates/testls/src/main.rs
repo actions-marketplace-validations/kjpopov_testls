@@ -30,7 +30,7 @@ use testls_report::text::{self, CertificateSection, CipherSection, KeyExchangeSe
 use testls_report::{ColorChoice, Format, Painter, json};
 use testls_wire::ProtocolVersion;
 
-use target::{Host, Target, TargetSpec};
+use target::{Host, ResolveOverride, Target, TargetSpec};
 
 /// TLS/SSL scanner inspired by testssl.sh.
 #[derive(Debug, Parser)]
@@ -96,6 +96,12 @@ struct Cli {
     #[arg(long)]
     all_addresses: bool,
 
+    /// Connect to ADDR instead of looking up HOST when it is scanned on
+    /// PORT, keeping HOST for SNI (curl-style `HOST:PORT:ADDR[,ADDR...]`;
+    /// repeatable). Only target lookups are overridden.
+    #[arg(long, value_name = "HOST:PORT:ADDR")]
+    resolve: Vec<ResolveOverride>,
+
     /// Colour the output: `auto` colours only on a terminal when `NO_COLOR`
     /// is unset.
     #[arg(long, default_value_t = ColorChoice::Auto, value_name = "WHEN",
@@ -121,25 +127,26 @@ enum Command {
     },
 }
 
-/// Resolves the target to the first socket address it maps to.
-async fn resolve(target: &Target) -> std::io::Result<SocketAddr> {
-    match &target.host {
-        Host::Ip(ip) => Ok(SocketAddr::new(*ip, target.port)),
+/// Resolves the target to every distinct socket address it maps to, in
+/// resolver order. The first `--resolve` entry matching the target
+/// replaces the DNS lookup.
+async fn addresses(
+    target: &Target,
+    overrides: &[ResolveOverride],
+) -> std::io::Result<Vec<SocketAddr>> {
+    let found: Vec<SocketAddr> = match &target.host {
+        Host::Ip(ip) => vec![SocketAddr::new(*ip, target.port)],
+        Host::Name(_) if let Some(o) = overrides.iter().find(|o| o.matches(target)) => o
+            .addrs
+            .iter()
+            .map(|ip| SocketAddr::new(*ip, target.port))
+            .collect(),
         Host::Name(name) => tokio::net::lookup_host((name.as_str(), target.port))
             .await?
-            .next()
-            .ok_or_else(|| std::io::Error::other("no addresses found")),
-    }
-}
-
-/// Resolves the target to every distinct socket address it maps to, in
-/// resolver order.
-async fn addresses(target: &Target) -> std::io::Result<Vec<SocketAddr>> {
-    let Host::Name(name) = &target.host else {
-        return Ok(vec![resolve(target).await?]);
+            .collect(),
     };
     let mut addrs = Vec::new();
-    for addr in tokio::net::lookup_host((name.as_str(), target.port)).await? {
+    for addr in found {
         if !addrs.contains(&addr) {
             addrs.push(addr);
         }
@@ -249,13 +256,13 @@ async fn scan_all(cli: &Cli) -> ExitCode {
     let mut scans = 0;
     let mut documents = Vec::new();
     for target in &targets {
-        let resolved = if cli.all_addresses {
-            addresses(target).await
-        } else {
-            resolve(target).await.map(|addr| vec![addr])
-        };
-        let addrs = match resolved {
-            Ok(addrs) => addrs,
+        let addrs = match addresses(target, &cli.resolve).await {
+            Ok(mut addrs) => {
+                if !cli.all_addresses {
+                    addrs.truncate(1);
+                }
+                addrs
+            }
             Err(e) => {
                 scans += 1;
                 code = code.max(Outcome::failed(target, &format!("cannot resolve: {e}")).code);
@@ -887,16 +894,30 @@ mod tests {
         );
     }
 
-    /// IP targets and `localhost` resolve without duplicates.
+    /// IP targets and `localhost` resolve without duplicates; a matching
+    /// `--resolve` entry replaces the lookup.
     #[tokio::test]
     async fn address_lists() {
         let ip: Target = "192.0.2.1:8443".parse().unwrap();
         assert_eq!(
-            addresses(&ip).await.unwrap(),
+            addresses(&ip, &[]).await.unwrap(),
             ["192.0.2.1:8443".parse::<SocketAddr>().unwrap()]
         );
+        let pinned: Vec<ResolveOverride> = [
+            "other.invalid:443:192.0.2.9",
+            "host.invalid:443:192.0.2.1,192.0.2.1,[2001:db8::1]",
+            "host.invalid:443:192.0.2.7",
+        ]
+        .iter()
+        .map(|s| s.parse().unwrap())
+        .collect();
+        let host: Target = "host.invalid".parse().unwrap();
+        assert_eq!(
+            addresses(&host, &pinned).await.unwrap(),
+            ["192.0.2.1:443", "[2001:db8::1]:443"].map(|a| a.parse::<SocketAddr>().unwrap())
+        );
         let local: Target = "localhost:443".parse().unwrap();
-        let addrs = addresses(&local).await.unwrap();
+        let addrs = addresses(&local, &pinned).await.unwrap();
         assert_ne!(addrs, Vec::new());
         assert!(addrs.iter().all(|a| a.ip().is_loopback()));
         let mut unique = addrs.clone();
