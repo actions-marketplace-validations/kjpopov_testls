@@ -1,6 +1,6 @@
 //! End-to-end scan of an in-process TLS server that sends banners,
-//! `Alt-Svc` and cookies, checking the JSON and SARIF reports and finding
-//! ids.
+//! `Alt-Svc` and cookies, checking the JSON, SARIF, JUnit and
+//! Markdown reports and finding ids.
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -186,6 +186,30 @@ fn junit_reports_failures() {
         "{xml}"
     );
     assert!(xml.contains("<error message=\"cannot resolve: "), "{xml}");
+}
+
+/// `--format markdown` summarises the scan, marks findings at or above
+/// `--fail-on` and lists targets that failed to scan.
+#[test]
+fn markdown_reports_failures() {
+    let addr = serve();
+    let out = Command::new(env!("CARGO_BIN_EXE_testls"))
+        .arg(addr.to_string())
+        .arg("unresolvable.invalid:443")
+        .args(["--sni", "localhost", "--format", "markdown"])
+        .args(["--fail-on", "low"])
+        .output()
+        .expect("run testls");
+    assert_eq!(out.status.code(), Some(2));
+    let md = String::from_utf8(out.stdout).expect("UTF-8");
+    assert!(md.starts_with("# testls report\n"), "{md}");
+    assert!(md.contains("1 scanned, 1 failed to scan"), "{md}");
+    assert!(md.contains(&format!("## {addr} ({addr})")), "{md}");
+    assert!(md.contains("| ❌ | low | `cookie.insecure` |"), "{md}");
+    assert!(
+        md.contains("| unresolvable.invalid:443 | cannot resolve: "),
+        "{md}"
+    );
 }
 
 /// `--resolve` connects a host name that does not exist to the local

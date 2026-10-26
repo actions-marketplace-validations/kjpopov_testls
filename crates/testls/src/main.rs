@@ -27,7 +27,7 @@ use testls_probe::{
     probe_key_exchange,
 };
 use testls_report::text::{self, CertificateSection, CipherSection, KeyExchangeSection};
-use testls_report::{ColorChoice, Format, Painter, json, junit, sarif};
+use testls_report::{ColorChoice, Format, Painter, json, junit, markdown, sarif};
 use testls_wire::ProtocolVersion;
 
 use target::{Host, ProxySpec, ResolveOverride, Target, TargetSpec};
@@ -126,7 +126,8 @@ struct Cli {
     /// Output format: `text` prints sections as they finish, `json` prints
     /// one document at the end, `sarif` prints one SARIF 2.1.0 log of the
     /// findings at the end, `junit` prints one JUnit XML document at the
-    /// end with findings at or above `--fail-on` as failures.
+    /// end with findings at or above `--fail-on` as failures, `markdown`
+    /// prints one Markdown summary at the end.
     #[arg(long, default_value_t = Format::Text, value_name = "FORMAT",
           value_parser = clap::builder::PossibleValuesParser::new(Format::ALL.map(Format::as_str))
               .map(|s| s.parse::<Format>().expect("listed value")))]
@@ -350,6 +351,12 @@ async fn scan_all(cli: &Cli) -> ExitCode {
     if cli.format == Format::Junit {
         print!("{}", junit::render(&finding_scans, &failures, cli.fail_on));
     }
+    if cli.format == Format::Markdown {
+        print!(
+            "{}",
+            markdown::render(&finding_scans, &failures, cli.fail_on)
+        );
+    }
     ExitCode::from(code)
 }
 
@@ -404,10 +411,10 @@ struct Outcome {
     code: u8,
     /// Rendered JSON document, when `--format json` and the scan ran.
     json: Option<String>,
-    /// Findings for SARIF or JUnit output, when one of those formats is
-    /// chosen and the scan ran.
+    /// Findings for SARIF, JUnit or Markdown output, when one of those
+    /// formats is chosen and the scan ran.
     findings: Option<sarif::Scan>,
-    /// Why the scan failed, for JUnit output.
+    /// Why the scan failed, for JUnit and Markdown output.
     failure: Option<junit::Failure>,
     /// Summary compared across a host's addresses, when the scan ran.
     profile: Option<Profile>,
@@ -552,7 +559,7 @@ async fn scan(
             findings: &findings,
         })
     });
-    let finding_scan = matches!(cli.format, Format::Sarif | Format::Junit).then(|| sarif::Scan {
+    let finding_scan = cli.format.is_summary().then(|| sarif::Scan {
         target: target.clone(),
         addr,
         findings: findings.clone(),

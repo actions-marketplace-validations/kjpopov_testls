@@ -96,7 +96,8 @@ Two connection paths:
 - [x] `--proxy` (HTTP `CONNECT`)
 - [x] SARIF output (`--format sarif`)
 - [x] JUnit output (`--format junit`)
-- Output formats: Markdown, HTML, CSV
+- [x] Markdown output (`--format markdown`)
+- Output formats: HTML, CSV
 - `--baseline` and `.testls.toml` suppressions with expiry dates
 - Scan profiles (`--profile quick|default|full`) and policies (`--policy`:
   Mozilla, PCI DSS, NIST SP 800-52r2, BSI TR-02102-2, CNSA 2.0)
@@ -203,3 +204,4 @@ Not scheduled; pulled into a milestone when someone picks it up.
 | 48 | `--proxy [http://]HOST:PORT` tunnels every connection through an HTTP proxy with `CONNECT` (RFC 9110 §9.3.6); no authentication or SOCKS yet. Target names are resolved locally and tunnelled by IP, so the reported address and `--resolve` work as without a proxy; OCSP/CRL lookups go through the proxy by host name. `--source-ip` then binds the connection to the proxy and no longer filters target addresses | Networks that need a proxy usually block direct egress, so third-party lookups must use it too; tunnelling by IP keeps one code path for address selection and the report |
 | 49 | `--format sarif` prints one SARIF 2.1.0 log for the whole run: one rule per finding id (text from `testls explain`), one result per finding with `level` error (critical/high), warning (medium/low) or note, a `security-severity` property for GitHub code scanning, the location `https://TARGET/` and a stable `primaryLocationLineHash` fingerprint of id, target and message. `executionSuccessful` is false when any scan failed | Code-scanning tools need SARIF to track TLS findings across runs; findings have no source file, so the target URI stands in as the location and the fingerprint keeps alerts stable |
 | 50 | `--format junit` prints one JUnit XML document for the whole run: a `<testsuite>` per scanned address (`TARGET (ADDR)`), a `<testcase>` per finding named by its id, a `<failure>` when its severity is at or above `--fail-on` (others pass with the message in `<system-out>`), and a suite with one `<error>` case per target whose scan failed. Written by hand with XML escaping, no XML crate | CI systems render JUnit natively; tying failures to `--fail-on` makes the report agree with the exit code, and the format is small enough not to need a dependency |
+| 51 | `--format markdown` prints one GitHub Flavored Markdown document for the whole run: a summary line, a table of finding counts per severity for each scanned address, one section per address with its findings most severe first (❌ marks those at or above `--fail-on`), and a table of targets whose scan failed. Text is backslash-escaped so messages cannot break tables or inject HTML | Fits `$GITHUB_STEP_SUMMARY` and PR comments without post-processing; it reuses the SARIF/JUnit inputs, so all summary formats agree |

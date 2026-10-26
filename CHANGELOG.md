@@ -25,6 +25,8 @@ All notable changes to `testls` are listed here. The format follows
   code scanning and other SARIF tools.
 - `--format junit` prints one JUnit XML document for CI test reports:
   findings at or above `--fail-on` are failures, failed scans are errors.
+- `--format markdown` prints one Markdown summary for CI job summaries and
+  pull request comments, marking findings at or above `--fail-on`.
 
 ## [0.3.0] - 2026-10-26
 

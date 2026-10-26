@@ -15,11 +15,19 @@ pub enum Format {
     Sarif,
     /// One JUnit XML document printed when the scan finishes.
     Junit,
+    /// One Markdown document printed when the scan finishes.
+    Markdown,
 }
 
 impl Format {
     /// All formats, in the order shown in `--help`.
-    pub const ALL: [Self; 4] = [Self::Text, Self::Json, Self::Sarif, Self::Junit];
+    pub const ALL: [Self; 5] = [
+        Self::Text,
+        Self::Json,
+        Self::Sarif,
+        Self::Junit,
+        Self::Markdown,
+    ];
 
     /// Lower-case name, as used on the command line.
     #[must_use]
@@ -29,7 +37,15 @@ impl Format {
             Self::Json => "json",
             Self::Sarif => "sarif",
             Self::Junit => "junit",
+            Self::Markdown => "markdown",
         }
+    }
+
+    /// Whether the format summarises findings across all scans in one
+    /// document (SARIF, JUnit, Markdown).
+    #[must_use]
+    pub fn is_summary(self) -> bool {
+        matches!(self, Self::Sarif | Self::Junit | Self::Markdown)
     }
 }
 
@@ -56,7 +72,7 @@ impl std::error::Error for ParseFormatError {}
 impl FromStr for Format {
     type Err = ParseFormatError;
 
-    /// Parses `text`, `json`, `sarif` or `junit`.
+    /// Parses `text`, `json`, `sarif`, `junit` or `markdown`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::ALL
             .into_iter()
@@ -78,5 +94,7 @@ mod tests {
         }
         assert!("xml".parse::<Format>().is_err());
         assert_eq!(Format::default(), Format::Text);
+        assert!(!Format::Text.is_summary() && !Format::Json.is_summary());
+        assert!(Format::Markdown.is_summary());
     }
 }
