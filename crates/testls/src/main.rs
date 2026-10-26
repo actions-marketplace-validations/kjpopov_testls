@@ -111,7 +111,8 @@ struct Cli {
     /// Tunnel all connections through this HTTP proxy with `CONNECT`
     /// (`[http://]HOST:PORT`, no authentication). Target names are still
     /// resolved locally (see `--resolve`); revocation lookups pass host
-    /// names to the proxy.
+    /// names to the proxy. With `--source-ip`, only the connection to the
+    /// proxy is bound and target addresses are not filtered by family.
     #[arg(long, value_name = "HOST:PORT")]
     proxy: Option<ProxySpec>,
 

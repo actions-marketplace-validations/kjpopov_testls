@@ -145,9 +145,9 @@ fn resolve_pins_address() {
     assert_eq!(v["http"]["status"], 200, "{}", v["http"]);
 }
 
-/// Starts an HTTP `CONNECT` proxy on a free port that tunnels to any
-/// address and records each request line it accepts.
-fn proxy() -> (SocketAddr, Arc<std::sync::Mutex<Vec<String>>>) {
+/// Starts an HTTP `CONNECT` proxy on a free port that tunnels every
+/// request to `forward` and records each request line it accepts.
+fn proxy(forward: SocketAddr) -> (SocketAddr, Arc<std::sync::Mutex<Vec<String>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let addr = listener.local_addr().expect("address");
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -155,15 +155,16 @@ fn proxy() -> (SocketAddr, Arc<std::sync::Mutex<Vec<String>>>) {
     thread::spawn(move || {
         for client in listener.incoming().flatten() {
             let log = Arc::clone(&log);
-            thread::spawn(move || tunnel(client, &log));
+            thread::spawn(move || tunnel(client, forward, &log));
         }
     });
     (addr, seen)
 }
 
-/// Reads one `CONNECT` request from `client`, connects to its target and
-/// relays bytes both ways until either side closes.
-fn tunnel(mut client: TcpStream, log: &std::sync::Mutex<Vec<String>>) {
+/// Reads one `CONNECT` request from `client`, connects to `forward`
+/// instead of its target and relays bytes both ways until either side
+/// closes.
+fn tunnel(mut client: TcpStream, forward: SocketAddr, log: &std::sync::Mutex<Vec<String>>) {
     let mut head = Vec::new();
     let mut byte = [0u8; 1];
     while !head.ends_with(b"\r\n\r\n") {
@@ -174,13 +175,10 @@ fn tunnel(mut client: TcpStream, log: &std::sync::Mutex<Vec<String>>) {
     }
     let head = String::from_utf8_lossy(&head);
     let line = head.lines().next().unwrap_or_default().to_owned();
-    let Some(authority) = line
-        .strip_prefix("CONNECT ")
-        .and_then(|l| l.strip_suffix(" HTTP/1.1"))
-    else {
+    if !line.starts_with("CONNECT ") {
         return;
-    };
-    let Ok(mut server) = TcpStream::connect(authority) else {
+    }
+    let Ok(mut server) = TcpStream::connect(forward) else {
         let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
         return;
     };
@@ -199,27 +197,32 @@ fn tunnel(mut client: TcpStream, log: &std::sync::Mutex<Vec<String>>) {
 }
 
 /// `--proxy` tunnels every probe through the proxy to the scanned address;
-/// an unresolvable proxy is a scan error.
+/// an unresolvable proxy is a scan error. The target is unreachable
+/// directly, so a probe that bypassed the proxy would report an error.
 #[test]
 fn proxy_tunnels_scan() {
-    let addr = serve();
-    let (proxy, seen) = proxy();
+    let target = "192.0.2.1:443";
+    let (proxy, seen) = proxy(serve());
     let out = Command::new(env!("CARGO_BIN_EXE_testls"))
-        .arg(addr.to_string())
+        .arg(target)
         .args(["--sni", "localhost", "--proxy", &format!("http://{proxy}")])
         .args(["--format", "json", "--fail-on", "critical"])
         .output()
         .expect("run testls");
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("JSON output");
-    assert_eq!(v["target"]["address"], addr.to_string());
+    assert_eq!(v["target"]["address"], target);
     assert_eq!(v["http"]["status"], 200, "{}", v["http"]);
+    let findings = v["findings"].as_array().expect("findings");
+    for id in ["intolerance.error", "handshake.error"] {
+        assert!(findings.iter().all(|f| f["id"] != id), "{findings:?}");
+    }
     let seen = seen.lock().expect("log");
     assert!(seen.len() > 1, "{seen:?}");
-    let expected = format!("CONNECT {addr} HTTP/1.1");
+    let expected = format!("CONNECT {target} HTTP/1.1");
     assert!(seen.iter().all(|l| *l == expected), "{seen:?}");
 
     let out = Command::new(env!("CARGO_BIN_EXE_testls"))
-        .arg(addr.to_string())
+        .arg(target)
         .args(["--proxy", "proxy.invalid:3128"])
         .output()
         .expect("run testls");
