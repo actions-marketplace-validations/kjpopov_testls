@@ -244,6 +244,55 @@ fn expand_cidr(ip: IpAddr, len: &str, port: Option<&str>) -> Result<Vec<Target>,
         .collect())
 }
 
+/// A `--resolve HOST:PORT:ADDR[,ADDR...]` entry: connect to these
+/// addresses instead of looking up `HOST` when it is scanned on `PORT`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolveOverride {
+    /// Host name the entry applies to (lowercased, without trailing dot).
+    pub host: String,
+    /// Port the entry applies to.
+    pub port: u16,
+    /// Addresses to use, in the given order.
+    pub addrs: Vec<IpAddr>,
+}
+
+impl ResolveOverride {
+    /// Whether this entry applies to `target`.
+    pub fn matches(&self, target: &Target) -> bool {
+        target.port == self.port && matches!(&target.host, Host::Name(n) if *n == self.host)
+    }
+}
+
+impl std::str::FromStr for ResolveOverride {
+    type Err = ParseTargetError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let mut parts = input.trim().splitn(3, ':');
+        let (Some(host), Some(port), Some(addrs)) = (parts.next(), parts.next(), parts.next())
+        else {
+            return Err(err("expected HOST:PORT:ADDR[,ADDR...]"));
+        };
+        let host = validate_name(host)?;
+        let port = port
+            .parse::<u16>()
+            .ok()
+            .filter(|&p| p != 0)
+            .ok_or_else(|| err(format!("invalid port `{port}`")))?;
+        let addrs = addrs
+            .split(',')
+            .map(|a| {
+                let bare = a
+                    .strip_prefix('[')
+                    .and_then(|a| a.strip_suffix(']'))
+                    .unwrap_or(a);
+                bare.parse::<IpAddr>()
+                    .map_err(|_| err(format!("invalid address `{a}`")))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self { host, port, addrs })
+    }
+}
+
 fn validate_name(name: &str) -> Result<String, ParseTargetError> {
     let name = name.strip_suffix('.').unwrap_or(name).to_ascii_lowercase();
     let label_ok = |l: &str| {
@@ -332,6 +381,38 @@ mod tests {
         ] {
             assert!(
                 bad.parse::<TargetSpec>().is_err(),
+                "{bad} should be rejected"
+            );
+        }
+    }
+
+    /// `--resolve` entries parse curl-style and match on host and port.
+    #[test]
+    fn resolve_overrides() {
+        let r: ResolveOverride = "Example.com.:443:192.0.2.1,[2001:db8::1],2001:db8::2"
+            .parse()
+            .unwrap();
+        assert_eq!(r.host, "example.com");
+        assert_eq!(r.port, 443);
+        assert_eq!(
+            r.addrs,
+            ["192.0.2.1", "2001:db8::1", "2001:db8::2"].map(|a| a.parse::<IpAddr>().unwrap())
+        );
+        assert!(r.matches(&t("example.com")));
+        assert!(!r.matches(&t("example.com:8443")));
+        assert!(!r.matches(&t("www.example.com")));
+        assert!(!r.matches(&t("192.0.2.1")));
+        for bad in [
+            "example.com",
+            "example.com:443",
+            "example.com:443:",
+            "example.com:0:192.0.2.1",
+            "example.com:443:192.0.2.1,",
+            "exa mple.com:443:192.0.2.1",
+            "example.com:443:host.example",
+        ] {
+            assert!(
+                bad.parse::<ResolveOverride>().is_err(),
                 "{bad} should be rejected"
             );
         }

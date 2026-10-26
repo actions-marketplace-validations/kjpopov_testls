@@ -52,6 +52,9 @@ testls example.com example.org:8443 --file hosts.txt
 testls 192.0.2.0/28:8443
 testls --all-addresses example.com
 
+# Scan a host name at a fixed address, e.g. a new server before a DNS change
+testls --resolve example.com:443:192.0.2.10 example.com
+
 # JSON output for scripts; exit status 1 if any finding is medium or worse
 testls --format json --fail-on medium example.com:8443
 

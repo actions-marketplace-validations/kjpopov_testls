@@ -124,3 +124,23 @@ fn json_reports_http_extras() {
     }
     assert!(!ids.contains(&"header.alt_svc_invalid"), "{ids:?}");
 }
+
+/// `--resolve` connects a host name that does not exist to the local
+/// server and keeps the name as target and SNI.
+#[test]
+fn resolve_pins_address() {
+    let addr = serve();
+    let target = format!("pinned.invalid:{}", addr.port());
+    let out = Command::new(env!("CARGO_BIN_EXE_testls"))
+        .arg(&target)
+        .args(["--resolve", &format!("{target}:{}", addr.ip())])
+        .args(["--format", "json", "--fail-on", "critical"])
+        .output()
+        .expect("run testls");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("JSON output");
+    let scanned = &v["target"];
+    assert_eq!(scanned["input"], target);
+    assert_eq!(scanned["address"], addr.to_string());
+    assert_eq!(scanned["sni"], "pinned.invalid");
+    assert_eq!(v["http"]["status"], 200, "{}", v["http"]);
+}
