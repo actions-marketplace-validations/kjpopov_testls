@@ -144,41 +144,61 @@ impl std::str::FromStr for TargetSpec {
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         let s = input.trim();
-        match cidr_parts(s) {
+        match cidr_parts(s)? {
             Some((ip, len, port)) => expand_cidr(ip, len, port).map(Self),
             None => Ok(Self(vec![s.parse()?])),
         }
     }
 }
 
+/// Address, prefix length and optional port of a CIDR range.
+type CidrParts<'a> = (IpAddr, &'a str, Option<&'a str>);
+
 /// Splits `s` into address, prefix length and port when it is CIDR
 /// notation; `None` means it is an ordinary target.
-fn cidr_parts(s: &str) -> Option<(IpAddr, &str, Option<&str>)> {
+///
+/// An IP literal followed by `/` and one to three digits counts as a CIDR
+/// range unless the digits continue as a path (`.`, `/`, `?`, `#`), so
+/// `192.0.2.1/2024.html` stays a URL path while `192.0.2.0/24x` is an
+/// error rather than a silently truncated target.
+fn cidr_parts(s: &str) -> Result<Option<CidrParts<'_>>, ParseTargetError> {
     if s.contains("://") {
-        return None;
+        return Ok(None);
     }
+    let bracketed = s.starts_with('[');
     let (inner, port) = match s.strip_prefix('[') {
         Some(rest) => {
-            let (inner, after) = rest.split_once(']')?;
+            let Some((inner, after)) = rest.split_once(']') else {
+                return Ok(None);
+            };
             let port = match after {
                 "" => None,
-                p => Some(p.strip_prefix(':')?),
+                p => match p.strip_prefix(':') {
+                    Some(p) => Some(p),
+                    None => return Ok(None),
+                },
             };
             (inner, port)
         }
         None => (s, None),
     };
-    let (ip, tail) = inner.split_once('/')?;
-    let ip: IpAddr = ip.parse().ok()?;
-    let (len, port) = match (port, ip) {
-        (Some(_), _) => (tail, port),
-        (None, IpAddr::V4(_)) if !s.starts_with('[') => match tail.split_once(':') {
-            Some((len, port)) => (len, Some(port)),
-            None => (tail, None),
-        },
-        (None, _) => (tail, None),
+    let Some((ip, tail)) = inner.split_once('/') else {
+        return Ok(None);
     };
-    (!len.is_empty() && len.bytes().all(|b| b.is_ascii_digit())).then_some((ip, len, port))
+    let Ok(ip) = ip.parse::<IpAddr>() else {
+        return Ok(None);
+    };
+    let digits = tail.bytes().take_while(u8::is_ascii_digit).count();
+    let (len, rest) = tail.split_at(digits);
+    if !(1..=3).contains(&digits) || rest.starts_with(['.', '/', '?', '#']) {
+        return Ok(None);
+    }
+    match rest.strip_prefix(':') {
+        None if rest.is_empty() => Ok(Some((ip, len, port))),
+        Some(p) if !bracketed && ip.is_ipv4() => Ok(Some((ip, len, Some(p)))),
+        Some(_) if !bracketed => Err(err("IPv6 CIDR range with port must use [brackets]")),
+        _ => Err(err(format!("invalid CIDR range `{s}`"))),
+    }
 }
 
 /// Lists every address of the range `ip/len` with `port` (default 443).
@@ -295,7 +315,14 @@ mod tests {
         assert_eq!(spec("0.0.0.0/16").len(), 65_536);
         assert_eq!(spec("example.com:8443"), ["example.com:8443"]);
         assert_eq!(spec("https://192.0.2.1/30"), ["192.0.2.1:443"]);
+        assert_eq!(spec("192.0.2.1/2024.html"), ["192.0.2.1:443"]);
+        assert_eq!(spec("192.0.2.1/24/index.html"), ["192.0.2.1:443"]);
+        assert_eq!(spec("192.0.2.1/1234"), ["192.0.2.1:443"]);
         for bad in [
+            "192.0.2.0/24x",
+            "2001:db8::/120:8443",
+            "[2001:db8::/120]8443",
+            "192.0.2.0/24:8443x",
             "192.0.2.0/33",
             "192.0.2.0/15",
             "2001:db8::/64",
