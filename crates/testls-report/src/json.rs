@@ -262,8 +262,9 @@ struct HttpJson<'a> {
     /// Parsed `Strict-Transport-Security` policy, or `null` when the header
     /// is missing or invalid.
     hsts: Option<HstsJson>,
-    /// Software banners (`server`, `x-powered-by`) by lowercase name.
-    banners: BTreeMap<String, String>,
+    /// Software banners (`server`, `x-powered-by`) by lowercase name, every
+    /// field value in order.
+    banners: BTreeMap<String, Vec<String>>,
     /// Alternative services from `Alt-Svc`, or `null` when the header is
     /// malformed.
     alt_svc: Option<Vec<AltSvcJson>>,
@@ -692,10 +693,15 @@ fn http(section: &Result<HttpResponse, String>) -> HttpJson<'_> {
                     preload: h.preload,
                     preload_eligible: h.preload_eligible(),
                 }),
-            banners: banners(response)
-                .into_iter()
-                .map(|(name, value)| (name.to_ascii_lowercase(), value))
-                .collect(),
+            banners: banners(response).into_iter().fold(
+                BTreeMap::new(),
+                |mut map: BTreeMap<String, Vec<String>>, (name, value)| {
+                    map.entry(name.to_ascii_lowercase())
+                        .or_default()
+                        .push(value);
+                    map
+                },
+            ),
             alt_svc: alt_services(response).ok().map(|list| {
                 list.into_iter()
                     .map(|a| AltSvcJson {
@@ -1044,6 +1050,7 @@ mod tests {
                 ("strict-transport-security".into(), "max-age=0".into()),
                 ("x-frame-options".into(), "DENY".into()),
                 ("x-powered-by".into(), "PHP/8".into()),
+                ("x-powered-by".into(), "Express".into()),
                 ("alt-svc".into(), "h3=\":443\"".into()),
                 ("set-cookie".into(), "sid=1; Secure; SameSite=Lax".into()),
             ],
@@ -1082,7 +1089,7 @@ mod tests {
                     "preload": true,
                     "preload_eligible": true,
                 },
-                "banners": {"x-powered-by": "PHP/8"},
+                "banners": {"x-powered-by": ["PHP/8", "Express"]},
                 "alt_svc": [{"protocol": "h3", "authority": ":443", "max_age": 86_400}],
                 "cookies": [
                     {"name": "sid", "secure": true, "http_only": false, "same_site": "Lax"},

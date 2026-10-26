@@ -296,6 +296,7 @@ fn http_extras(response: &HttpResponse) -> String {
         let _ = writeln!(out, "  {label:<26} {value}");
     }
     let alt = match alt_services(response) {
+        Ok(list) if list.is_empty() => "clear".to_owned(),
         Ok(list) => list
             .iter()
             .map(|a| format!("{} {} (ma {})", a.protocol, a.authority, a.max_age))
@@ -303,7 +304,7 @@ fn http_extras(response: &HttpResponse) -> String {
             .join(", "),
         Err(_) => "invalid".to_owned(),
     };
-    if !alt.is_empty() {
+    if response.header("alt-svc").is_some() {
         let _ = writeln!(out, "  {:<26} {alt}", "Alt-Svc");
     }
     for cookie in cookies(response) {
@@ -821,6 +822,11 @@ mod tests {
             http_extras(&invalid),
             "  Alt-Svc                    invalid\n"
         );
+        let clear = HttpResponse {
+            status: 200,
+            headers: vec![header("alt-svc", "clear")],
+        };
+        assert_eq!(http_extras(&clear), "  Alt-Svc                    clear\n");
     }
 
     /// Tolerance lines show each verdict, the tested version, and errors.

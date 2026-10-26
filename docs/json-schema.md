@@ -117,8 +117,8 @@ One `GET /` request is sent over a full handshake; redirects are not followed.
 | `hsts.include_subdomains` | boolean | `includeSubDomains` is present |
 | `hsts.preload` | boolean | `preload` is present |
 | `hsts.preload_eligible` | boolean | `max-age` is at least one year and both `includeSubDomains` and `preload` are present |
-| `banners` | object | `server` and `x-powered-by` values by lowercase name, control characters replaced by `?`; only headers that are set |
-| `alt_svc` | array or null | Alternative services from the first `Alt-Svc` header (RFC 7838), empty when missing or `clear`; `null` when malformed or on error |
+| `banners` | object | Arrays of `server` and `x-powered-by` values by lowercase name, one entry per field value in order, control characters replaced by `?`; only headers that are set |
+| `alt_svc` | array or null | Alternative services from all `Alt-Svc` headers in order (RFC 7838), empty when missing or `clear`; `null` when malformed or on error |
 | `alt_svc[].protocol` | string | ALPN protocol id, e.g. `h3` |
 | `alt_svc[].authority` | string | Alternative authority, e.g. `:443` |
 | `alt_svc[].max_age` | integer | Freshness lifetime in seconds (`ma`, default 86400) |
@@ -275,7 +275,7 @@ Abbreviated:
       "x-frame-options": "DENY"
     },
     "hsts": { "max_age": 63072000, "include_subdomains": true, "preload": true, "preload_eligible": true },
-    "banners": { "server": "nginx" },
+    "banners": { "server": ["nginx"] },
     "alt_svc": [{ "protocol": "h3", "authority": ":443", "max_age": 86400 }],
     "cookies": [{ "name": "sid", "secure": true, "http_only": true, "same_site": "Lax" }]
   },
