@@ -45,9 +45,15 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
 
-    /// Target: host, host:port, [ipv6]:port, or https:// URL.
-    #[arg(required = true)]
-    target: Option<Target>,
+    /// Targets: host, host:port, [ipv6]:port, or https:// URL. Several
+    /// targets are scanned one after another.
+    #[arg(required_unless_present = "file", value_name = "TARGET")]
+    targets: Vec<Target>,
+
+    /// Read more targets from FILE, one per line; blank lines and lines
+    /// starting with `#` are skipped.
+    #[arg(long, value_name = "FILE")]
+    file: Option<PathBuf>,
 
     /// Server name to send in SNI (defaults to the target host name).
     #[arg(long)]
@@ -166,10 +172,92 @@ fn explain_text(id: Option<&str>) -> Result<String, String> {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
-    match (&cli.command, &cli.target) {
-        (Some(Command::Explain { id }), _) => explain_command(id.as_deref()),
-        (None, Some(target)) => scan(&cli, target).await,
-        (None, None) => unreachable!("clap requires a target without a subcommand"),
+    match &cli.command {
+        Some(Command::Explain { id }) => explain_command(id.as_deref()),
+        None => scan_all(&cli).await,
+    }
+}
+
+/// Collects the targets from the command line and `--file`, in that order.
+fn targets(cli: &Cli) -> Result<Vec<Target>, String> {
+    let mut targets = cli.targets.clone();
+    if let Some(path) = &cli.file {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        targets.extend(parse_target_list(&text).map_err(|e| format!("{}:{e}", path.display()))?);
+    }
+    if targets.is_empty() {
+        return Err("no targets given".to_owned());
+    }
+    Ok(targets)
+}
+
+/// Parses a target list: one target per line, skipping blank lines and
+/// `#` comments. Errors name the 1-based line number.
+fn parse_target_list(text: &str) -> Result<Vec<Target>, String> {
+    text.lines()
+        .enumerate()
+        .map(|(n, line)| (n + 1, line.trim()))
+        .filter(|(_, line)| !line.is_empty() && !line.starts_with('#'))
+        .map(|(n, line)| line.parse().map_err(|e| format!("{n}: {e}")))
+        .collect()
+}
+
+/// Scans every target in turn. The exit code is 2 if any scan failed,
+/// else 1 if any target has a finding at or above `--fail-on`, else 0.
+/// JSON output is one document for a single target and an array of
+/// documents otherwise.
+async fn scan_all(cli: &Cli) -> ExitCode {
+    let (targets, store) = match targets(cli).and_then(|t| Ok((t, trust_store(cli)?))) {
+        Ok(ready) => ready,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut code = 0;
+    let mut documents = Vec::new();
+    for (i, target) in targets.iter().enumerate() {
+        if i > 0 && cli.format == Format::Text {
+            println!();
+        }
+        let outcome = scan(cli, &store, target).await;
+        code = code.max(outcome.code);
+        documents.extend(outcome.json);
+    }
+    if cli.format == Format::Json {
+        print!("{}", json_output(targets.len(), &documents));
+    }
+    ExitCode::from(code)
+}
+
+/// Combines the JSON documents of a run: the document itself for one
+/// target (nothing if its scan failed), else an array of the documents.
+fn json_output(targets: usize, documents: &[String]) -> String {
+    if targets == 1 {
+        documents.concat()
+    } else {
+        json::render_array(documents)
+    }
+}
+
+/// Result of scanning one target.
+#[derive(Debug)]
+struct Outcome {
+    /// Exit code for this target alone (0, 1 or 2).
+    code: u8,
+    /// Rendered JSON document, when `--format json` and the scan ran.
+    json: Option<String>,
+}
+
+impl Outcome {
+    /// A scan that failed before producing a report.
+    fn failed(target: &Target, error: &str) -> Self {
+        eprintln!("error: {target}: {error}");
+        Self {
+            code: 2,
+            json: None,
+        }
     }
 }
 
@@ -189,15 +277,12 @@ fn transport(cli: &Cli, addr: SocketAddr) -> Transport {
     transport
 }
 
-/// Scans `scan_target` with the options in `cli` and returns the exit code.
-async fn scan(cli: &Cli, scan_target: &Target) -> ExitCode {
+/// Scans `scan_target` with the options in `cli`.
+async fn scan(cli: &Cli, store: &TrustStore, scan_target: &Target) -> Outcome {
     let paint = painter(cli);
-    let (store, addr) = match prepare(cli, scan_target).await {
-        Ok(ready) => ready,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::from(2);
-        }
+    let addr = match resolve(scan_target).await {
+        Ok(addr) => addr,
+        Err(e) => return Outcome::failed(scan_target, &format!("cannot resolve: {e}")),
     };
     let sni = cli.sni.as_deref().or(scan_target.default_sni());
 
@@ -219,8 +304,7 @@ async fn scan(cli: &Cli, scan_target: &Target) -> ExitCode {
         .iter()
         .all(|r| matches!(r.support, ProtocolSupport::Error(_)))
     {
-        eprintln!("error: no protocol could be tested");
-        return ExitCode::from(2);
+        return Outcome::failed(scan_target, "no protocol could be tested");
     }
     let mut findings = protocol_findings(&protocols);
 
@@ -244,7 +328,7 @@ async fn scan(cli: &Cli, scan_target: &Target) -> ExitCode {
 
     let host = sni.map_or_else(|| addr.ip().to_string(), str::to_owned);
     let (certificate, cert_findings, chain) =
-        certificate_section(&transport, sni, &host, &store).await;
+        certificate_section(&transport, sni, &host, store).await;
     show(format!("\n{}", text::certificate(&certificate, paint)));
     findings.extend(cert_findings);
 
@@ -277,39 +361,29 @@ async fn scan(cli: &Cli, scan_target: &Target) -> ExitCode {
     findings.sort_by_key(|f| std::cmp::Reverse(f.severity));
     show(format!("\n{}", text::findings(&findings, paint)));
 
-    if cli.format == Format::Json {
-        print!(
-            "{}",
-            json::render(&json::Report {
-                target: &target,
-                addr,
-                sni,
-                started_at,
-                protocols: &protocols,
-                ciphers: &ciphers,
-                key_exchange: &key_exchange,
-                post_quantum: &post_quantum,
-                certificate: &certificate,
-                http: &http,
-                revocation: revocation.as_ref(),
-                vulnerabilities: &vulns,
-                intolerance: &intolerance,
-                details: &details,
-                findings: &findings,
-            })
-        );
+    let json = (cli.format == Format::Json).then(|| {
+        json::render(&json::Report {
+            target: &target,
+            addr,
+            sni,
+            started_at,
+            protocols: &protocols,
+            ciphers: &ciphers,
+            key_exchange: &key_exchange,
+            post_quantum: &post_quantum,
+            certificate: &certificate,
+            http: &http,
+            revocation: revocation.as_ref(),
+            vulnerabilities: &vulns,
+            intolerance: &intolerance,
+            details: &details,
+            findings: &findings,
+        })
+    });
+    Outcome {
+        code: u8::from(findings.iter().any(|f| f.severity >= cli.fail_on)),
+        json,
     }
-
-    ExitCode::from(u8::from(findings.iter().any(|f| f.severity >= cli.fail_on)))
-}
-
-/// Loads the trust store and resolves the target before scanning.
-async fn prepare(cli: &Cli, scan_target: &Target) -> Result<(TrustStore, SocketAddr), String> {
-    let store = trust_store(cli)?;
-    let addr = resolve(scan_target)
-        .await
-        .map_err(|e| format!("cannot resolve {scan_target}: {e}"))?;
-    Ok((store, addr))
 }
 
 /// Loads the trust store selected on the command line: a `--ca-file`
@@ -631,6 +705,47 @@ mod tests {
             cli.command,
             Some(Command::Explain { id: Some(_) })
         ));
+        let cli = Cli::try_parse_from(["testls", "a.example", "b.example:8443"]).expect("two");
+        assert_eq!(cli.targets.len(), 2);
+        let cli = Cli::try_parse_from(["testls", "--file", "hosts.txt"]).expect("file only");
+        assert_eq!(cli.targets, vec![]);
+    }
+
+    /// Target lists skip blanks and comments and name the bad line.
+    #[test]
+    fn target_lists() {
+        let list = parse_target_list("# hosts\n\na.example\n  b.example:8443  \n").expect("list");
+        let names: Vec<String> = list.iter().map(ToString::to_string).collect();
+        assert_eq!(names, ["a.example:443", "b.example:8443"]);
+        let err = parse_target_list("a.example\nhttp://b.example\n").unwrap_err();
+        assert!(err.starts_with("2: "), "{err}");
+        assert_eq!(parse_target_list("# only\n").expect("empty"), vec![]);
+    }
+
+    /// A failed single target prints no JSON; failed targets in a run of
+    /// several leave an array, empty if all failed.
+    #[test]
+    fn json_outputs() {
+        let doc = "{}\n".to_string();
+        assert_eq!(json_output(1, &[]), "");
+        assert_eq!(json_output(1, std::slice::from_ref(&doc)), doc);
+        assert_eq!(json_output(2, &[]), "[]\n");
+        assert!(json_output(2, &[doc]).starts_with("[\n"));
+    }
+
+    /// `--file` errors and an empty list are scan errors before any connection.
+    #[test]
+    fn target_sources() {
+        let cli = Cli::try_parse_from(["testls", "--file", "/nonexistent/hosts.txt"]).unwrap();
+        assert!(targets(&cli).unwrap_err().starts_with("cannot read"));
+        let dir = std::env::temp_dir().join(format!("testls-targets-{}", std::process::id()));
+        std::fs::write(&dir, "# none\n").unwrap();
+        let cli =
+            Cli::try_parse_from(["testls", "a.example", "--file", dir.to_str().unwrap()]).unwrap();
+        assert_eq!(targets(&cli).unwrap().len(), 1);
+        let cli = Cli::try_parse_from(["testls", "--file", dir.to_str().unwrap()]).unwrap();
+        assert_eq!(targets(&cli).unwrap_err(), "no targets given");
+        std::fs::remove_file(&dir).unwrap();
     }
 
     /// A failed cipher enumeration is reported in the key exchange section

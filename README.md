@@ -45,6 +45,9 @@ On macOS the binaries are not notarized yet; clear the quarantine flag with
 # Scan a host (port 443 by default)
 testls example.com
 
+# Several targets, from the command line and a file (one per line)
+testls example.com example.org:8443 --file hosts.txt
+
 # JSON output for scripts; exit status 1 if any finding is medium or worse
 testls --format json --fail-on medium example.com:8443
 

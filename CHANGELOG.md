@@ -6,6 +6,12 @@ All notable changes to `testls` are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Several targets per run: list them on the command line or in a file with
+  `--file` (one per line, `#` comments). JSON output becomes an array of
+  documents and the exit code is the worst of all targets.
+
 ## [0.3.0] - 2026-10-26
 
 Finding ids, derived vulnerabilities, ClientHello tolerance, TLSv1.3 details,

@@ -462,6 +462,26 @@ pub fn render(report: &Report<'_>) -> String {
     out
 }
 
+/// Joins documents from [`render`] into one pretty-printed JSON array,
+/// indented the way `serde_json` would print it, followed by a newline.
+#[must_use]
+pub fn render_array(documents: &[String]) -> String {
+    if documents.is_empty() {
+        return "[]\n".to_owned();
+    }
+    let items: Vec<String> = documents
+        .iter()
+        .map(|doc| {
+            doc.trim_end()
+                .lines()
+                .map(|line| format!("  {line}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .collect();
+    format!("[\n{}\n]\n", items.join(",\n"))
+}
+
 /// Converts the tolerance tests; on error every verdict is `null`.
 fn intolerance(section: &Result<Intolerance, String>) -> IntoleranceJson<'_> {
     let result = section.as_ref().ok();
@@ -1002,6 +1022,21 @@ mod tests {
                 {"protocol": "TLSv1.1", "group_order": null, "groups": [], "dh_bits": null, "error": "reset"},
             ])
         );
+    }
+
+    /// Several documents join into an array that parses and keeps key order.
+    #[test]
+    fn document_array() {
+        let a = "{\n  \"b\": 1,\n  \"a\": [\n    1,\n    2\n  ]\n}\n".to_owned();
+        let b = "{\n  \"c\": \"x\\ny\"\n}\n".to_owned();
+        let out = render_array(&[a, b]);
+        assert_eq!(
+            out,
+            "[\n  {\n    \"b\": 1,\n    \"a\": [\n      1,\n      2\n    ]\n  },\n  {\n    \"c\": \"x\\ny\"\n  }\n]\n"
+        );
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v[1]["c"], "x\ny");
+        assert_eq!(render_array(&[]), "[]\n");
     }
 
     /// Missing SNI is `null` and a failed certificate fetch carries the error.
