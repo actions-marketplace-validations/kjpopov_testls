@@ -13,6 +13,8 @@ All notable changes to `testls` are listed here. The format follows
   documents and the exit code is the worst of all targets.
 - CIDR ranges as targets, such as `192.0.2.0/28` or `[2001:db8::/120]:8443`
   (at most 16 host bits).
+- `--all-addresses` scans every A/AAAA address of a host name and warns on
+  stderr when they differ in protocols, cipher suites or certificate.
 
 ## [0.3.0] - 2026-10-26
 
