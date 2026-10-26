@@ -16,7 +16,7 @@ otherwise push branches and stop (see [AGENTS.md](../AGENTS.md)).
    `gh pr create --base main --title "area: subject" --body "..."`.
 5. Wait for CI and CodeRabbit (5-10 min), fix comments, repeat. One review
    round = one fix commit (see "Answering comments").
-6. Merge when green and CodeRabbit has approved (see below):
+6. Merge when green and CodeRabbit is happy (see below):
    `gh pr merge N --merge --delete-branch`, then pull `main`.
 
 Stacked branches: open the PR for the next layer only after the lower one is
@@ -52,20 +52,28 @@ gh api repos/kjpopov/testls/pulls/N/comments > target/prN.json
 jq -r '.[] | (.id|tostring) + " " + .path + ":" + (.line|tostring)' target/prN.json
 ```
 
-CodeRabbit is happy when it has approved the latest commit:
+CodeRabbit is happy when either:
 
-```sh
-gh pr view N --json reviewDecision,mergeStateStatus   # APPROVED + CLEAN
-```
+- it approved the PR head commit (`APPROVED` review whose `commit_id` equals
+  `headRefOid`) and the merge state is `CLEAN`:
 
-It auto-approves (`.coderabbit.yaml`) once threads are resolved, the latest
-commit is reviewed, pre-merge checks pass and merge risk is `low` or below.
-No approval for a higher-risk PR is not a bug: it then counts as happy when
-the latest review has no actionable comments, `gh pr checks` shows "Review
-completed" and the merge state is `CLEAN`; mention the risk to the
-maintainer. Always read every review body before merging: a maintainer
-`TODO` review was once missed. Pre-merge check warnings (title, changelog,
-JSON schema, docstrings) are in the summary comment; fix or explain them.
+  ```sh
+  gh pr view N --json headRefOid,mergeStateStatus
+  gh api repos/kjpopov/testls/pulls/N/reviews --jq '.[]
+    | select(.user.login == "coderabbitai[bot]" and .state == "APPROVED")
+    | .commit_id'
+  ```
+
+- or, for a PR it rates above `low` merge risk (no auto-approval, see
+  `.coderabbit.yaml`), the latest commit's review has no actionable comments,
+  `gh pr checks` shows "Review completed" and the merge state is `CLEAN`;
+  mention the risk to the maintainer.
+
+Auto-approval also needs resolved threads and passing pre-merge checks
+(title, changelog, JSON schema, docstrings; listed in the summary comment).
+They are in warning mode, so they never block a merge, but a failing one may
+withhold approval: fix it or explain it in a PR comment. Always read every
+review body before merging: a maintainer `TODO` review was once missed.
 
 ## Answering comments
 
