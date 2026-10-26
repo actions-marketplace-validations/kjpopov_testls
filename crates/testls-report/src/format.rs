@@ -11,11 +11,13 @@ pub enum Format {
     Text,
     /// One JSON document printed when the scan finishes.
     Json,
+    /// One SARIF 2.1.0 log printed when the scan finishes.
+    Sarif,
 }
 
 impl Format {
     /// All formats, in the order shown in `--help`.
-    pub const ALL: [Self; 2] = [Self::Text, Self::Json];
+    pub const ALL: [Self; 3] = [Self::Text, Self::Json, Self::Sarif];
 
     /// Lower-case name, as used on the command line.
     #[must_use]
@@ -23,6 +25,7 @@ impl Format {
         match self {
             Self::Text => "text",
             Self::Json => "json",
+            Self::Sarif => "sarif",
         }
     }
 }
@@ -50,7 +53,7 @@ impl std::error::Error for ParseFormatError {}
 impl FromStr for Format {
     type Err = ParseFormatError;
 
-    /// Parses `text` or `json`.
+    /// Parses `text`, `json` or `sarif`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::ALL
             .into_iter()

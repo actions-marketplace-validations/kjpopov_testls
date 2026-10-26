@@ -21,6 +21,8 @@ All notable changes to `testls` are listed here. The format follows
   and for revocation lookups.
 - `--proxy [http://]HOST:PORT` tunnels all connections through an HTTP
   proxy with `CONNECT`, including revocation lookups.
+- `--format sarif` prints one SARIF 2.1.0 log of all findings, for GitHub
+  code scanning and other SARIF tools.
 
 ## [0.3.0] - 2026-10-26
 

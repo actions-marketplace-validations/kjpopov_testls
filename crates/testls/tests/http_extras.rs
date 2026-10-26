@@ -1,5 +1,6 @@
 //! End-to-end scan of an in-process TLS server that sends banners,
-//! `Alt-Svc` and cookies, checking the JSON report and finding ids.
+//! `Alt-Svc` and cookies, checking the JSON and SARIF reports and finding
+//! ids.
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -123,6 +124,42 @@ fn json_reports_http_extras() {
         assert!(ids.contains(&id), "missing {id} in {ids:?}");
     }
     assert!(!ids.contains(&"header.alt_svc_invalid"), "{ids:?}");
+}
+
+/// `--format sarif` prints one SARIF 2.1.0 log whose results carry the
+/// finding ids as rule ids, each backed by a rule in the driver.
+#[test]
+fn sarif_reports_findings() {
+    let addr = serve();
+    let out = Command::new(env!("CARGO_BIN_EXE_testls"))
+        .arg(addr.to_string())
+        .args(["--sni", "localhost", "--format", "sarif"])
+        .args(["--fail-on", "critical"])
+        .output()
+        .expect("run testls");
+    assert_eq!(out.status.code(), Some(0));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("SARIF output");
+    assert_eq!(v["version"], "2.1.0");
+    let run = &v["runs"][0];
+    assert_eq!(run["invocations"][0]["executionSuccessful"], true);
+    let rules: Vec<&str> = run["tool"]["driver"]["rules"]
+        .as_array()
+        .expect("rules")
+        .iter()
+        .filter_map(|r| r["id"].as_str())
+        .collect();
+    let results = run["results"].as_array().expect("results");
+    for result in results {
+        let id = result["ruleId"].as_str().expect("ruleId");
+        let index =
+            usize::try_from(result["ruleIndex"].as_u64().expect("ruleIndex")).expect("index");
+        assert_eq!(rules[index], id);
+        assert_eq!(result["properties"]["address"], addr.to_string());
+    }
+    assert!(
+        results.iter().any(|r| r["ruleId"] == "cookie.insecure"),
+        "{results:?}"
+    );
 }
 
 /// `--resolve` connects a host name that does not exist to the local
