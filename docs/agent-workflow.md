@@ -91,8 +91,8 @@ review body before merging: a maintainer `TODO` review was once missed.
   then `gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:"ID"}){thread{isResolved}}}'`.
 - If CodeRabbit pauses or skips: `gh pr comment N -b "@coderabbitai review"`.
 - To preview `.coderabbit.yaml` changes, mark the PR as draft
-  (`gh pr ready N --undo`), comment `@coderabbitai review --preview-config`,
-  then `gh pr ready N`.
+  (`gh pr ready N --undo`) and comment `@coderabbitai review --preview-config`.
+  Keep it draft until CodeRabbit posts the preview, then `gh pr ready N`.
 
 ## Waiting
 
