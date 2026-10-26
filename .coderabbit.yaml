@@ -2,11 +2,14 @@
 # CodeRabbit settings. Reference: https://docs.coderabbit.ai/reference/configuration
 language: en-GB
 tone_instructions: >-
-  Be concise and technical. Cite the RFC or IANA registry section when
-  questioning protocol behaviour.
+  Be concise and technical. Lead with the concrete input or flag combination
+  that fails. Cite the RFC or IANA registry section when questioning
+  protocol behaviour.
 
 reviews:
-  profile: chill
+  # Assertive trial (docs/PLAN.md #55): applies from PR #85 until changed;
+  # PRs #86-#90 are evaluated, then keep it or revert to chill.
+  profile: assertive
   review_details: true
   in_progress_fortune: false
   poem: false
@@ -16,6 +19,13 @@ reviews:
     - "!crates/testls-data/src/generated.rs"
     - "!**/Cargo.lock"
   path_instructions:
+    - path: "crates/**/*.rs"
+      instructions: >-
+        Check the architecture: logic belongs in its crate (wire = codec,
+        probe = network, checks = findings, report = output, testls = CLI).
+        Flag new dependencies, and changes to Transport, Finding or the JSON
+        schema without a matching docs/PLAN.md decision-log entry. Skip style
+        points that clippy pedantic already enforces.
     - path: "crates/testls-wire/**/*.rs"
       instructions: >-
         Parses untrusted network input. Flag any panic path (indexing,
@@ -25,14 +35,29 @@ reviews:
         New protocol data tables and checks must cite their source (RFC or
         IANA registry section) in a comment. testls is a clean-room
         project: flag anything that looks copied from testssl.sh.
-    - path: "crates/testls/src/main.rs"
+    - path: "crates/testls-probe/**/*.rs"
+      instructions: >-
+        Servers and proxies are untrusted. Flag unbounded reads or
+        allocations, missing timeouts, and mishandled IPv6 or dual-stack
+        addresses, including --proxy and --source-ip combinations.
+    - path: "crates/testls-checks/**/*.rs"
+      instructions: >-
+        Look for false positives and false negatives, and check that the
+        severity matches the cited source.
+    - path: "crates/testls/src/**/*.rs"
       instructions: >-
         Exit codes are a CLI contract: 0 = no findings at or above
-        --fail-on, 1 = findings at or above it, 2 = scan error.
+        --fail-on, 1 = findings at or above it, 2 = scan error. Check flag
+        combinations (multiple targets, CIDR ranges, --all-addresses,
+        --resolve, --proxy, --source-ip, every --format) and that reports
+        go to stdout and diagnostics to stderr.
     - path: "crates/testls-report/**/*.rs"
       instructions: >-
         JSON output must match docs/json-schema.md; flag fields that are
-        added, renamed or removed without a matching schema change.
+        added, renamed or removed without a matching schema change. All
+        scanned text is untrusted: check escaping and injection for every
+        format, deterministic ordering, and output for empty runs and
+        failed scans.
     - path: "crates/testls/tests/**/*.rs"
       instructions: >-
         Tests that need the local servers must carry

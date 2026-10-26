@@ -54,14 +54,14 @@ jq -r '.[] | (.id|tostring) + " " + .path + ":" + (.line|tostring)' target/prN.j
 
 CodeRabbit is happy when either:
 
-- it approved the PR head commit (`APPROVED` review whose `commit_id` equals
-  `headRefOid`) and the merge state is `CLEAN`:
+- its latest verdict (last non-`COMMENTED` review) is `APPROVED`, its
+  `commit_id` equals `headRefOid`, and the merge state is `CLEAN`:
 
   ```sh
   gh pr view N --json headRefOid,mergeStateStatus
-  gh api repos/kjpopov/testls/pulls/N/reviews --jq '.[]
-    | select(.user.login == "coderabbitai[bot]" and .state == "APPROVED")
-    | .commit_id'
+  gh api --paginate --slurp repos/kjpopov/testls/pulls/N/reviews | jq -r '[.[][]
+    | select(.user.login == "coderabbitai[bot]" and .state != "COMMENTED")]
+    | last | .state + " " + .commit_id'
   ```
 
 - or, when it withholds approval (merge risk above `low`, see
@@ -135,3 +135,10 @@ timeout. Work on the next branch while a review runs.
   a config on the PR branch is applied anyway ("Layers: Repository YAML").
 - Mention clean-room sources (RFC/IANA section) in every new data table or
   check.
+- CodeRabbit can set `CHANGES_REQUESTED` for a single Minor comment; a
+  later `APPROVED` review on the head commit replaces it.
+- The single-comment endpoint is `repos/OWNER/REPO/pulls/comments/ID`,
+  without the PR number.
+- During the assertive trial (PLAN decision #55), record per PR the
+  comment count, how many were useful, review rounds and whether it was
+  auto-approved, in the PR's final status message to the maintainer.
