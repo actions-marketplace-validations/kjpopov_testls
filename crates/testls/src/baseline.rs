@@ -28,24 +28,44 @@ pub struct Baseline {
 struct Document {
     /// Must equal [`SCHEMA_VERSION`].
     schema_version: u32,
+    /// Producer; `name` must be `testls`.
+    tool: DocumentTool,
+    /// Scan start; required so that fragments are rejected.
+    #[allow(dead_code)] // only checked for presence
+    started_at: i64,
     /// The scanned target.
     target: DocumentTarget,
     /// Reported findings.
     findings: Vec<DocumentFinding>,
 }
 
+/// `tool` of a report document.
+#[derive(Debug, Deserialize)]
+struct DocumentTool {
+    /// Tool name.
+    name: String,
+}
+
 /// `target` of a report document.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // `address` is only checked for presence
 struct DocumentTarget {
     /// Target as given on the command line.
     input: String,
+    /// Scanned socket address.
+    address: String,
 }
 
 /// One entry of `findings` in a report document.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // `severity` and `message` are only checked for presence
 struct DocumentFinding {
     /// Finding id.
     id: String,
+    /// Severity name.
+    severity: String,
+    /// Finding message.
+    message: String,
 }
 
 impl Baseline {
@@ -67,6 +87,12 @@ impl Baseline {
         .map_err(|e| format!("not a testls JSON report: {e}"))?;
         let mut known = HashSet::new();
         for d in documents {
+            if d.tool.name != "testls" {
+                return Err(format!(
+                    "not a testls JSON report: tool is {:?}",
+                    d.tool.name
+                ));
+            }
             if d.schema_version != SCHEMA_VERSION {
                 return Err(format!(
                     "schema_version {} is not supported (expected {SCHEMA_VERSION})",
@@ -122,7 +148,7 @@ mod tests {
             .map(|id| format!(r#"{{"id":"{id}","severity":"low","message":"m"}}"#))
             .collect();
         format!(
-            r#"{{"schema_version":1,"target":{{"input":"{input}","address":"192.0.2.1:443","sni":null}},"findings":[{}],"suppressed":[{{"id":"s.id","severity":"low","message":"m","reason":"r"}}]}}"#,
+            r#"{{"schema_version":1,"tool":{{"name":"testls","version":"0"}},"started_at":0,"target":{{"input":"{input}","address":"192.0.2.1:443","sni":null}},"findings":[{}],"suppressed":[{{"id":"s.id","severity":"low","message":"m","reason":"r"}}]}}"#,
             findings.join(",")
         )
     }
@@ -165,6 +191,15 @@ mod tests {
         )
         .expect_err("version");
         assert!(err.contains("schema_version 2"), "{err}");
+        let err = Baseline::parse(
+            r#"{"schema_version":1,"target":{"input":"a"},"findings":[{"id":"cert.revoked"}]}"#,
+        )
+        .expect_err("fragment");
+        assert!(err.contains("not a testls JSON report"), "{err}");
+        let err =
+            Baseline::parse(&document("a", &[]).replace(r#""name":"testls""#, r#""name":"x""#))
+                .expect_err("tool");
+        assert!(err.contains("tool is"), "{err}");
         let err = Baseline::load(Path::new("no/such/baseline.json")).expect_err("missing");
         assert!(err.starts_with("cannot read baseline"), "{err}");
     }
