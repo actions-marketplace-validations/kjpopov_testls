@@ -17,6 +17,7 @@ use x509_parser::asn1_rs::Oid;
 use x509_parser::certificate::X509Certificate;
 use x509_parser::parse_x509_certificate;
 use x509_parser::public_key::PublicKey;
+use x509_parser::signature_algorithm::SignatureAlgorithm;
 
 use crate::{Finding, Severity, cipher_name, group_name, parse_hsts};
 
@@ -89,6 +90,8 @@ impl std::str::FromStr for Policy {
 struct Rules {
     /// Protocol versions.
     versions: &'static [ProtocolVersion],
+    /// Protocol versions the server must offer.
+    required: &'static [ProtocolVersion],
     /// TLSv1.3 cipher suites.
     tls13_suites: &'static [u16],
     /// Cipher suites for TLSv1.2 and earlier.
@@ -141,6 +144,7 @@ const MOZILLA_HSTS_MAX_AGE: u64 = 63_072_000;
 /// Mozilla "modern".
 static MOZILLA_MODERN: Rules = Rules {
     versions: &[ProtocolVersion::TLS13],
+    required: &[],
     tls13_suites: MOZILLA_TLS13_SUITES,
     suites: &[],
     groups: MOZILLA_GROUPS,
@@ -155,6 +159,7 @@ static MOZILLA_MODERN: Rules = Rules {
 /// `0xc02b`, `0xc02f`, `0xc02c`, `0xc030`, `0xcca9` and `0xcca8`.
 static MOZILLA_INTERMEDIATE: Rules = Rules {
     versions: &[ProtocolVersion::TLS12, ProtocolVersion::TLS13],
+    required: &[],
     tls13_suites: MOZILLA_TLS13_SUITES,
     suites: &[0xc02b, 0xc02f, 0xc02c, 0xc030, 0xcca9, 0xcca8],
     groups: MOZILLA_GROUPS,
@@ -207,12 +212,13 @@ const NIST_SIGNATURES: &[(&str, &str)] = &[
     ("1.2.840.113549.1.1.10", "RSASSA-PSS"),
 ];
 
-/// NIST SP 800-52r2 for government-only servers: TLSv1.2 and TLSv1.3
-/// (§3.1), RSA keys of at least 2048 bits and ECDSA on P-256 or P-384
+/// NIST SP 800-52r2 for government-only servers: TLSv1.2 and TLSv1.3,
+/// both required (§3.1; TLSv1.3 since 1 January 2024), RSA keys of at least 2048 bits and ECDSA on P-256 or P-384
 /// (§3.2.1). DSA leaf keys are reported because FIPS 186-5 withdrew DSA
 /// signature generation. No HSTS or lifetime limits.
 static NIST_800_52R2: Rules = Rules {
     versions: &[ProtocolVersion::TLS12, ProtocolVersion::TLS13],
+    required: &[ProtocolVersion::TLS12, ProtocolVersion::TLS13],
     tls13_suites: NIST_TLS13_SUITES,
     suites: NIST_SUITES,
     groups: NIST_GROUPS,
@@ -254,17 +260,21 @@ pub fn policy_findings(policy: Policy, input: &PolicyInput<'_>) -> Vec<Finding> 
 
     let mut protocols_untested = false;
     for r in input.protocols {
-        if rules.versions.contains(&r.version) {
-            continue;
-        }
+        let allowed = rules.versions.contains(&r.version);
+        let required = rules.required.contains(&r.version);
         match r.support {
-            ProtocolSupport::Supported => findings.push(deviation(
+            ProtocolSupport::Supported if !allowed => findings.push(deviation(
                 "policy.protocol",
                 policy,
                 &format!("{} is offered", r.version),
             )),
-            ProtocolSupport::Error(_) => protocols_untested = true,
-            ProtocolSupport::NotSupported => {}
+            ProtocolSupport::NotSupported if required => findings.push(deviation(
+                "policy.protocol",
+                policy,
+                &format!("{} is not offered", r.version),
+            )),
+            ProtocolSupport::Error(_) if !allowed || required => protocols_untested = true,
+            _ => {}
         }
     }
     if protocols_untested {
@@ -380,6 +390,26 @@ fn group_deviations(policy: Policy, results: &[KeyExchangeResult]) -> Vec<Findin
         .collect()
 }
 
+/// SHA-2 hashes allowed in RSASSA-PSS parameters (RFC 8017 appendix A.2.3,
+/// NIST CSOR OIDs): SHA-256, SHA-384, SHA-512.
+const PSS_HASHES: &[&str] = &[
+    "2.16.840.1.101.3.4.2.1",
+    "2.16.840.1.101.3.4.2.2",
+    "2.16.840.1.101.3.4.2.3",
+];
+
+/// Whether an RSASSA-PSS signature uses a SHA-2 hash; true for other
+/// algorithms.
+fn pss_hash_allowed(cert: &X509Certificate<'_>) -> bool {
+    match SignatureAlgorithm::try_from(&cert.signature_algorithm) {
+        Ok(SignatureAlgorithm::RSASSA_PSS(params)) => {
+            PSS_HASHES.contains(&params.hash_algorithm_oid().to_id_string().as_str())
+        }
+        Ok(_) => true,
+        Err(_) => cert.signature_algorithm.algorithm.to_id_string() != "1.2.840.113549.1.1.10",
+    }
+}
+
 /// Leaf key, signature and validity period outside the policy.
 fn certificate_deviations(policy: Policy, leaf: &[u8]) -> Vec<Finding> {
     let rules = policy.rules();
@@ -395,13 +425,18 @@ fn certificate_deviations(policy: Policy, leaf: &[u8]) -> Vec<Finding> {
         findings.push(deviation("policy.cert_key", policy, &what));
     }
     let signature = cert.signature_algorithm.algorithm.to_id_string();
-    if !rules.signatures.iter().any(|(oid, _)| *oid == signature) {
+    if !rules.signatures.iter().any(|(oid, _)| *oid == signature) || !pss_hash_allowed(&cert) {
         findings.push(deviation(
             "policy.cert_signature",
             policy,
             &format!(
-                "leaf certificate is signed with {}",
-                label(&signature, NIST_SIGNATURES)
+                "leaf certificate is signed with {}{}",
+                label(&signature, NIST_SIGNATURES),
+                if pss_hash_allowed(&cert) {
+                    ""
+                } else {
+                    " using a non-SHA-2 hash"
+                }
             ),
         ));
     }
@@ -487,6 +522,8 @@ mod tests {
     const RSA2048: &[u8] = include_bytes!("testdata/rsa2048-no-san.der");
     /// Self-signed RSA-1024 leaf signed with SHA-1.
     const RSA1024_SHA1: &[u8] = include_bytes!("testdata/rsa1024-sha1-wildcard.der");
+    /// RSA-PSS leaf signed with SHA-1.
+    const RSA_PSS_SHA1: &[u8] = include_bytes!("testdata/rsa-pss-sha1.der");
 
     /// Protocol results with `versions` supported.
     fn protocols(versions: &[ProtocolVersion]) -> Vec<ProtocolResult> {
@@ -817,9 +854,66 @@ mod tests {
             ids,
             [
                 "policy.protocol",
+                "policy.protocol",
                 "policy.cert_key",
                 "policy.cert_signature"
             ]
+        );
+    }
+
+    /// NIST requires TLSv1.3 and SHA-2 hashes in RSASSA-PSS signatures.
+    #[test]
+    fn nist_requirements() {
+        let tail = ", which nist-800-52r2 does not allow";
+        let input = PolicyInput {
+            protocols: &[],
+            ciphers: Some(&[]),
+            cipher_errors: &[],
+            key_exchange: Some(&[]),
+            key_exchange_errors: &[],
+            chain: None,
+            http: None,
+        };
+        let tls12_only = self::protocols(&[ProtocolVersion::TLS12]);
+        let unknown = [ProtocolResult {
+            version: ProtocolVersion::TLS13,
+            support: ProtocolSupport::Error("timeout".into()),
+        }];
+        let input = PolicyInput {
+            protocols: &tls12_only,
+            chain: None,
+            ..input
+        };
+        assert_eq!(
+            summary(&policy_findings(Policy::Nist80052r2, &input)),
+            [(
+                "policy.protocol".to_owned(),
+                format!("TLSv1.3 is not offered{tail}")
+            )]
+            .into_iter()
+            .chain([(
+                "policy.incomplete".to_owned(),
+                "nist-800-52r2 could not be fully checked: certificate not measured".to_owned()
+            )])
+            .collect::<Vec<_>>()
+        );
+        let input = PolicyInput {
+            protocols: &unknown,
+            ..input
+        };
+        assert_eq!(
+            summary(&policy_findings(Policy::Nist80052r2, &input)),
+            [(
+                "policy.incomplete".to_owned(),
+                "nist-800-52r2 could not be fully checked: protocol versions, certificate not measured".to_owned()
+            )]
+        );
+        assert_eq!(
+            summary(&certificate_deviations(Policy::Nist80052r2, RSA_PSS_SHA1)),
+            [(
+                "policy.cert_signature".to_owned(),
+                format!("leaf certificate is signed with RSASSA-PSS using a non-SHA-2 hash{tail}")
+            )]
         );
         assert_eq!(
             certificate_deviations(Policy::Nist80052r2, EC_LOCALHOST),

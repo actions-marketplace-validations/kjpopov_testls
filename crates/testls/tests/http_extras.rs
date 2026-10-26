@@ -589,6 +589,12 @@ fn policy_reports_deviations() {
 
     let (_, findings) = run(&["--fail-on", "critical", "--policy", "nist-800-52r2"]);
     assert!(
+        findings
+            .iter()
+            .any(|(id, m)| id == "policy.cipher" && m.contains("TLS_CHACHA20_POLY1305_SHA256")),
+        "{findings:?}"
+    );
+    assert!(
         findings.iter().all(|(id, m)| id != "policy.hsts"
             && id != "policy.incomplete"
             && m.ends_with("which nist-800-52r2 does not allow")),

@@ -619,8 +619,8 @@ const EXPLANATIONS: &[Explanation] = &[
     ),
     entry(
         "policy.protocol",
-        "Protocol version outside the policy",
-        "The server offers a protocol version the chosen policy does not allow; Mozilla modern allows only TLSv1.3, Mozilla intermediate and NIST SP 800-52r2 TLSv1.2 and TLSv1.3.",
+        "Protocol version outside the policy or missing",
+        "The server offers a protocol version the chosen policy does not allow; Mozilla modern allows only TLSv1.3, Mozilla intermediate and NIST SP 800-52r2 TLSv1.2 and TLSv1.3. NIST SP 800-52r2 also requires both TLSv1.2 and TLSv1.3 to be offered.",
         "Mozilla Server Side TLS 6.0; NIST SP 800-52r2 §3.1",
     ),
 ];
