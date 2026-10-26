@@ -31,6 +31,23 @@ fn escape(s: &str) -> String {
     out
 }
 
+/// Formats `s` as an inline code span in a table cell. Backslash escapes
+/// are literal inside code spans, so only the pipe (which GFM tables split
+/// on even there) is escaped; backticks and line breaks are dropped.
+fn code(s: &str) -> String {
+    let mut out = String::from("`");
+    for c in s.chars() {
+        match c {
+            '|' => out.push_str("\\|"),
+            '\r' | '\n' => out.push(' '),
+            c if c == '`' || c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out.push('`');
+    out
+}
+
 /// Renders `scans` and `failures` as one Markdown document. Findings at or
 /// above `fail_on` are marked as failing.
 #[must_use]
@@ -82,9 +99,9 @@ pub fn render(scans: &[Scan], failures: &[Failure], fail_on: Severity) -> String
             let mark = if f.severity >= fail_on { "❌" } else { "" };
             let _ = writeln!(
                 out,
-                "| {mark} | {} | `{}` | {} |",
+                "| {mark} | {} | {} | {} |",
                 f.severity.as_str(),
-                f.id.replace('`', ""),
+                code(&f.id),
                 escape(&f.message)
             );
         }
@@ -169,6 +186,7 @@ mod tests {
     #[test]
     fn escaping() {
         assert_eq!(escape("a|b<i>*c*\n`d`\u{1}"), "a\\|b\\<i\\>\\*c\\* \\`d\\`");
+        assert_eq!(code("a|b_c\n`d`\u{1}"), "`a\\|b_c d`");
         let scans = [scan(
             "x",
             vec![Finding::new("id", Severity::High, "<script>|")],
