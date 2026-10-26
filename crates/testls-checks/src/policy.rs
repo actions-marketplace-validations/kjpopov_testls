@@ -163,8 +163,13 @@ pub struct PolicyInput<'a> {
     pub protocols: &'a [ProtocolResult],
     /// Accepted cipher suites per protocol version.
     pub ciphers: Option<&'a [CipherResult]>,
+    /// Versions whose cipher suite enumeration failed. Only versions the
+    /// policy allows make the check incomplete.
+    pub cipher_errors: &'a [ProtocolVersion],
     /// Key exchange groups per protocol version.
     pub key_exchange: Option<&'a [KeyExchangeResult]>,
+    /// Versions whose key exchange probe failed, like `cipher_errors`.
+    pub key_exchange_errors: &'a [ProtocolVersion],
     /// DER certificate chain, leaf first.
     pub chain: Option<&'a [Vec<u8>]>,
     /// Reply to `GET /`.
@@ -178,21 +183,41 @@ pub fn policy_findings(policy: Policy, input: &PolicyInput<'_>) -> Vec<Finding> 
     let mut findings = Vec::new();
     let mut untested = Vec::new();
 
+    let mut protocols_untested = false;
     for r in input.protocols {
-        if r.support == ProtocolSupport::Supported && !rules.versions.contains(&r.version) {
-            findings.push(deviation(
+        if rules.versions.contains(&r.version) {
+            continue;
+        }
+        match r.support {
+            ProtocolSupport::Supported => findings.push(deviation(
                 "policy.protocol",
                 policy,
                 &format!("{} is offered", r.version),
-            ));
+            )),
+            ProtocolSupport::Error(_) => protocols_untested = true,
+            ProtocolSupport::NotSupported => {}
         }
     }
+    if protocols_untested {
+        untested.push("protocol versions");
+    }
+    let failed = |errors: &[ProtocolVersion]| errors.iter().any(|v| rules.versions.contains(v));
     match input.ciphers {
-        Some(ciphers) => findings.extend(cipher_deviations(policy, ciphers)),
+        Some(ciphers) => {
+            findings.extend(cipher_deviations(policy, ciphers));
+            if failed(input.cipher_errors) {
+                untested.push("cipher suites");
+            }
+        }
         None => untested.push("cipher suites"),
     }
     match input.key_exchange {
-        Some(results) => findings.extend(group_deviations(policy, results)),
+        Some(results) => {
+            findings.extend(group_deviations(policy, results));
+            if failed(input.key_exchange_errors) {
+                untested.push("key exchange groups");
+            }
+        }
         None => untested.push("key exchange groups"),
     }
     match input.chain.and_then(<[_]>::first) {
@@ -466,7 +491,9 @@ mod tests {
         let input = PolicyInput {
             protocols: &protocols,
             ciphers: Some(&ciphers),
+            cipher_errors: &[],
             key_exchange: Some(&key_exchange),
+            key_exchange_errors: &[],
             chain: Some(&chain),
             http: Some(&response),
         };
@@ -504,7 +531,9 @@ mod tests {
         let input = PolicyInput {
             protocols: &protocols,
             ciphers: Some(&ciphers),
+            cipher_errors: &[],
             key_exchange: Some(&key_exchange),
+            key_exchange_errors: &[],
             chain: Some(&chain),
             http: Some(&response),
         };
@@ -546,7 +575,9 @@ mod tests {
         let input = PolicyInput {
             protocols: &protocols,
             ciphers: None,
+            cipher_errors: &[],
             key_exchange: None,
+            key_exchange_errors: &[],
             chain: None,
             http: None,
         };
@@ -571,6 +602,59 @@ mod tests {
             policy_findings(Policy::MozillaModern, &input)
                 .iter()
                 .any(|f| f.message.ends_with("leaf certificate cannot be parsed"))
+        );
+    }
+
+    /// Failed probes make the check incomplete only where they matter: a
+    /// disallowed protocol version, or suites/groups of an allowed one.
+    #[test]
+    fn failed_probes() {
+        let protocols = protocols(&[ProtocolVersion::TLS12, ProtocolVersion::TLS13]);
+        let chain = [RSA2048.to_vec()];
+        let response = http(Some("max-age=63072000"));
+        let input = PolicyInput {
+            protocols: &protocols,
+            ciphers: Some(&[]),
+            cipher_errors: &[ProtocolVersion::TLS10],
+            key_exchange: Some(&[]),
+            key_exchange_errors: &[ProtocolVersion::SSL3],
+            chain: Some(&chain),
+            http: Some(&response),
+        };
+        assert_eq!(policy_findings(Policy::MozillaIntermediate, &input), []);
+
+        let input = PolicyInput {
+            cipher_errors: &[ProtocolVersion::TLS12],
+            key_exchange_errors: &[ProtocolVersion::TLS13],
+            ..input
+        };
+        assert_eq!(
+            summary(&policy_findings(Policy::MozillaIntermediate, &input)),
+            [(
+                "policy.incomplete".to_owned(),
+                "mozilla-intermediate could not be fully checked: cipher suites, key \
+                 exchange groups not measured"
+                    .to_owned()
+            )]
+        );
+
+        let mut errored = protocols.clone();
+        assert_eq!(errored[2].version, ProtocolVersion::TLS10);
+        errored[2].support = ProtocolSupport::Error("timed out".to_owned());
+        let input = PolicyInput {
+            protocols: &errored,
+            cipher_errors: &[],
+            key_exchange_errors: &[],
+            ..input
+        };
+        assert_eq!(
+            summary(&policy_findings(Policy::MozillaIntermediate, &input)),
+            [(
+                "policy.incomplete".to_owned(),
+                "mozilla-intermediate could not be fully checked: protocol versions not \
+                 measured"
+                    .to_owned()
+            )]
         );
     }
 

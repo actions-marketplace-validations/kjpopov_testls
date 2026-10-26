@@ -640,9 +640,9 @@ async fn scan(
     }
 }
 
-/// `policy.*` findings for each `--policy`. Cipher suites or key exchange
-/// groups count as measured only if every version was probed successfully
-/// (the quick profile skips key exchange).
+/// `policy.*` findings for each `--policy`. Successful cipher suite and key
+/// exchange probes are checked per version; failed probes of versions a
+/// policy allows make it incomplete (the quick profile skips key exchange).
 fn policy_section(
     cli: &Cli,
     (protocols, ciphers, key_exchange): (
@@ -653,12 +653,15 @@ fn policy_section(
     chain: Option<&[Vec<u8>]>,
     http: &Result<HttpResponse, String>,
 ) -> Vec<Finding> {
-    let ciphers = complete(ciphers, |s| &s.outcome);
-    let key_exchange = complete(key_exchange, |s| &s.outcome).filter(|_| cli.profile.deep());
+    let (ciphers, cipher_errors) = measured_versions(ciphers, |s| (s.version, &s.outcome));
+    let (key_exchange, key_exchange_errors) =
+        measured_versions(key_exchange, |s| (s.version, &s.outcome));
     let input = PolicyInput {
         protocols,
-        ciphers: ciphers.as_deref(),
-        key_exchange: key_exchange.as_deref(),
+        ciphers: Some(&ciphers),
+        cipher_errors: &cipher_errors,
+        key_exchange: cli.profile.deep().then_some(&key_exchange[..]),
+        key_exchange_errors: &key_exchange_errors,
         chain,
         http: http.as_ref().ok(),
     };
@@ -668,15 +671,21 @@ fn policy_section(
         .collect()
 }
 
-/// The results of every section, or `None` if any of them failed.
-fn complete<S, T: Clone>(
+/// The results of the sections that succeeded, and the protocol versions of
+/// those that failed.
+fn measured_versions<S, T: Clone>(
     sections: &[S],
-    outcome: impl Fn(&S) -> &Result<T, String>,
-) -> Option<Vec<T>> {
-    sections
-        .iter()
-        .map(|s| outcome(s).as_ref().ok().cloned())
-        .collect()
+    outcome: impl Fn(&S) -> (ProtocolVersion, &Result<T, String>),
+) -> (Vec<T>, Vec<ProtocolVersion>) {
+    let mut results = Vec::new();
+    let mut failed = Vec::new();
+    for section in sections {
+        match outcome(section) {
+            (_, Ok(result)) => results.push(result.clone()),
+            (version, Err(_)) => failed.push(version),
+        }
+    }
+    (results, failed)
 }
 
 /// Drops `ok` findings, sorts the rest most severe first and splits off
