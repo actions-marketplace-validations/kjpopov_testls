@@ -5,7 +5,7 @@ mod target;
 
 use std::fmt::Write as _;
 use std::io::IsTerminal as _;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -102,6 +102,12 @@ struct Cli {
     #[arg(long, value_name = "HOST:PORT:ADDR")]
     resolve: Vec<ResolveOverride>,
 
+    /// Connect from this local IP address, for the target and for
+    /// revocation lookups. Target addresses of the other address family
+    /// are skipped.
+    #[arg(long, value_name = "ADDR")]
+    source_ip: Option<IpAddr>,
+
     /// Colour the output: `auto` colours only on a terminal when `NO_COLOR`
     /// is unset.
     #[arg(long, default_value_t = ColorChoice::Auto, value_name = "WHEN",
@@ -129,10 +135,12 @@ enum Command {
 
 /// Resolves the target to every distinct socket address it maps to, in
 /// resolver order. The first `--resolve` entry matching the target
-/// replaces the DNS lookup.
+/// replaces the DNS lookup. With a `source` address, only addresses of
+/// its family are kept.
 async fn addresses(
     target: &Target,
     overrides: &[ResolveOverride],
+    source: Option<IpAddr>,
 ) -> std::io::Result<Vec<SocketAddr>> {
     let found: Vec<SocketAddr> = match &target.host {
         Host::Ip(ip) => vec![SocketAddr::new(*ip, target.port)],
@@ -153,6 +161,14 @@ async fn addresses(
     }
     if addrs.is_empty() {
         return Err(std::io::Error::other("no addresses found"));
+    }
+    if let Some(ip) = source {
+        addrs.retain(|a| a.is_ipv4() == ip.is_ipv4());
+        if addrs.is_empty() {
+            return Err(std::io::Error::other(format!(
+                "no address in the address family of --source-ip {ip}"
+            )));
+        }
     }
     Ok(addrs)
 }
@@ -256,7 +272,7 @@ async fn scan_all(cli: &Cli) -> ExitCode {
     let mut scans = 0;
     let mut documents = Vec::new();
     for target in &targets {
-        let addrs = match addresses(target, &cli.resolve).await {
+        let addrs = match addresses(target, &cli.resolve, cli.source_ip).await {
             Ok(mut addrs) => {
                 if !cli.all_addresses {
                     addrs.truncate(1);
@@ -370,6 +386,7 @@ fn transport(cli: &Cli, addr: SocketAddr) -> Transport {
     let mut transport = Transport::new(addr);
     transport.connect_timeout = Duration::from_secs(cli.connect_timeout);
     transport.read_timeout = Duration::from_secs(cli.read_timeout);
+    transport.source = cli.source_ip;
     transport
 }
 
@@ -659,6 +676,7 @@ async fn revocation_section(
         connect_timeout: transport.connect_timeout,
         read_timeout: transport.read_timeout,
         max_body: 0,
+        source: transport.source,
     };
     let urls = chain
         .ok_or_else(|| "certificate chain could not be retrieved".to_owned())
@@ -895,12 +913,13 @@ mod tests {
     }
 
     /// IP targets and `localhost` resolve without duplicates; a matching
-    /// `--resolve` entry replaces the lookup.
+    /// `--resolve` entry replaces the lookup; `--source-ip` keeps only its
+    /// address family.
     #[tokio::test]
     async fn address_lists() {
         let ip: Target = "192.0.2.1:8443".parse().unwrap();
         assert_eq!(
-            addresses(&ip, &[]).await.unwrap(),
+            addresses(&ip, &[], None).await.unwrap(),
             ["192.0.2.1:8443".parse::<SocketAddr>().unwrap()]
         );
         let pinned: Vec<ResolveOverride> = [
@@ -913,16 +932,23 @@ mod tests {
         .collect();
         let host: Target = "host.invalid".parse().unwrap();
         assert_eq!(
-            addresses(&host, &pinned).await.unwrap(),
+            addresses(&host, &pinned, None).await.unwrap(),
             ["192.0.2.1:443", "[2001:db8::1]:443"].map(|a| a.parse::<SocketAddr>().unwrap())
         );
         let local: Target = "localhost:443".parse().unwrap();
-        let addrs = addresses(&local, &pinned).await.unwrap();
+        let addrs = addresses(&local, &pinned, None).await.unwrap();
         assert_ne!(addrs, Vec::new());
         assert!(addrs.iter().all(|a| a.ip().is_loopback()));
         let mut unique = addrs.clone();
         unique.dedup();
         assert_eq!(unique.len(), addrs.len());
+        let v6: IpAddr = "::1".parse().unwrap();
+        assert_eq!(
+            addresses(&host, &pinned, Some(v6)).await.unwrap(),
+            ["[2001:db8::1]:443".parse::<SocketAddr>().unwrap()]
+        );
+        let err = addresses(&ip, &[], Some(v6)).await.unwrap_err();
+        assert!(err.to_string().contains("--source-ip ::1"), "{err}");
     }
 
     /// `--file` errors and an empty list are scan errors before any connection.

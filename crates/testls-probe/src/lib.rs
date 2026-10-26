@@ -14,11 +14,11 @@ mod response;
 
 use std::fmt;
 use std::io;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::net::{TcpSocket, TcpStream};
 use tokio::time::timeout;
 
 pub use certificates::{CertificateChain, fetch_certificates};
@@ -84,17 +84,30 @@ pub struct Transport {
     pub connect_timeout: Duration,
     /// Timeout for the server to finish answering after the hello is sent.
     pub read_timeout: Duration,
+    /// Local address to connect from; the OS picks one when `None`.
+    pub source: Option<IpAddr>,
 }
 
 impl Transport {
-    /// Transport with 5 s connect and 10 s read timeouts.
+    /// Transport with 5 s connect and 10 s read timeouts and no fixed
+    /// source address.
     #[must_use]
     pub fn new(addr: SocketAddr) -> Self {
         Self {
             addr,
             connect_timeout: Duration::from_secs(5),
             read_timeout: Duration::from_secs(10),
+            source: None,
         }
+    }
+
+    /// Opens a TCP connection to [`Transport::addr`] from
+    /// [`Transport::source`] within the connect timeout.
+    ///
+    /// # Errors
+    /// As for [`connect`].
+    pub(crate) async fn connect(&self) -> Result<TcpStream, ProbeError> {
+        connect(self.addr, self.source, self.connect_timeout).await
     }
 
     /// Open a fresh connection, send an already encoded hello, and
@@ -106,10 +119,7 @@ impl Transport {
     /// with [`io::ErrorKind::TimedOut`], so callers can tell that no hello
     /// was sent.
     pub async fn exchange(&self, hello: &[u8]) -> Result<HelloResponse, ProbeError> {
-        let mut stream = timeout(self.connect_timeout, TcpStream::connect(self.addr))
-            .await
-            .map_err(|_| ProbeError::Connect(io::ErrorKind::TimedOut.into()))?
-            .map_err(ProbeError::Connect)?;
+        let mut stream = self.connect().await?;
         stream.set_nodelay(true).map_err(ProbeError::Io)?;
         timeout(self.read_timeout, async {
             stream.write_all(hello).await.map_err(ProbeError::Io)?;
@@ -118,6 +128,40 @@ impl Transport {
         .await
         .map_err(|_| ProbeError::Timeout)?
     }
+}
+
+/// Connects to `addr`, binding the socket to `source` first when given.
+///
+/// # Errors
+/// Returns [`ProbeError::Connect`] when binding or connecting fails, when
+/// `source` and `addr` are from different address families, or with
+/// [`io::ErrorKind::TimedOut`] when `connect_timeout` expires.
+pub(crate) async fn connect(
+    addr: SocketAddr,
+    source: Option<IpAddr>,
+    connect_timeout: Duration,
+) -> Result<TcpStream, ProbeError> {
+    let socket = if addr.is_ipv4() {
+        TcpSocket::new_v4()
+    } else {
+        TcpSocket::new_v6()
+    }
+    .map_err(ProbeError::Connect)?;
+    if let Some(ip) = source {
+        if ip.is_ipv4() != addr.is_ipv4() {
+            return Err(ProbeError::Connect(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("source address {ip} cannot reach {addr} (different address family)"),
+            )));
+        }
+        socket
+            .bind(SocketAddr::new(ip, 0))
+            .map_err(ProbeError::Connect)?;
+    }
+    timeout(connect_timeout, socket.connect(addr))
+        .await
+        .map_err(|_| ProbeError::Connect(io::ErrorKind::TimedOut.into()))?
+        .map_err(ProbeError::Connect)
 }
 
 async fn read_response(stream: &mut TcpStream) -> Result<HelloResponse, ProbeError> {
@@ -181,5 +225,26 @@ mod tests {
         let mut t = Transport::new(addr);
         t.read_timeout = Duration::from_millis(100);
         assert!(matches!(t.exchange(b"x").await, Err(ProbeError::Timeout)));
+    }
+
+    /// A source address is bound before connecting; one of the other
+    /// address family is rejected without connecting.
+    #[tokio::test]
+    async fn source_address() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let peer = tokio::spawn(async move { listener.accept().await.unwrap().1 });
+        let mut t = Transport::new(addr);
+        t.source = Some("127.0.0.1".parse().unwrap());
+        let stream = t.connect().await.unwrap();
+        assert_eq!(peer.await.unwrap(), stream.local_addr().unwrap());
+        assert_eq!(stream.local_addr().unwrap().ip(), t.source.unwrap());
+
+        t.source = Some("::1".parse().unwrap());
+        let Err(ProbeError::Connect(e)) = t.connect().await else {
+            panic!("connected across address families");
+        };
+        assert_eq!(e.kind(), io::ErrorKind::InvalidInput);
+        assert!(e.to_string().contains("different address family"), "{e}");
     }
 }

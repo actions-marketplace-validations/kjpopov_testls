@@ -17,6 +17,8 @@ All notable changes to `testls` are listed here. The format follows
   stderr when they differ in protocols, cipher suites or certificate.
 - `--resolve HOST:PORT:ADDR[,ADDR...]` connects to the given addresses
   instead of looking up the target host name, keeping the name for SNI.
+- `--source-ip ADDR` connects from a chosen local address, for the target
+  and for revocation lookups.
 
 ## [0.3.0] - 2026-10-26
 

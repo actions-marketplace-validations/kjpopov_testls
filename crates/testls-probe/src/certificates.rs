@@ -83,13 +83,7 @@ pub(crate) async fn connect_tls(
             .map_err(|_| ProbeError::Unexpected("SNI is not a valid server name"))?,
         None => ServerName::from(transport.addr.ip()),
     };
-    let stream = timeout(
-        transport.connect_timeout,
-        TcpStream::connect(transport.addr),
-    )
-    .await
-    .map_err(|_| ProbeError::Timeout)?
-    .map_err(ProbeError::Connect)?;
+    let stream = transport.connect().await?;
     stream.set_nodelay(true).map_err(ProbeError::Io)?;
 
     let connector = TlsConnector::from(Arc::new(config));
