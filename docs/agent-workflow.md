@@ -66,7 +66,8 @@ CodeRabbit is happy when either:
 
 - or, for a PR it rates above `low` merge risk (no auto-approval, see
   `.coderabbit.yaml`), the latest commit's review has no actionable comments,
-  `gh pr checks` shows "Review completed" and the merge state is `CLEAN`;
+  all CodeRabbit threads are resolved, `gh pr checks` shows "Review
+  completed" and the merge state is `CLEAN`;
   mention the risk to the maintainer.
 
 Auto-approval also needs resolved threads and passing pre-merge checks
