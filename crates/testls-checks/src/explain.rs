@@ -578,8 +578,8 @@ const EXPLANATIONS: &[Explanation] = &[
     entry(
         "policy.cert_key",
         "Certificate key type or size outside the policy",
-        "The chosen policy limits leaf keys, e.g. Mozilla modern allows only ECDSA on P-256 or P-384 and intermediate also RSA of at least 2048 bits. Reissue the certificate with an allowed key.",
-        "Mozilla Server Side TLS 6.0",
+        "The chosen policy limits leaf keys, e.g. Mozilla modern allows only ECDSA on P-256 or P-384, Mozilla intermediate and NIST SP 800-52r2 also RSA of at least 2048 bits. Reissue the certificate with an allowed key.",
+        "Mozilla Server Side TLS 6.0; NIST SP 800-52r2 §3.2.1",
     ),
     entry(
         "policy.cert_lifespan",
@@ -590,20 +590,20 @@ const EXPLANATIONS: &[Explanation] = &[
     entry(
         "policy.cert_signature",
         "Certificate signature algorithm outside the policy",
-        "The chosen policy lists the signature algorithms the leaf certificate may use, e.g. ECDSA with SHA-2 and, for Mozilla intermediate, sha256WithRSAEncryption.",
-        "Mozilla Server Side TLS 6.0",
+        "The chosen policy lists the signature algorithms the leaf certificate may use, e.g. ECDSA with SHA-2 and, for Mozilla intermediate, sha256WithRSAEncryption; NIST SP 800-52r2 also allows RSA with SHA-384, SHA-512 and RSASSA-PSS.",
+        "Mozilla Server Side TLS 6.0; NIST SP 800-52r2 §3.2.1",
     ),
     entry(
         "policy.cipher",
         "Cipher suite outside the policy",
         "The server accepts a cipher suite the chosen policy does not list. It may not be broken, but disabling it brings the configuration in line with the policy.",
-        "Mozilla Server Side TLS 6.0",
+        "Mozilla Server Side TLS 6.0; NIST SP 800-52r2 §3.3.1",
     ),
     entry(
         "policy.group",
         "Key exchange group outside the policy",
-        "The server accepts a named group the chosen policy does not list; Mozilla allows X25519MLKEM768, x25519, secp256r1 and secp384r1.",
-        "Mozilla Server Side TLS 6.0",
+        "The server accepts a named group the chosen policy does not list; Mozilla allows X25519MLKEM768, x25519, secp256r1 and secp384r1, NIST SP 800-52r2 the NIST curves and ffdhe groups.",
+        "Mozilla Server Side TLS 6.0; NIST SP 800-52r2 §3.4.2.2",
     ),
     entry(
         "policy.hsts",
@@ -620,8 +620,8 @@ const EXPLANATIONS: &[Explanation] = &[
     entry(
         "policy.protocol",
         "Protocol version outside the policy",
-        "The server offers a protocol version the chosen policy does not allow; Mozilla modern allows only TLSv1.3 and intermediate TLSv1.2 and TLSv1.3.",
-        "Mozilla Server Side TLS 6.0",
+        "The server offers a protocol version the chosen policy does not allow; Mozilla modern allows only TLSv1.3, Mozilla intermediate and NIST SP 800-52r2 TLSv1.2 and TLSv1.3.",
+        "Mozilla Server Side TLS 6.0; NIST SP 800-52r2 §3.1",
     ),
 ];
 

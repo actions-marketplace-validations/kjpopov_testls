@@ -3,6 +3,8 @@
 //!
 //! The Mozilla profiles follow the Mozilla Server Side TLS guidelines,
 //! version 6.0 (<https://ssl-config.mozilla.org/guidelines/6.0.json>).
+//! The NIST profile follows NIST SP 800-52 revision 2
+//! (<https://doi.org/10.6028/NIST.SP.800-52r2>).
 //! Suite and group code points are from the IANA TLS parameter registries.
 
 use std::fmt;
@@ -32,11 +34,18 @@ pub enum Policy {
     MozillaModern,
     /// Mozilla "intermediate": TLSv1.2 and TLSv1.3, AEAD suites with ECDHE.
     MozillaIntermediate,
+    /// NIST SP 800-52r2 for servers used by government clients: TLSv1.2
+    /// and TLSv1.3, NIST-approved suites, groups and certificates.
+    Nist80052r2,
 }
 
 impl Policy {
     /// All policies, in the order they are listed on the command line.
-    pub const ALL: [Self; 2] = [Self::MozillaModern, Self::MozillaIntermediate];
+    pub const ALL: [Self; 3] = [
+        Self::MozillaModern,
+        Self::MozillaIntermediate,
+        Self::Nist80052r2,
+    ];
 
     /// Name used on the command line and in finding messages.
     #[must_use]
@@ -44,6 +53,7 @@ impl Policy {
         match self {
             Self::MozillaModern => "mozilla-modern",
             Self::MozillaIntermediate => "mozilla-intermediate",
+            Self::Nist80052r2 => "nist-800-52r2",
         }
     }
 
@@ -52,6 +62,7 @@ impl Policy {
         match self {
             Self::MozillaModern => &MOZILLA_MODERN,
             Self::MozillaIntermediate => &MOZILLA_INTERMEDIATE,
+            Self::Nist80052r2 => &NIST_800_52R2,
         }
     }
 }
@@ -90,10 +101,10 @@ struct Rules {
     curves: &'static [(&'static str, &'static str)],
     /// Leaf signature algorithms (OIDs).
     signatures: &'static [(&'static str, &'static str)],
-    /// Longest allowed leaf validity period in days.
-    lifespan_days: i64,
-    /// Minimum HSTS `max-age` in seconds.
-    hsts_max_age: u64,
+    /// Longest allowed leaf validity period in days, if limited.
+    lifespan_days: Option<i64>,
+    /// Minimum HSTS `max-age` in seconds, if HSTS is required.
+    hsts_max_age: Option<u64>,
 }
 
 /// TLSv1.3 suites of both Mozilla profiles: `TLS_AES_128_GCM_SHA256`,
@@ -136,8 +147,8 @@ static MOZILLA_MODERN: Rules = Rules {
     rsa_bits: None,
     curves: MOZILLA_CURVES,
     signatures: ECDSA_SIGNATURES,
-    lifespan_days: 90,
-    hsts_max_age: MOZILLA_HSTS_MAX_AGE,
+    lifespan_days: Some(90),
+    hsts_max_age: Some(MOZILLA_HSTS_MAX_AGE),
 };
 
 /// Mozilla "intermediate". The TLSv1.2 suites are the ECDHE AEAD suites
@@ -150,8 +161,66 @@ static MOZILLA_INTERMEDIATE: Rules = Rules {
     rsa_bits: Some(2048),
     curves: MOZILLA_CURVES,
     signatures: INTERMEDIATE_SIGNATURES,
-    lifespan_days: 366,
-    hsts_max_age: MOZILLA_HSTS_MAX_AGE,
+    lifespan_days: Some(366),
+    hsts_max_age: Some(MOZILLA_HSTS_MAX_AGE),
+};
+
+/// TLSv1.3 suites of NIST SP 800-52r2 §3.3.1.2: `TLS_AES_128_GCM_SHA256`,
+/// `TLS_AES_256_GCM_SHA384`, `TLS_AES_128_CCM_SHA256`,
+/// `TLS_AES_128_CCM_8_SHA256`.
+const NIST_TLS13_SUITES: &[u16] = &[0x1301, 0x1302, 0x1304, 0x1305];
+
+/// TLSv1.2 suites of NIST SP 800-52r2 §3.3.1.1, for ECDSA, RSA, DSA, DH and
+/// ECDH certificates in the document's order. RSA key transport suites
+/// (appendix D, transition only) and PSK suites (appendix C) are excluded.
+const NIST_SUITES: &[u16] = &[
+    // ECDHE-ECDSA.
+    0xc02b, 0xc02c, 0xc0ac, 0xc0ad, 0xc0ae, 0xc0af, 0xc023, 0xc024, 0xc009, 0xc00a,
+    // ECDHE-RSA.
+    0xc02f, 0xc030, 0xc027, 0xc028, 0xc013, 0xc014, // DHE-RSA.
+    0x009e, 0x009f, 0xc09e, 0xc09f, 0xc0a2, 0xc0a3, 0x0067, 0x006b, 0x0033, 0x0039,
+    // DHE-DSS.
+    0x00a2, 0x00a3, 0x0040, 0x006a, 0x0032, 0x0038, // DH-DSS.
+    0x00a4, 0x00a5, 0x003e, 0x0068, 0x0030, 0x0036, // DH-RSA.
+    0x00a0, 0x00a1, 0x003f, 0x0069, 0x0031, 0x0037, // ECDH-ECDSA.
+    0xc02d, 0xc02e, 0xc025, 0xc026, 0xc004, 0xc005, // ECDH-RSA.
+    0xc031, 0xc032, 0xc029, 0xc02a, 0xc00e, 0xc00f,
+];
+
+/// Groups of NIST SP 800-52r2 §3.4.2.2, which points to the SP 800-56A
+/// appendix D groups: `secp256r1`, `secp384r1`, `secp521r1` and
+/// `ffdhe2048` to `ffdhe8192`.
+const NIST_GROUPS: &[u16] = &[
+    0x0017, 0x0018, 0x0019, 0x0100, 0x0101, 0x0102, 0x0103, 0x0104,
+];
+
+/// Leaf signature algorithms of NIST SP 800-52r2 §3.2.1 and SP 800-57
+/// part 1 (at least 112-bit security, SHA-2): RSA PKCS #1 v1.5 and PSS
+/// (RFC 8017 appendix C) and ECDSA.
+const NIST_SIGNATURES: &[(&str, &str)] = &[
+    ("1.2.840.10045.4.3.2", "ecdsa-with-SHA256"),
+    ("1.2.840.10045.4.3.3", "ecdsa-with-SHA384"),
+    ("1.2.840.10045.4.3.4", "ecdsa-with-SHA512"),
+    ("1.2.840.113549.1.1.11", "sha256WithRSAEncryption"),
+    ("1.2.840.113549.1.1.12", "sha384WithRSAEncryption"),
+    ("1.2.840.113549.1.1.13", "sha512WithRSAEncryption"),
+    ("1.2.840.113549.1.1.10", "RSASSA-PSS"),
+];
+
+/// NIST SP 800-52r2 for government-only servers: TLSv1.2 and TLSv1.3
+/// (§3.1), RSA keys of at least 2048 bits and ECDSA on P-256 or P-384
+/// (§3.2.1). DSA leaf keys are reported because FIPS 186-5 withdrew DSA
+/// signature generation. No HSTS or lifetime limits.
+static NIST_800_52R2: Rules = Rules {
+    versions: &[ProtocolVersion::TLS12, ProtocolVersion::TLS13],
+    tls13_suites: NIST_TLS13_SUITES,
+    suites: NIST_SUITES,
+    groups: NIST_GROUPS,
+    rsa_bits: Some(2048),
+    curves: MOZILLA_CURVES,
+    signatures: NIST_SIGNATURES,
+    lifespan_days: None,
+    hsts_max_age: None,
 };
 
 /// Scan results a policy is checked against. `None` means the part was not
@@ -224,9 +293,11 @@ pub fn policy_findings(policy: Policy, input: &PolicyInput<'_>) -> Vec<Finding> 
         Some(leaf) => findings.extend(certificate_deviations(policy, leaf)),
         None => untested.push("certificate"),
     }
-    match input.http {
-        Some(response) => findings.extend(hsts_deviation(policy, response, rules.hsts_max_age)),
-        None => untested.push("HSTS"),
+    if let Some(min_age) = rules.hsts_max_age {
+        match input.http {
+            Some(response) => findings.extend(hsts_deviation(policy, response, min_age)),
+            None => untested.push("HSTS"),
+        }
     }
     if !untested.is_empty() {
         findings.push(Finding::new(
@@ -330,20 +401,19 @@ fn certificate_deviations(policy: Policy, leaf: &[u8]) -> Vec<Finding> {
             policy,
             &format!(
                 "leaf certificate is signed with {}",
-                label(&signature, INTERMEDIATE_SIGNATURES)
+                label(&signature, NIST_SIGNATURES)
             ),
         ));
     }
     let validity = cert.validity();
     let days = (validity.not_after.timestamp() - validity.not_before.timestamp()) / DAY;
-    if days > rules.lifespan_days {
+    if let Some(max) = rules.lifespan_days
+        && days > max
+    {
         findings.push(deviation(
             "policy.cert_lifespan",
             policy,
-            &format!(
-                "leaf certificate is valid for {days} days, more than {}",
-                rules.lifespan_days
-            ),
+            &format!("leaf certificate is valid for {days} days, more than {max}"),
         ));
     }
     findings
@@ -686,6 +756,77 @@ mod tests {
         );
     }
 
+    /// NIST SP 800-52r2 allows DHE and CCM but not `ChaCha20` or x25519, and
+    /// asks for neither HSTS nor short certificate lifetimes.
+    #[test]
+    fn nist_server() {
+        let protocols = protocols(&[ProtocolVersion::TLS12, ProtocolVersion::TLS13]);
+        let ciphers = [
+            ciphers(ProtocolVersion::TLS12, &[0xc02f, 0x009e, 0xc0a2, 0x009c]),
+            ciphers(ProtocolVersion::TLS13, &[0x1301, 0x1304, 0x1303]),
+        ];
+        let key_exchange = [
+            groups(ProtocolVersion::TLS12, &[0x0017, 0x0100]),
+            groups(ProtocolVersion::TLS13, &[0x0018, 0x001d]),
+        ];
+        let chain = [RSA2048.to_vec()];
+        let input = PolicyInput {
+            protocols: &protocols,
+            ciphers: Some(&ciphers),
+            cipher_errors: &[],
+            key_exchange: Some(&key_exchange),
+            key_exchange_errors: &[],
+            chain: Some(&chain),
+            http: None,
+        };
+        let tail = ", which nist-800-52r2 does not allow";
+        let expected = [
+            (
+                "policy.cipher",
+                "TLSv1.2 accepts TLS_RSA_WITH_AES_128_GCM_SHA256",
+            ),
+            (
+                "policy.cipher",
+                "TLSv1.3 accepts TLS_CHACHA20_POLY1305_SHA256",
+            ),
+            (
+                "policy.group",
+                "key exchange group x25519 (0x001d) is accepted",
+            ),
+        ]
+        .map(|(id, what)| (id.to_owned(), format!("{what}{tail}")));
+        assert_eq!(
+            summary(&policy_findings(Policy::Nist80052r2, &input)),
+            expected
+        );
+
+        let legacy = self::protocols(&[ProtocolVersion::TLS11, ProtocolVersion::TLS12]);
+        let chain = [RSA1024_SHA1.to_vec()];
+        let input = PolicyInput {
+            protocols: &legacy,
+            ciphers: Some(&[]),
+            key_exchange: Some(&[]),
+            chain: Some(&chain),
+            ..input
+        };
+        let ids: Vec<_> = policy_findings(Policy::Nist80052r2, &input)
+            .into_iter()
+            .map(|f| f.id)
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                "policy.protocol",
+                "policy.cert_key",
+                "policy.cert_signature"
+            ]
+        );
+        assert_eq!(
+            certificate_deviations(Policy::Nist80052r2, EC_LOCALHOST),
+            []
+        );
+    }
+
     /// Names round-trip through `FromStr`.
     #[test]
     fn names() {
@@ -693,6 +834,7 @@ mod tests {
             assert_eq!(policy.as_str().parse::<Policy>(), Ok(policy));
         }
         assert_eq!("MOZILLA-MODERN".parse(), Ok(Policy::MozillaModern));
+        assert_eq!("NIST-800-52R2".parse(), Ok(Policy::Nist80052r2));
         assert!("pci".parse::<Policy>().is_err());
     }
 }
