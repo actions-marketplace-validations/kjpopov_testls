@@ -1,7 +1,8 @@
-//! Text, JSON, SARIF, JUnit and Markdown report renderers and exit-code
-//! policy.
+//! Text, JSON, SARIF, JUnit, Markdown and CSV report renderers and
+//! exit-code policy.
 
 mod colour;
+pub mod csv;
 mod format;
 pub mod json;
 pub mod junit;
