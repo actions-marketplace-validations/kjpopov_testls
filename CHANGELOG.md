@@ -11,6 +11,8 @@ All notable changes to `testls` are listed here. The format follows
 - Several targets per run: list them on the command line or in a file with
   `--file` (one per line, `#` comments). JSON output becomes an array of
   documents and the exit code is the worst of all targets.
+- CIDR ranges as targets, such as `192.0.2.0/28` or `[2001:db8::/120]:8443`
+  (at most 16 host bits).
 
 ## [0.3.0] - 2026-10-26
 
