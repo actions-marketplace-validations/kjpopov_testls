@@ -10,9 +10,10 @@
 TLS/SSL scanner for the web era, written in Rust and inspired by
 [testssl.sh](https://testssl.sh). Single static binary. No bash. No subprocess.
 
-> **Status: v0.2.** The command-line scanner checks protocols, cipher suites,
-> key exchange, certificates, revocation and HTTP security headers; the
-> features marked v0.3 and later are planned. See
+> **Status: v0.3.** The command-line scanner checks protocols, cipher suites,
+> key exchange, certificates, revocation, HTTP security headers, derived
+> vulnerabilities, ClientHello tolerance and post-quantum readiness; the
+> features marked v0.4 and later are planned. See
 > [docs/PLAN.md](docs/PLAN.md) and [CHANGELOG.md](CHANGELOG.md).
 
 ## Why
@@ -31,8 +32,8 @@ Download a prebuilt binary for Linux (static musl, x86_64/aarch64), macOS
 `SHA256SUMS`, and put `testls` on your `PATH`:
 
 ```bash
-tar xzf testls-v0.2.0-x86_64-unknown-linux-musl.tar.gz
-./testls-v0.2.0-x86_64-unknown-linux-musl/testls example.com
+tar xzf testls-v0.3.0-x86_64-unknown-linux-musl.tar.gz
+./testls-v0.3.0-x86_64-unknown-linux-musl/testls example.com
 ```
 
 On macOS the binaries are not notarized yet; clear the quarantine flag with
@@ -77,6 +78,8 @@ A web service (`testls serve`, REST API and browser UI) is planned for v0.6.
 | HTTP headers | HSTS, preload, header hygiene | v0.2 |
 | Revocation | OCSP stapling, OCSP/CRL | v0.2 |
 | Vulnerabilities | Derived checks: POODLE, BEAST, SWEET32, Logjam, … | v0.3 |
+| Handshake | ClientHello tolerance, TLSv1.3 details, post-quantum readiness | v0.3 |
+| Certificates+ | Lifetime vs CA/B Baseline Requirements, embedded SCTs | v0.3 |
 | Workflow | Multiple targets, SARIF/JUnit/HTML, baselines, policies | v0.4 |
 | STARTTLS | SMTP, IMAP, POP3, … | v0.5 |
 | Intrusive checks | Heartbleed, CCS injection, Ticketbleed, ROBOT (`--intrusive`) | v0.5 |

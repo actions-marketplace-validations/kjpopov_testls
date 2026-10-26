@@ -6,6 +6,11 @@ All notable changes to `testls` are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-26
+
+Finding ids, derived vulnerabilities, ClientHello tolerance, TLSv1.3 details,
+post-quantum readiness, certificate lifetime and HTTP extras.
+
 ### Added
 
 - `testls explain [ID]` describes a finding id with its rationale and a
@@ -119,7 +124,8 @@ First pre-release.
 - Target parsing for host, host:port, IPv4/IPv6 and URLs, plus `--sni`.
 - Release binaries for Linux (static musl), macOS and Windows.
 
-[Unreleased]: https://github.com/kjpopov/testls/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/kjpopov/testls/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/kjpopov/testls/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/kjpopov/testls/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/kjpopov/testls/compare/v0.1.0-alpha.1...v0.1.0
 [0.1.0-alpha.1]: https://github.com/kjpopov/testls/releases/tag/v0.1.0-alpha.1
