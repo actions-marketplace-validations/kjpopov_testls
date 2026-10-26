@@ -1,7 +1,8 @@
 # JSON report schema
 
 `testls --format json` prints one JSON document to stdout when the scan
-finishes. This page describes schema version **1**.
+finishes. With several targets it prints a JSON array holding one document
+per target, in scan order. This page describes schema version **1**.
 
 ## Stability
 
@@ -11,8 +12,11 @@ finishes. This page describes schema version **1**.
   fields they do not know.
 - Finding `id`s are stable. New ids may appear in any release;
   `testls explain <id>` describes each one.
-- Scan errors (exit code 2) print a message to stderr and no JSON.
-- The exit code is the same as for text output (see `--fail-on`).
+- Scan errors (exit code 2) print a message to stderr and no JSON. With
+  several targets, a target whose scan fails is left out of the array and
+  the others are still reported.
+- The exit code is the same as for text output (see `--fail-on`); with
+  several targets the worst one wins (2 over 1 over 0).
 
 ## Document
 

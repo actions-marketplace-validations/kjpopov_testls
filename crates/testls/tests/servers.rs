@@ -466,3 +466,57 @@ fn explain_subcommand() {
     let stderr = String::from_utf8(out.stderr).expect("utf-8 output");
     assert!(stderr.contains("unknown finding id"), "{stderr}");
 }
+
+/// Several targets, here one positional and one from `--file`, are scanned
+/// in order; JSON becomes an array and the worst exit code wins.
+#[test]
+#[ignore = "needs tests/servers running"]
+fn multiple_targets() {
+    wait_for("127.0.0.1:14433");
+    wait_for("127.0.0.1:14434");
+    let list = std::env::temp_dir().join(format!("testls-multi-{}", std::process::id()));
+    std::fs::write(&list, "# test servers\n127.0.0.1:14434\n").expect("write list");
+    let run = |format: &str| {
+        Command::new(env!("CARGO_BIN_EXE_testls"))
+            .args(["127.0.0.1:14433", "--file"])
+            .arg(&list)
+            .args(["--ca-file", CA_FILE, "--format", format])
+            .output()
+            .expect("run testls")
+    };
+    let text = run("text");
+    let stdout = String::from_utf8(text.stdout).expect("utf-8 output");
+    let headers: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.starts_with("Target: "))
+        .collect();
+    assert_eq!(headers.len(), 2, "{stdout}");
+    assert!(headers[0].starts_with("Target: 127.0.0.1:14433"));
+    assert!(headers[1].starts_with("Target: 127.0.0.1:14434"));
+    assert_eq!(text.status.code(), Some(1));
+    let json = run("json");
+    std::fs::remove_file(&list).expect("remove list");
+    let v: serde_json::Value = serde_json::from_slice(&json.stdout).expect("valid JSON");
+    let docs = v.as_array().expect("array");
+    assert_eq!(docs.len(), 2);
+    assert_eq!(docs[0]["target"]["input"], "127.0.0.1:14433");
+    assert_eq!(docs[1]["target"]["input"], "127.0.0.1:14434");
+    assert_eq!(json.status.code(), Some(1));
+}
+
+/// A bad line in `--file` is a scan error that names the line, reported
+/// before any connection is made.
+#[test]
+fn bad_target_file_is_scan_error() {
+    let list = std::env::temp_dir().join(format!("testls-bad-list-{}", std::process::id()));
+    std::fs::write(&list, "127.0.0.1:1\nftp://example.com\n").expect("write list");
+    let out = Command::new(env!("CARGO_BIN_EXE_testls"))
+        .arg("--file")
+        .arg(&list)
+        .output()
+        .expect("run testls");
+    std::fs::remove_file(&list).expect("remove list");
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8(out.stderr).expect("utf-8 output");
+    assert!(stderr.contains(":2: unsupported URL scheme"), "{stderr}");
+}
