@@ -40,7 +40,7 @@ gh api repos/kjpopov/testls/pulls/N/reviews --jq '.[]
   | .user.login + " " + .commit_id[:7] + " "
     + (.body | capture("Actionable comments posted: (?<n>[0-9]+)").n // "none")
     + " " + (.body | test("Outside diff|Nitpick") | tostring)'
-gh api repos/kjpopov/testls/pulls/reviews/ID --jq .body   # read one body
+gh api repos/kjpopov/testls/pulls/N/reviews/ID --jq .body   # read one body
 ```
 
 Inline comments (save to a file, then `jq`, to avoid shell quoting issues):
@@ -89,8 +89,9 @@ timeout. Work on the next branch while a review runs.
   fresh checkout or `cargo test` fails in `testls-checks`.
 - Check `git branch --show-current` before committing when juggling stacked
   branches.
-- `rustup` is not installed on the development Mac; `cargo +1.97` fails
-  locally, CI runs the MSRV job.
+- Run the MSRV check from AGENTS.md when `rustup` is available. Without it
+  (as on the current development Mac) `cargo +1.97` fails; say so in the PR
+  and rely on the CI `msrv` job.
 - clippy `too_many_lines` (100) bites `main.rs` and long JSON test
   fixtures; extract helpers or compact expected JSON.
 - The test servers' CA key was discarded; certificates needing a CA we
