@@ -19,17 +19,20 @@ pub enum Format {
     Markdown,
     /// One CSV document printed when the scan finishes.
     Csv,
+    /// One self-contained HTML page printed when the scan finishes.
+    Html,
 }
 
 impl Format {
     /// All formats, in the order shown in `--help`.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Text,
         Self::Json,
         Self::Sarif,
         Self::Junit,
         Self::Markdown,
         Self::Csv,
+        Self::Html,
     ];
 
     /// Lower-case name, as used on the command line.
@@ -42,14 +45,18 @@ impl Format {
             Self::Junit => "junit",
             Self::Markdown => "markdown",
             Self::Csv => "csv",
+            Self::Html => "html",
         }
     }
 
     /// Whether the format summarises findings across all scans in one
-    /// document (SARIF, JUnit, Markdown, CSV).
+    /// document (SARIF, JUnit, Markdown, CSV, HTML).
     #[must_use]
     pub fn is_summary(self) -> bool {
-        matches!(self, Self::Sarif | Self::Junit | Self::Markdown | Self::Csv)
+        matches!(
+            self,
+            Self::Sarif | Self::Junit | Self::Markdown | Self::Csv | Self::Html
+        )
     }
 }
 
@@ -76,7 +83,7 @@ impl std::error::Error for ParseFormatError {}
 impl FromStr for Format {
     type Err = ParseFormatError;
 
-    /// Parses `text`, `json`, `sarif`, `junit`, `markdown` or `csv`.
+    /// Parses `text`, `json`, `sarif`, `junit`, `markdown`, `csv` or `html`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::ALL
             .into_iter()
@@ -100,5 +107,6 @@ mod tests {
         assert_eq!(Format::default(), Format::Text);
         assert!(!Format::Text.is_summary() && !Format::Json.is_summary());
         assert!(Format::Markdown.is_summary() && Format::Csv.is_summary());
+        assert!(Format::Html.is_summary());
     }
 }

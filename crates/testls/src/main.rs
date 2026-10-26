@@ -27,7 +27,7 @@ use testls_probe::{
     probe_key_exchange,
 };
 use testls_report::text::{self, CertificateSection, CipherSection, KeyExchangeSection};
-use testls_report::{ColorChoice, Format, Painter, csv, json, junit, markdown, sarif};
+use testls_report::{ColorChoice, Format, Painter, csv, html, json, junit, markdown, sarif};
 use testls_wire::ProtocolVersion;
 
 use target::{Host, ProxySpec, ResolveOverride, Target, TargetSpec};
@@ -128,7 +128,8 @@ struct Cli {
     /// findings at the end, `junit` prints one JUnit XML document at the
     /// end with findings at or above `--fail-on` as failures, `markdown`
     /// prints one Markdown summary at the end, `csv` prints one CSV row
-    /// per finding at the end.
+    /// per finding at the end, `html` prints one self-contained HTML page at
+    /// the end.
     #[arg(long, default_value_t = Format::Text, value_name = "FORMAT",
           value_parser = clap::builder::PossibleValuesParser::new(Format::ALL.map(Format::as_str))
               .map(|s| s.parse::<Format>().expect("listed value")))]
@@ -361,6 +362,9 @@ async fn scan_all(cli: &Cli) -> ExitCode {
     if cli.format == Format::Csv {
         print!("{}", csv::render(&finding_scans, &failures, cli.fail_on));
     }
+    if cli.format == Format::Html {
+        print!("{}", html::render(&finding_scans, &failures, cli.fail_on));
+    }
     ExitCode::from(code)
 }
 
@@ -415,10 +419,10 @@ struct Outcome {
     code: u8,
     /// Rendered JSON document, when `--format json` and the scan ran.
     json: Option<String>,
-    /// Findings for SARIF, JUnit, Markdown or CSV output, when one of
+    /// Findings for SARIF, JUnit, Markdown, CSV or HTML output, when one of
     /// those formats is chosen and the scan ran.
     findings: Option<sarif::Scan>,
-    /// Why the scan failed, for JUnit, Markdown and CSV output.
+    /// Why the scan failed, for JUnit, Markdown, CSV and HTML output.
     failure: Option<junit::Failure>,
     /// Summary compared across a host's addresses, when the scan ran.
     profile: Option<Profile>,
