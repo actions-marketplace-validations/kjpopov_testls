@@ -129,6 +129,121 @@ impl std::str::FromStr for Target {
     }
 }
 
+/// Most host bits a CIDR range may have, so one argument expands to at
+/// most 65,536 targets.
+pub const MAX_CIDR_HOST_BITS: u32 = 16;
+
+/// One command-line or `--file` entry: a single [`Target`] or a CIDR range
+/// (`192.0.2.0/30`, `192.0.2.0/30:8443`, `[2001:db8::/126]:8443`) expanded
+/// to every address it covers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TargetSpec(pub Vec<Target>);
+
+impl std::str::FromStr for TargetSpec {
+    type Err = ParseTargetError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let s = input.trim();
+        match cidr_parts(s)? {
+            Some((ip, len, port)) => expand_cidr(ip, len, port).map(Self),
+            None => Ok(Self(vec![s.parse()?])),
+        }
+    }
+}
+
+/// Address, prefix length and optional port of a CIDR range.
+type CidrParts<'a> = (IpAddr, &'a str, Option<&'a str>);
+
+/// Splits `s` into address, prefix length and port when it is CIDR
+/// notation; `None` means it is an ordinary target.
+///
+/// An IP literal followed by `/` and one to three digits counts as a CIDR
+/// range unless the digits continue as a path (`.`, `/`, `?`, `#`), so
+/// `192.0.2.1/2024.html` stays a URL path while `192.0.2.0/24x` is an
+/// error rather than a silently truncated target.
+fn cidr_parts(s: &str) -> Result<Option<CidrParts<'_>>, ParseTargetError> {
+    if s.contains("://") {
+        return Ok(None);
+    }
+    let bracketed = s.starts_with('[');
+    let (inner, port) = match s.strip_prefix('[') {
+        Some(rest) => {
+            let Some((inner, after)) = rest.split_once(']') else {
+                return Ok(None);
+            };
+            let port = match after {
+                "" => None,
+                p => match p.strip_prefix(':') {
+                    Some(p) => Some(p),
+                    None => return Ok(None),
+                },
+            };
+            (inner, port)
+        }
+        None => (s, None),
+    };
+    let Some((ip, tail)) = inner.split_once('/') else {
+        return Ok(None);
+    };
+    let Ok(ip) = ip.parse::<IpAddr>() else {
+        return Ok(None);
+    };
+    let digits = tail.bytes().take_while(u8::is_ascii_digit).count();
+    let (len, rest) = tail.split_at(digits);
+    if !(1..=3).contains(&digits) || rest.starts_with(['.', '/', '?', '#']) {
+        return Ok(None);
+    }
+    match rest.strip_prefix(':') {
+        None if rest.is_empty() => Ok(Some((ip, len, port))),
+        Some(p) if !bracketed && ip.is_ipv4() => Ok(Some((ip, len, Some(p)))),
+        Some(_) if !bracketed => Err(err("IPv6 CIDR range with port must use [brackets]")),
+        _ => Err(err(format!("invalid CIDR range `{s}`"))),
+    }
+}
+
+/// Lists every address of the range `ip/len` with `port` (default 443).
+fn expand_cidr(ip: IpAddr, len: &str, port: Option<&str>) -> Result<Vec<Target>, ParseTargetError> {
+    let bits = if ip.is_ipv4() { 32 } else { 128 };
+    let len: u32 = len
+        .parse()
+        .ok()
+        .filter(|&l| l <= bits)
+        .ok_or_else(|| err(format!("invalid prefix length `/{len}`")))?;
+    let host_bits = bits - len;
+    if host_bits > MAX_CIDR_HOST_BITS {
+        return Err(err(format!(
+            "CIDR range `/{len}` is too large; at most {MAX_CIDR_HOST_BITS} host bits are allowed"
+        )));
+    }
+    let port = match port {
+        None => DEFAULT_PORT,
+        Some(p) => p
+            .parse::<u16>()
+            .ok()
+            .filter(|&p| p != 0)
+            .ok_or_else(|| err(format!("invalid port `{p}`")))?,
+    };
+    let base = match ip {
+        IpAddr::V4(v4) => u128::from(u32::from(v4)),
+        IpAddr::V6(v6) => u128::from(v6),
+    };
+    let network = base >> host_bits << host_bits;
+    Ok((0..1u128 << host_bits)
+        .map(|offset| {
+            let n = network | offset;
+            let ip = match ip {
+                // The value fits: an IPv4 network plus at most 16 host bits.
+                IpAddr::V4(_) => IpAddr::V4(u32::try_from(n).unwrap_or_default().into()),
+                IpAddr::V6(_) => IpAddr::V6(n.into()),
+            };
+            Target {
+                host: Host::Ip(ip),
+                port,
+            }
+        })
+        .collect())
+}
+
 fn validate_name(name: &str) -> Result<String, ParseTargetError> {
     let name = name.strip_suffix('.').unwrap_or(name).to_ascii_lowercase();
     let label_ok = |l: &str| {
@@ -167,6 +282,59 @@ mod tests {
         assert_eq!(t("2001:db8::1").to_string(), "[2001:db8::1]:443");
         assert_eq!(t("[2001:db8::1]:8443").to_string(), "[2001:db8::1]:8443");
         assert_eq!(t("example.com.").host, Host::Name("example.com".into()));
+    }
+
+    /// Expands a spec to its display strings.
+    fn spec(s: &str) -> Vec<String> {
+        let TargetSpec(list) = s.parse().unwrap();
+        list.iter().map(ToString::to_string).collect()
+    }
+
+    /// CIDR ranges expand to every covered address, keeping the port.
+    #[test]
+    fn cidr_ranges() {
+        assert_eq!(
+            spec("192.0.2.5/30"),
+            [
+                "192.0.2.4:443",
+                "192.0.2.5:443",
+                "192.0.2.6:443",
+                "192.0.2.7:443"
+            ]
+        );
+        assert_eq!(spec("192.0.2.9/32:8443"), ["192.0.2.9:8443"]);
+        assert_eq!(
+            spec("[192.0.2.0/31]:993"),
+            ["192.0.2.0:993", "192.0.2.1:993"]
+        );
+        assert_eq!(
+            spec("[2001:db8::/127]:8443"),
+            ["[2001:db8::]:8443", "[2001:db8::1]:8443"]
+        );
+        assert_eq!(spec("2001:db8::7/128"), ["[2001:db8::7]:443"]);
+        assert_eq!(spec("0.0.0.0/16").len(), 65_536);
+        assert_eq!(spec("example.com:8443"), ["example.com:8443"]);
+        assert_eq!(spec("https://192.0.2.1/30"), ["192.0.2.1:443"]);
+        assert_eq!(spec("192.0.2.1/2024.html"), ["192.0.2.1:443"]);
+        assert_eq!(spec("192.0.2.1/24/index.html"), ["192.0.2.1:443"]);
+        assert_eq!(spec("192.0.2.1/1234"), ["192.0.2.1:443"]);
+        for bad in [
+            "192.0.2.0/24x",
+            "2001:db8::/120:8443",
+            "[2001:db8::/120]8443",
+            "192.0.2.0/24:8443x",
+            "192.0.2.0/33",
+            "192.0.2.0/15",
+            "2001:db8::/64",
+            "192.0.2.0/30:0",
+            "[2001:db8::/126]x",
+            "192.0.2.0/30:http",
+        ] {
+            assert!(
+                bad.parse::<TargetSpec>().is_err(),
+                "{bad} should be rejected"
+            );
+        }
     }
 
     #[test]

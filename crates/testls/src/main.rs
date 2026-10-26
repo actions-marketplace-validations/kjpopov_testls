@@ -30,7 +30,7 @@ use testls_report::text::{self, CertificateSection, CipherSection, KeyExchangeSe
 use testls_report::{ColorChoice, Format, Painter, json};
 use testls_wire::ProtocolVersion;
 
-use target::{Host, Target};
+use target::{Host, Target, TargetSpec};
 
 /// TLS/SSL scanner inspired by testssl.sh.
 #[derive(Debug, Parser)]
@@ -45,13 +45,14 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
 
-    /// Targets: host, host:port, [ipv6]:port, or https:// URL. Several
-    /// targets are scanned one after another.
+    /// Targets: host, host:port, [ipv6]:port, https:// URL, or a CIDR range
+    /// such as `192.0.2.0/28` or `[2001:db8::/120]:8443` (at most 16 host
+    /// bits). Several targets are scanned one after another.
     #[arg(required_unless_present = "file", value_name = "TARGET")]
-    targets: Vec<Target>,
+    targets: Vec<TargetSpec>,
 
-    /// Read more targets from FILE, one per line; blank lines and lines
-    /// starting with `#` are skipped.
+    /// Read more targets from FILE, one per line in the same forms; blank
+    /// lines and lines starting with `#` are skipped.
     #[arg(long, value_name = "FILE")]
     file: Option<PathBuf>,
 
@@ -178,9 +179,10 @@ async fn main() -> ExitCode {
     }
 }
 
-/// Collects the targets from the command line and `--file`, in that order.
+/// Collects the targets from the command line and `--file`, in that order,
+/// with CIDR ranges expanded.
 fn targets(cli: &Cli) -> Result<Vec<Target>, String> {
-    let mut targets = cli.targets.clone();
+    let mut targets: Vec<Target> = cli.targets.iter().flat_map(|s| s.0.clone()).collect();
     if let Some(path) = &cli.file {
         let text = std::fs::read_to_string(path)
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
@@ -199,8 +201,13 @@ fn parse_target_list(text: &str) -> Result<Vec<Target>, String> {
         .enumerate()
         .map(|(n, line)| (n + 1, line.trim()))
         .filter(|(_, line)| !line.is_empty() && !line.starts_with('#'))
-        .map(|(n, line)| line.parse().map_err(|e| format!("{n}: {e}")))
-        .collect()
+        .map(|(n, line)| {
+            line.parse::<TargetSpec>()
+                .map(|s| s.0)
+                .map_err(|e| format!("{n}: {e}"))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|lists| lists.concat())
 }
 
 /// Scans every target in turn. The exit code is 2 if any scan failed,
@@ -707,6 +714,8 @@ mod tests {
         ));
         let cli = Cli::try_parse_from(["testls", "a.example", "b.example:8443"]).expect("two");
         assert_eq!(cli.targets.len(), 2);
+        let cli = Cli::try_parse_from(["testls", "192.0.2.0/30"]).expect("range");
+        assert_eq!(targets(&cli).expect("targets").len(), 4);
         let cli = Cli::try_parse_from(["testls", "--file", "hosts.txt"]).expect("file only");
         assert_eq!(cli.targets, vec![]);
     }
@@ -717,6 +726,13 @@ mod tests {
         let list = parse_target_list("# hosts\n\na.example\n  b.example:8443  \n").expect("list");
         let names: Vec<String> = list.iter().map(ToString::to_string).collect();
         assert_eq!(names, ["a.example:443", "b.example:8443"]);
+        let list = parse_target_list("192.0.2.0/31:8443\n").expect("range");
+        assert_eq!(list.len(), 2);
+        assert!(
+            parse_target_list("ok.example\n192.0.2.0/8\n")
+                .unwrap_err()
+                .starts_with("2: ")
+        );
         let err = parse_target_list("a.example\nhttp://b.example\n").unwrap_err();
         assert!(err.starts_with("2: "), "{err}");
         assert_eq!(parse_target_list("# only\n").expect("empty"), vec![]);

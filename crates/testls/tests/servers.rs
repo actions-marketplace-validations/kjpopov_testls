@@ -475,7 +475,11 @@ fn multiple_targets() {
     wait_for("127.0.0.1:14433");
     wait_for("127.0.0.1:14434");
     let list = std::env::temp_dir().join(format!("testls-multi-{}", std::process::id()));
-    std::fs::write(&list, "# test servers\n127.0.0.1:14434\n").expect("write list");
+    std::fs::write(
+        &list,
+        "# test servers, one as a CIDR range\n127.0.0.1/32:14434\n",
+    )
+    .expect("write list");
     let run = |format: &str| {
         Command::new(env!("CARGO_BIN_EXE_testls"))
             .args(["127.0.0.1:14433", "--file"])

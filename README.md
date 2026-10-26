@@ -48,6 +48,9 @@ testls example.com
 # Several targets, from the command line and a file (one per line)
 testls example.com example.org:8443 --file hosts.txt
 
+# Every address in a range
+testls 192.0.2.0/28:8443
+
 # JSON output for scripts; exit status 1 if any finding is medium or worse
 testls --format json --fail-on medium example.com:8443
 

@@ -89,7 +89,8 @@ Two connection paths:
 
 ### v0.4 — Workflow
 - [x] Multiple targets on the command line and with `--file`
-- CIDR ranges, `--mx`; scan every A/AAAA address and report divergence
+- [x] CIDR ranges (at most 16 host bits per range)
+- `--mx`; scan every A/AAAA address and report divergence
 - Connection control: `--resolve`, proxy support, `--source-ip`
 - Output formats: SARIF, JUnit, Markdown, HTML, CSV
 - `--baseline` and `.testls.toml` suppressions with expiry dates
@@ -190,3 +191,4 @@ Not scheduled; pulled into a milestone when someone picks it up.
 | 40 | Certificate lifetime is checked against CA/B Forum BR §6.3.2 (398 days before 15 March 2026, then 200, 100 and 47 days by issue date) and embedded SCTs are counted (`cert.too_long`, `cert.no_sct`, `cert.sct_invalid`). These findings apply only when the chain verifies against the bundled Mozilla roots; the system store and `--ca-file` may hold private roots the BR do not bind. SCT signatures are not verified | The BR bind only publicly trusted CAs, so private PKI must not be flagged; verifying SCTs needs a CT log list, a moving data dependency |
 | 41 | HTTP extras reuse the single `GET /` reply: `Server` values with a version and any `X-Powered-By` are info (`header.banner`); cookies lacking `Secure` or using `SameSite=None` without it are low, missing `HttpOnly` or `SameSite` info; a malformed `Alt-Svc` is info. Header text is shown with control characters replaced | No extra requests; banners and cookie flags are hardening hints, while a cookie sent over plain HTTP is a real exposure |
 | 42 | Several targets (positional and `--file`, one per line with `#` comments) are scanned one after another with one trust store. Text output prints the sections per target; JSON prints the usual document for one target and an array of documents for more, leaving out targets whose scan failed. The exit code is the worst per target (2 over 1 over 0). A bad `--file` line stops the run before any connection | A single target keeps the schema-1 document unchanged for existing scripts; sequential scans keep the per-server politeness of a single scan; failing early on a typo avoids a half-finished batch |
+| 43 | A CIDR target (`192.0.2.0/28`, `192.0.2.0/28:8443`, `[2001:db8::/120]:8443`) expands to every address in the range, including network and broadcast addresses, scanned without SNI. A range may have at most 16 host bits (65,536 addresses) | Plain expansion keeps results predictable; the cap stops a typo such as `/8` from starting a scan of millions of hosts |
