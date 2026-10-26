@@ -86,11 +86,13 @@ pub struct Transport {
     pub read_timeout: Duration,
     /// Local address to connect from; the OS picks one when `None`.
     pub source: Option<IpAddr>,
+    /// HTTP proxy to tunnel through with `CONNECT`; direct when `None`.
+    pub proxy: Option<SocketAddr>,
 }
 
 impl Transport {
-    /// Transport with 5 s connect and 10 s read timeouts and no fixed
-    /// source address.
+    /// Transport with 5 s connect and 10 s read timeouts, no fixed source
+    /// address and no proxy.
     #[must_use]
     pub fn new(addr: SocketAddr) -> Self {
         Self {
@@ -98,16 +100,29 @@ impl Transport {
             connect_timeout: Duration::from_secs(5),
             read_timeout: Duration::from_secs(10),
             source: None,
+            proxy: None,
         }
     }
 
     /// Opens a TCP connection to [`Transport::addr`] from
-    /// [`Transport::source`] within the connect timeout.
+    /// [`Transport::source`], through [`Transport::proxy`] when set, within
+    /// the connect timeout.
     ///
     /// # Errors
-    /// As for [`connect`].
+    /// As for [`connect`] and [`tunnel`].
     pub(crate) async fn connect(&self) -> Result<TcpStream, ProbeError> {
-        connect(self.addr, self.source, self.connect_timeout).await
+        match self.proxy {
+            Some(proxy) => {
+                tunnel(
+                    proxy,
+                    self.source,
+                    self.connect_timeout,
+                    &self.addr.to_string(),
+                )
+                .await
+            }
+            None => connect(self.addr, self.source, self.connect_timeout).await,
+        }
     }
 
     /// Open a fresh connection, send an already encoded hello, and
@@ -162,6 +177,64 @@ pub(crate) async fn connect(
         .await
         .map_err(|_| ProbeError::Connect(io::ErrorKind::TimedOut.into()))?
         .map_err(ProbeError::Connect)
+}
+
+/// Opens a tunnel to `authority` (`host:port`) through the HTTP proxy at
+/// `proxy` with a `CONNECT` request (RFC 9110 §9.3.6), all within
+/// `connect_timeout`.
+///
+/// # Errors
+/// Returns [`ProbeError::Connect`] when the proxy cannot be reached, its
+/// reply is malformed or not 2xx, it sends bytes after the reply head, or
+/// with [`io::ErrorKind::TimedOut`] when `connect_timeout` expires.
+pub(crate) async fn tunnel(
+    proxy: SocketAddr,
+    source: Option<IpAddr>,
+    connect_timeout: Duration,
+    authority: &str,
+) -> Result<TcpStream, ProbeError> {
+    let proxy_error = |msg: String| ProbeError::Connect(io::Error::other(msg));
+    timeout(connect_timeout, async {
+        let mut stream = connect(proxy, source, connect_timeout).await?;
+        let request = format!("CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n\r\n");
+        stream
+            .write_all(request.as_bytes())
+            .await
+            .map_err(ProbeError::Connect)?;
+        let mut data = Vec::new();
+        let mut buf = [0; 1024];
+        let end = loop {
+            let n = stream.read(&mut buf).await.map_err(ProbeError::Connect)?;
+            if n == 0 {
+                return Err(proxy_error(format!(
+                    "proxy {proxy} closed the connection during CONNECT"
+                )));
+            }
+            data.extend_from_slice(&buf[..n]);
+            match http::complete_head(&data) {
+                Ok(Some(end)) => break end,
+                Ok(None) => {}
+                Err(e) => return Err(proxy_error(format!("proxy {proxy}: {e}"))),
+            }
+        };
+        let head = http::parse_head(&data[..end])
+            .map_err(|e| proxy_error(format!("proxy {proxy}: {e}")))?;
+        if !(200..300).contains(&head.status) {
+            return Err(proxy_error(format!(
+                "proxy {proxy} refused CONNECT {authority} with status {}",
+                head.status
+            )));
+        }
+        // The tunnel carries nothing before our first write.
+        if data.len() > end {
+            return Err(proxy_error(format!(
+                "proxy {proxy} sent data after its CONNECT reply"
+            )));
+        }
+        Ok(stream)
+    })
+    .await
+    .map_err(|_| ProbeError::Connect(io::ErrorKind::TimedOut.into()))?
 }
 
 async fn read_response(stream: &mut TcpStream) -> Result<HelloResponse, ProbeError> {
@@ -246,5 +319,73 @@ mod tests {
         };
         assert_eq!(e.kind(), io::ErrorKind::InvalidInput);
         assert!(e.to_string().contains("different address family"), "{e}");
+    }
+
+    /// Fake HTTP proxy that answers the `CONNECT` head with `reply`, then
+    /// plays the TLS server by answering the hello with `server_reply`.
+    /// Returns its address and the received `CONNECT` head.
+    async fn proxy(
+        reply: &'static [u8],
+        server_reply: &'static [u8],
+    ) -> (SocketAddr, tokio::task::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            let mut buf = [0; 512];
+            while !head.ends_with(b"\r\n\r\n") {
+                let n = s.read(&mut buf).await.unwrap();
+                assert_ne!(n, 0, "client closed before finishing CONNECT");
+                head.extend_from_slice(&buf[..n]);
+            }
+            s.write_all(reply).await.unwrap();
+            if !server_reply.is_empty() {
+                let _ = s.read(&mut buf).await.unwrap();
+                s.write_all(server_reply).await.unwrap();
+            }
+            String::from_utf8(head).unwrap()
+        });
+        (addr, task)
+    }
+
+    /// Probes go through the proxy's tunnel to the target address.
+    #[tokio::test]
+    async fn proxy_tunnel() {
+        let (proxy, head) = proxy(
+            b"HTTP/1.1 200 Connection established\r\n\r\n",
+            &[21, 3, 3, 0, 2, 2, 70],
+        )
+        .await;
+        let mut t = Transport::new("[2001:db8::1]:8443".parse().unwrap());
+        t.proxy = Some(proxy);
+        let r = t.exchange(b"hello").await.unwrap();
+        assert!(matches!(r, HelloResponse::Alert(a) if a.description == 70));
+        assert_eq!(
+            head.await.unwrap(),
+            "CONNECT [2001:db8::1]:8443 HTTP/1.1\r\nHost: [2001:db8::1]:8443\r\n\r\n"
+        );
+    }
+
+    /// A refused or garbled `CONNECT` is a connect error.
+    #[tokio::test]
+    async fn proxy_errors() {
+        for (reply, expected) in [
+            (&b"HTTP/1.1 403 Forbidden\r\n\r\n"[..], "status 403"),
+            (b"SSH-2.0-nope\r\n\r\n", "not an HTTP/1.x response"),
+            (
+                b"HTTP/1.1 200 OK\r\n\r\nextra",
+                "data after its CONNECT reply",
+            ),
+            (b"HTTP/1.1 200 OK\r\n", "closed the connection"),
+        ] {
+            let (proxy, _head) = proxy(reply, &[]).await;
+            let mut t = Transport::new("192.0.2.1:443".parse().unwrap());
+            t.proxy = Some(proxy);
+            let Err(ProbeError::Connect(e)) = t.exchange(b"hello").await else {
+                panic!("tunnel accepted {reply:?}");
+            };
+            assert!(e.to_string().contains(expected), "{e}");
+        }
     }
 }

@@ -6,7 +6,7 @@
 //! at a caller-chosen size. Redirects are not followed.
 
 use std::fmt::Write as _;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -28,6 +28,9 @@ pub struct Fetcher {
     /// Local address to connect from; the OS picks one when `None`.
     /// Resolved addresses of the other family are skipped.
     pub source: Option<IpAddr>,
+    /// HTTP proxy to tunnel through with `CONNECT`; the proxy then
+    /// resolves the host name. Direct when `None`.
+    pub proxy: Option<SocketAddr>,
 }
 
 /// Reply to a [`Fetcher`] request.
@@ -99,8 +102,18 @@ impl Fetcher {
         .map_err(|_| ProbeError::Timeout)?
     }
 
-    /// Connects to the first reachable address of the URL's host.
+    /// Connects to the first reachable address of the URL's host, or opens
+    /// a tunnel to it through the proxy.
     async fn connect(&self, url: &HttpUrl) -> Result<TcpStream, ProbeError> {
+        if let Some(proxy) = self.proxy {
+            let host = if url.host.contains(':') {
+                format!("[{}]", url.host)
+            } else {
+                url.host.clone()
+            };
+            let authority = format!("{host}:{}", url.port);
+            return crate::tunnel(proxy, self.source, self.connect_timeout, &authority).await;
+        }
         let addrs = timeout(
             self.connect_timeout,
             tokio::net::lookup_host((url.host.as_str(), url.port)),
@@ -425,7 +438,6 @@ mod tests {
     //! Unit tests for URL parsing, body framing and the request itself.
 
     use super::*;
-    use std::net::SocketAddr;
     use tokio::net::TcpListener;
 
     /// Fetcher with short timeouts and a 1 KiB body limit.
@@ -435,6 +447,7 @@ mod tests {
             read_timeout: Duration::from_secs(5),
             max_body: 1024,
             source: None,
+            proxy: None,
         }
     }
 
@@ -607,6 +620,48 @@ mod tests {
         assert!(
             matches!(r, Err(ProbeError::Unexpected(m)) if m.contains("address family")),
             "{r:?}"
+        );
+    }
+
+    /// With a proxy, the host name is sent unresolved in `CONNECT` and the
+    /// request goes through the tunnel.
+    #[tokio::test]
+    async fn through_proxy() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut data = Vec::new();
+            let mut buf = [0; 1024];
+            while !data.ends_with(b"\r\n\r\n") {
+                let n = s.read(&mut buf).await.unwrap();
+                data.extend_from_slice(&buf[..n]);
+            }
+            s.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await.unwrap();
+            let connect_len = data.len();
+            while !data[connect_len..].ends_with(b"\r\n\r\n") {
+                let n = s.read(&mut buf).await.unwrap();
+                data.extend_from_slice(&buf[..n]);
+            }
+            s.write_all(b"HTTP/1.1 204 No Content\r\n\r\n")
+                .await
+                .unwrap();
+            String::from_utf8(data).unwrap()
+        });
+        let via_proxy = Fetcher {
+            proxy: Some(proxy),
+            ..fetcher()
+        };
+        let r = via_proxy.get("http://ocsp.invalid:8080/x").await.unwrap();
+        assert_eq!(r.status, 204);
+        let seen = task.await.unwrap();
+        assert!(
+            seen.starts_with("CONNECT ocsp.invalid:8080 HTTP/1.1\r\n"),
+            "{seen}"
+        );
+        assert!(
+            seen.contains("GET /x HTTP/1.1\r\nHost: ocsp.invalid:8080\r\n"),
+            "{seen}"
         );
     }
 

@@ -19,6 +19,8 @@ All notable changes to `testls` are listed here. The format follows
   instead of looking up the target host name, keeping the name for SNI.
 - `--source-ip ADDR` connects from a chosen local address, for the target
   and for revocation lookups.
+- `--proxy [http://]HOST:PORT` tunnels all connections through an HTTP
+  proxy with `CONNECT`, including revocation lookups.
 
 ## [0.3.0] - 2026-10-26
 

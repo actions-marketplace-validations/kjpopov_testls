@@ -145,6 +145,89 @@ fn resolve_pins_address() {
     assert_eq!(v["http"]["status"], 200, "{}", v["http"]);
 }
 
+/// Starts an HTTP `CONNECT` proxy on a free port that tunnels to any
+/// address and records each request line it accepts.
+fn proxy() -> (SocketAddr, Arc<std::sync::Mutex<Vec<String>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("address");
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = Arc::clone(&seen);
+    thread::spawn(move || {
+        for client in listener.incoming().flatten() {
+            let log = Arc::clone(&log);
+            thread::spawn(move || tunnel(client, &log));
+        }
+    });
+    (addr, seen)
+}
+
+/// Reads one `CONNECT` request from `client`, connects to its target and
+/// relays bytes both ways until either side closes.
+fn tunnel(mut client: TcpStream, log: &std::sync::Mutex<Vec<String>>) {
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        match client.read(&mut byte) {
+            Ok(1) => head.push(byte[0]),
+            _ => return,
+        }
+    }
+    let head = String::from_utf8_lossy(&head);
+    let line = head.lines().next().unwrap_or_default().to_owned();
+    let Some(authority) = line
+        .strip_prefix("CONNECT ")
+        .and_then(|l| l.strip_suffix(" HTTP/1.1"))
+    else {
+        return;
+    };
+    let Ok(mut server) = TcpStream::connect(authority) else {
+        let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+        return;
+    };
+    log.lock().expect("log").push(line);
+    let _ = client.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n");
+    let (Ok(mut client_r), Ok(mut server_w)) = (client.try_clone(), server.try_clone()) else {
+        return;
+    };
+    let up = thread::spawn(move || {
+        let _ = std::io::copy(&mut client_r, &mut server_w);
+        let _ = server_w.shutdown(std::net::Shutdown::Write);
+    });
+    let _ = std::io::copy(&mut server, &mut client);
+    let _ = client.shutdown(std::net::Shutdown::Write);
+    let _ = up.join();
+}
+
+/// `--proxy` tunnels every probe through the proxy to the scanned address;
+/// an unresolvable proxy is a scan error.
+#[test]
+fn proxy_tunnels_scan() {
+    let addr = serve();
+    let (proxy, seen) = proxy();
+    let out = Command::new(env!("CARGO_BIN_EXE_testls"))
+        .arg(addr.to_string())
+        .args(["--sni", "localhost", "--proxy", &format!("http://{proxy}")])
+        .args(["--format", "json", "--fail-on", "critical"])
+        .output()
+        .expect("run testls");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("JSON output");
+    assert_eq!(v["target"]["address"], addr.to_string());
+    assert_eq!(v["http"]["status"], 200, "{}", v["http"]);
+    let seen = seen.lock().expect("log");
+    assert!(seen.len() > 1, "{seen:?}");
+    let expected = format!("CONNECT {addr} HTTP/1.1");
+    assert!(seen.iter().all(|l| *l == expected), "{seen:?}");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_testls"))
+        .arg(addr.to_string())
+        .args(["--proxy", "proxy.invalid:3128"])
+        .output()
+        .expect("run testls");
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("cannot resolve proxy"), "{stderr}");
+}
+
 /// `--source-ip` scans from the given address and rejects targets that
 /// have no address in its family as a scan error.
 #[test]

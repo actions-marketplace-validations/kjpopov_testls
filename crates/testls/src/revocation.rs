@@ -119,6 +119,7 @@ mod tests {
             read_timeout: Duration::from_secs(2),
             max_body: 0,
             source: None,
+            proxy: None,
         }
     }
 
