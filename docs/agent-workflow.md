@@ -59,7 +59,7 @@ CodeRabbit is happy when either:
 
   ```sh
   gh pr view N --json headRefOid,mergeStateStatus
-  gh api repos/kjpopov/testls/pulls/N/reviews --jq '[.[]
+  gh api --paginate --slurp repos/kjpopov/testls/pulls/N/reviews | jq -r '[.[][]
     | select(.user.login == "coderabbitai[bot]" and .state != "COMMENTED")]
     | last | .state + " " + .commit_id'
   ```
