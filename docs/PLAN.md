@@ -94,7 +94,8 @@ Two connection paths:
 - [x] `--resolve HOST:PORT:ADDR[,ADDR...]`
 - [x] `--source-ip`
 - [x] `--proxy` (HTTP `CONNECT`)
-- Output formats: SARIF, JUnit, Markdown, HTML, CSV
+- [x] SARIF output (`--format sarif`)
+- Output formats: JUnit, Markdown, HTML, CSV
 - `--baseline` and `.testls.toml` suppressions with expiry dates
 - Scan profiles (`--profile quick|default|full`) and policies (`--policy`:
   Mozilla, PCI DSS, NIST SP 800-52r2, BSI TR-02102-2, CNSA 2.0)
@@ -199,3 +200,4 @@ Not scheduled; pulled into a milestone when someone picks it up.
 | 46 | CodeRabbit is configured in `.coderabbit.yaml` (chill profile, per-crate path instructions, title/changelog/JSON-schema/docstring pre-merge checks as warnings) and auto-approves PRs it rates low merge risk once all threads are resolved and the pre-merge checks pass. Agents push all fixes for a review round in one commit | The config makes the repo rules explicit to the reviewer; approval gives a clear merge signal; one commit per round stays within the 10 reviews per hour budget |
 | 47 | `--source-ip ADDR` binds every connection, target probes and OCSP/CRL fetches alike, to ADDR. Target addresses of the other family are dropped (scan error if none remain); revocation lookups skip them | Multi-homed scanners need one egress address for firewall rules and logs; failing early beats confusing connect errors |
 | 48 | `--proxy [http://]HOST:PORT` tunnels every connection through an HTTP proxy with `CONNECT` (RFC 9110 §9.3.6); no authentication or SOCKS yet. Target names are resolved locally and tunnelled by IP, so the reported address and `--resolve` work as without a proxy; OCSP/CRL lookups go through the proxy by host name. `--source-ip` then binds the connection to the proxy and no longer filters target addresses | Networks that need a proxy usually block direct egress, so third-party lookups must use it too; tunnelling by IP keeps one code path for address selection and the report |
+| 49 | `--format sarif` prints one SARIF 2.1.0 log for the whole run: one rule per finding id (text from `testls explain`), one result per finding with `level` error (critical/high), warning (medium/low) or note, a `security-severity` property for GitHub code scanning, the location `https://TARGET/` and a stable `primaryLocationLineHash` fingerprint of id, target and message. `executionSuccessful` is false when any scan failed | Code-scanning tools need SARIF to track TLS findings across runs; findings have no source file, so the target URI stands in as the location and the fingerprint keeps alerts stable |

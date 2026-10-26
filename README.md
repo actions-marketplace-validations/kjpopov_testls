@@ -64,6 +64,9 @@ testls --proxy proxy.example:3128 example.com
 # JSON output for scripts; exit status 1 if any finding is medium or worse
 testls --format json --fail-on medium example.com:8443
 
+# SARIF log for GitHub code scanning
+testls --format sarif example.com > testls.sarif
+
 # Trust the operating system's roots or a private CA instead of Mozilla's
 testls --system-roots intranet.example
 testls --ca-file my-ca.pem 10.0.0.5 --sni intranet.example
@@ -90,6 +93,7 @@ A web service (`testls serve`, REST API and browser UI) is planned for v0.6.
 | Cipher audit | Per-protocol cipher suite enumeration, weak/obsolete flags | v0.1 |
 | Certificate checks | Expiry, chain, SAN/hostname, key size, signature algorithm | v0.1 |
 | Output | Human-readable text and JSON, CI-friendly exit codes | v0.1 |
+| SARIF | SARIF 2.1.0 log for code-scanning tools | v0.4 |
 | Key exchange | Supported groups (X25519, ECDHE curves, ML-KEM hybrids) | v0.2 |
 | HTTP headers | HSTS, preload, header hygiene | v0.2 |
 | Revocation | OCSP stapling, OCSP/CRL | v0.2 |
