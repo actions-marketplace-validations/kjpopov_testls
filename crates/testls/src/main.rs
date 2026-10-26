@@ -2,6 +2,7 @@
 
 mod baseline;
 mod config;
+mod profile;
 mod revocation;
 mod target;
 
@@ -34,6 +35,7 @@ use testls_wire::ProtocolVersion;
 
 use baseline::Baseline;
 use config::Config;
+use profile::ScanProfile;
 use target::{Host, ProxySpec, ResolveOverride, Target, TargetSpec};
 use testls_report::json::Suppressed;
 
@@ -95,6 +97,14 @@ struct Cli {
     /// other than the target.
     #[arg(long)]
     revocation: bool,
+
+    /// How much to scan: `quick` checks protocols, cipher suites and the
+    /// certificate only; `default` runs every probe of the target; `full`
+    /// adds `--revocation` and `--all-addresses`.
+    #[arg(long, default_value_t = ScanProfile::Default, value_name = "PROFILE",
+          value_parser = clap::builder::PossibleValuesParser::new(ScanProfile::ALL.map(ScanProfile::as_str))
+              .map(|s| s.parse::<ScanProfile>().expect("listed value")))]
+    profile: ScanProfile,
 
     /// Scan every A/AAAA address a host name resolves to, and warn when
     /// the addresses differ in protocols, cipher suites or certificate.
@@ -346,7 +356,7 @@ async fn scan_all(cli: &Cli) -> ExitCode {
     for target in &targets {
         let addrs = match addresses(target, &cli.resolve, family).await {
             Ok(mut addrs) => {
-                if !cli.all_addresses {
+                if !(cli.all_addresses || cli.profile.full()) {
                     addrs.truncate(1);
                 }
                 addrs
@@ -537,23 +547,21 @@ async fn scan(
     }
     let mut findings = protocol_findings(&protocols);
 
-    let mut ciphers = Vec::new();
-    let mut key_exchange = Vec::new();
-    for r in &protocols {
-        if r.support != ProtocolSupport::Supported {
-            continue;
-        }
-        let section = cipher_section(&transport, r.version, sni).await;
-        show(format!("\n{}", text::ciphers(&section, paint)));
-        findings.extend(section_findings(&section));
-        let kx = key_exchange_section(&transport, &section, sni).await;
-        show(format!("\n{}", text::key_exchange(&kx, paint)));
-        findings.extend(kx_findings(&kx));
-        ciphers.push(section);
-        key_exchange.push(kx);
-    }
+    let deep = cli.profile.deep();
+    let (ciphers, key_exchange) = suite_sections(
+        &transport,
+        &protocols,
+        sni,
+        deep,
+        &mut findings,
+        paint,
+        &show,
+    )
+    .await;
     let post_quantum = post_quantum_readiness(&measured(&key_exchange));
-    show(format!("\n{}", text::post_quantum(&post_quantum, paint)));
+    if deep {
+        show(format!("\n{}", text::post_quantum(&post_quantum, paint)));
+    }
 
     let host = sni.map_or_else(|| addr.ip().to_string(), str::to_owned);
     let (certificate, cert_findings, chain) =
@@ -561,7 +569,7 @@ async fn scan(
     show(format!("\n{}", text::certificate(&certificate, paint)));
     findings.extend(cert_findings);
 
-    let revocation = if cli.revocation {
+    let revocation = if cli.revocation || cli.profile.full() {
         let (section, revocation_findings) = revocation_section(&transport, chain.as_deref()).await;
         show(format!("\n{}", text::revocation(&section, paint)));
         findings.extend(revocation_findings);
@@ -570,21 +578,16 @@ async fn scan(
         None
     };
 
-    let (http, http_findings) = http_section(&transport, sni).await;
-    show(format!("\n{}", text::http(&http, paint)));
-    findings.extend(http_findings);
-
-    let vulns = vulnerability_section(&transport, &protocols, &ciphers, &key_exchange, sni).await;
-    show(format!("\n{}", text::vulnerabilities(&vulns, paint)));
-    findings.extend(vulnerability_findings(&vulns));
-
-    let (intolerance, intolerance_findings) = intolerance_section(&transport, &ciphers, sni).await;
-    show(format!("\n{}", text::intolerance(&intolerance, paint)));
-    findings.extend(intolerance_findings);
-
-    let (details, details_findings) = details_section(&transport, &ciphers, sni).await;
-    show(format!("\n{}", text::details(&details, paint)));
-    findings.extend(details_findings);
+    let (http, vulns, intolerance, details) = later_sections(
+        &transport,
+        (&protocols, &ciphers, &key_exchange),
+        sni,
+        deep,
+        &mut findings,
+        paint,
+        &show,
+    )
+    .await;
 
     let (findings, suppressed) = triage(findings, rules, scan_target, started_at);
     show(format!("\n{}", text::findings(&findings, paint)));
@@ -747,6 +750,91 @@ async fn key_exchange_section(
     }
 }
 
+/// Enumerates the cipher suites of each supported protocol and, when
+/// `deep` is set, probes its key exchange, adding their findings to
+/// `findings` and handing each rendered section to `show` as it finishes.
+async fn suite_sections(
+    transport: &Transport,
+    protocols: &[ProtocolResult],
+    sni: Option<&str>,
+    deep: bool,
+    findings: &mut Vec<Finding>,
+    paint: Painter,
+    show: &dyn Fn(String),
+) -> (Vec<CipherSection>, Vec<KeyExchangeSection>) {
+    let mut ciphers = Vec::new();
+    let mut key_exchange = Vec::new();
+    for r in protocols {
+        if r.support != ProtocolSupport::Supported {
+            continue;
+        }
+        let section = cipher_section(transport, r.version, sni).await;
+        show(format!("\n{}", text::ciphers(&section, paint)));
+        findings.extend(section_findings(&section));
+        if deep {
+            let kx = key_exchange_section(transport, &section, sni).await;
+            show(format!("\n{}", text::key_exchange(&kx, paint)));
+            findings.extend(kx_findings(&kx));
+            key_exchange.push(kx);
+        }
+        ciphers.push(section);
+    }
+    (ciphers, key_exchange)
+}
+
+/// Fetches HTTP headers, derives vulnerabilities and runs the tolerance
+/// and detail probes; all but the vulnerability verdicts are skipped
+/// unless `deep` is set. Adds their findings to `findings` and hands each
+/// rendered section to `show`.
+async fn later_sections(
+    transport: &Transport,
+    (protocols, ciphers, key_exchange): (
+        &[ProtocolResult],
+        &[CipherSection],
+        &[KeyExchangeSection],
+    ),
+    sni: Option<&str>,
+    deep: bool,
+    findings: &mut Vec<Finding>,
+    paint: Painter,
+    show: &dyn Fn(String),
+) -> (
+    Result<HttpResponse, String>,
+    Vec<Vulnerability>,
+    Result<Intolerance, String>,
+    Result<HandshakeDetails, String>,
+) {
+    let http = if deep {
+        let (http, http_findings) = http_section(transport, sni).await;
+        show(format!("\n{}", text::http(&http, paint)));
+        findings.extend(http_findings);
+        http
+    } else {
+        skipped()
+    };
+
+    let vulns = vulnerability_section(transport, protocols, ciphers, key_exchange, sni, deep).await;
+    show(format!("\n{}", text::vulnerabilities(&vulns, paint)));
+    findings.extend(vulnerability_findings(&vulns));
+
+    if !deep {
+        return (http, vulns, skipped(), skipped());
+    }
+    let (intolerance, intolerance_findings) = intolerance_section(transport, ciphers, sni).await;
+    show(format!("\n{}", text::intolerance(&intolerance, paint)));
+    findings.extend(intolerance_findings);
+    let (details, details_findings) = details_section(transport, ciphers, sni).await;
+    show(format!("\n{}", text::details(&details, paint)));
+    findings.extend(details_findings);
+    (http, vulns, intolerance, details)
+}
+
+/// Result of a section the `quick` profile leaves out: an error naming
+/// the profile.
+fn skipped<T>() -> Result<T, String> {
+    Err(profile::SKIPPED.to_owned())
+}
+
 /// Findings for one key exchange section; a failed probe is informational.
 fn kx_findings(section: &KeyExchangeSection) -> Vec<Finding> {
     match &section.outcome {
@@ -875,23 +963,30 @@ async fn http_section(
     }
 }
 
-/// Probes compression, renegotiation and downgrade protection, then derives
-/// the named vulnerabilities from everything the scan collected.
+/// Probes compression, renegotiation and downgrade protection when `probe`
+/// is set, then derives the named vulnerabilities from everything the scan
+/// collected.
 ///
-/// A failed feature probe leaves the affected verdicts as not tested.
+/// A failed or skipped feature probe leaves the affected verdicts as not
+/// tested.
 async fn vulnerability_section(
     transport: &Transport,
     protocols: &[ProtocolResult],
     ciphers: &[CipherSection],
     key_exchange: &[KeyExchangeSection],
     sni: Option<&str>,
+    probe: bool,
 ) -> Vec<Vulnerability> {
     let ciphers: Vec<CipherResult> = ciphers
         .iter()
         .filter_map(|s| s.outcome.as_ref().ok().cloned())
         .collect();
     let key_exchange = measured(key_exchange);
-    let features = probe_features(transport, &ciphers, sni).await.ok();
+    let features = if probe {
+        probe_features(transport, &ciphers, sni).await.ok()
+    } else {
+        None
+    };
     assess_vulnerabilities(protocols, &ciphers, &key_exchange, features.as_ref())
 }
 
@@ -1194,7 +1289,7 @@ mod tests {
                 order: testls_probe::CipherOrder::Server,
             }),
         }];
-        let list = vulnerability_section(&transport, &protocols, &ciphers, &[], None).await;
+        let list = vulnerability_section(&transport, &protocols, &ciphers, &[], None, true).await;
         let crime = list.iter().find(|v| v.id == "crime").expect("crime");
         assert_eq!(crime.status, testls_checks::VulnStatus::NotTested);
         assert_eq!(vulnerability_findings(&list), vec![]);

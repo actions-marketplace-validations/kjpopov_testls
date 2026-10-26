@@ -497,3 +497,35 @@ fn baseline_accepts_known_findings() {
     let missing = scan(&["--baseline", "no/such/baseline.json"]);
     assert_eq!(missing.status.code(), Some(2));
 }
+
+/// `--profile quick` skips key exchange, HTTP, tolerance and detail
+/// probes and says so in the JSON; `full` turns on the revocation check.
+#[test]
+fn profiles_select_probes() {
+    let addr = serve();
+    let run = |profile: &str| {
+        let out = Command::new(env!("CARGO_BIN_EXE_testls"))
+            .arg(addr.to_string())
+            .args(["--sni", "localhost", "--format", "json"])
+            .args(["--fail-on", "critical", "--profile", profile])
+            .output()
+            .expect("run testls");
+        assert_eq!(out.status.code(), Some(0), "{profile}");
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).expect("JSON output")
+    };
+    let quick = run("quick");
+    let skipped = "skipped by --profile quick";
+    assert_eq!(quick["key_exchange"], serde_json::json!([]));
+    assert_eq!(quick["post_quantum"]["status"], "not tested");
+    for section in ["http", "intolerance", "details"] {
+        assert_eq!(quick[section]["error"], skipped, "{section}");
+    }
+    assert!(quick["revocation"].is_null());
+    assert_ne!(quick["ciphers"], serde_json::json!([]));
+    let ids = quick["findings"].to_string();
+    assert!(!ids.contains("cookie.insecure"), "{ids}");
+
+    let full = run("full");
+    assert!(full["revocation"].is_object(), "{}", full["revocation"]);
+    assert_eq!(full["http"]["status"], 200);
+}

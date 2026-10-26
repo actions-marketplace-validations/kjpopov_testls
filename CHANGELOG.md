@@ -38,6 +38,9 @@ All notable changes to `testls` are listed here. The format follows
 - `--baseline FILE` takes an earlier `--format json` report: findings it
   lists for the same target and id are suppressed with reason
   `in baseline`, so only new findings fail the scan.
+- `--profile quick|default|full` picks the scan depth: `quick` checks
+  protocols, cipher suites and the certificate only, `default` is the
+  previous behaviour, `full` adds `--revocation` and `--all-addresses`.
 
 ## [0.3.0] - 2026-10-26
 

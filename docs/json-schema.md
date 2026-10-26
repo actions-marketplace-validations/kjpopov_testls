@@ -15,6 +15,9 @@ per target, in scan order. This page describes schema version **1**.
 - Scan errors (exit code 2) print a message to stderr and no JSON. With
   several targets, a target whose scan fails is left out of the array and
   the others are still reported.
+- With `--profile quick`, `key_exchange` is empty, `post_quantum` is
+  `"not tested"`, and `http`, `intolerance` and `details` carry the error
+  `"skipped by --profile quick"`.
 - The exit code is the same as for text output (see `--fail-on`); with
   several targets the worst one wins (2 over 1 over 0).
 
