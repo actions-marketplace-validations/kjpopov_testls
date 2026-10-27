@@ -65,10 +65,12 @@ podman run --rm ghcr.io/kjpopov/testls:0.4 example.com
 ```
 
 In GitHub Actions, the `kjpopov/testls` action installs a release, puts it
-on `PATH` and optionally runs it (pin the action to a commit SHA):
+on `PATH` and optionally runs it. Pin it to the commit SHA of a release tag
+(the `^{}` line of
+`git ls-remote https://github.com/kjpopov/testls 'refs/tags/v0.4.0*'`):
 
 ```yaml
-- uses: kjpopov/testls@v0.4.0
+- uses: kjpopov/testls@<commit-sha> # v0.4.0
   with:
     args: --fail-on medium --format sarif example.com
 ```
