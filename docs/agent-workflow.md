@@ -127,6 +127,10 @@ timeout. Work on the next branch while a review runs.
    `bucket/` and `packaging/winget/`. After merge, tell the maintainer to
    submit `packaging/winget/X.Y.Z/` to `microsoft/winget-pkgs` (for example
    with `wingetcreate submit`).
+6. Marketplace: the maintainer edits the GitHub release and ticks "Publish
+   this Action to the GitHub Marketplace". GitHub checks `action.yml` at the
+   tag, and its `name` must be unique across actions, users and
+   organizations (`testls` is taken).
 
 ## Things learned the hard way
 

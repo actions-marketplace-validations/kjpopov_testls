@@ -6,6 +6,11 @@ All notable changes to `testls` are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The GitHub Action is named "testls TLS scanner", so it can be listed on
+  the GitHub Marketplace (the name `testls` is taken).
+
 ## [0.4.0] - 2026-10-27
 
 Workflow: several targets, connection control, CI report formats,
