@@ -139,6 +139,7 @@ timeout. Work on the next branch while a review runs.
   later `APPROVED` review on the head commit replaces it.
 - The single-comment endpoint is `repos/OWNER/REPO/pulls/comments/ID`,
   without the PR number.
-- During the assertive trial (PLAN decision #55), record per PR the
-  comment count, how many were useful, review rounds and whether it was
-  auto-approved, in the PR's final status message to the maintainer.
+- CodeRabbit can withhold approval citing a concern it already withdrew
+  or accepted in a thread; the "Automatic approval withheld" note is not
+  updated. Resolve the thread, explain in a PR comment and use the second
+  rule under "Checking status".

@@ -7,8 +7,7 @@ tone_instructions: >-
   protocol behaviour.
 
 reviews:
-  # Assertive trial (docs/PLAN.md #55): applies from PR #85 until changed;
-  # PRs #86-#90 are evaluated, then keep it or revert to chill.
+  # Assertive since PR #85; kept after the #86-#90 trial (docs/PLAN.md #61).
   profile: assertive
   review_details: true
   in_progress_fortune: false
