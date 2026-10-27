@@ -6,6 +6,11 @@ All notable changes to `testls` are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The README is short; details moved to `docs/usage.md`, `docs/install.md`
+  and a GitHub Action guide in `docs/github-action.md`.
+
 ## [0.4.1] - 2026-10-27
 
 Patch release so the GitHub Action can be listed on the Marketplace.

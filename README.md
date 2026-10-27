@@ -7,270 +7,79 @@
 
 > `$ test ls` does nothing. `testls` protects your web servers.
 
-TLS/SSL scanner for the web era, written in Rust and inspired by
-[testssl.sh](https://testssl.sh). Single static binary. No bash. No subprocess.
+TLS/SSL scanner written in Rust and inspired by [testssl.sh](https://testssl.sh).
+Single static binary with its own handshake engine (SSLv2–TLS 1.3), no
+OpenSSL, no subprocesses.
 
-> **Status: v0.4.** The command-line scanner checks protocols, cipher suites,
-> key exchange, certificates, revocation, HTTP security headers, derived
-> vulnerabilities, ClientHello tolerance and post-quantum readiness, with
-> CI-friendly reports, suppressions, baselines and compliance policies; the
-> features marked v0.5 and later are planned. See
-> [docs/PLAN.md](docs/PLAN.md) and [CHANGELOG.md](CHANGELOG.md).
+It checks protocols, cipher suites, key exchange, certificates, revocation,
+HTTP security headers, known vulnerabilities and post-quantum readiness,
+and fits CI: SARIF, JUnit, Markdown and other report formats, exit codes,
+suppressions, baselines and compliance policies (Mozilla, NIST, BSI,
+PCI DSS, CNSA 2.0).
 
-## Why
+## GitHub Action
 
-- Rust — memory-safe, fast, and packaged as a single static binary
-- Own handshake engine — probes legacy and modern protocols (SSLv2–TLS 1.3)
-  without linking OpenSSL
-- Web service (planned) — built-in HTTP server with a REST API, streaming
-  results, and an embedded browser UI
-
-## Install
-
-Download a prebuilt binary for Linux (static musl, x86_64/aarch64), macOS
-(x86_64/arm64), or Windows (x86_64) from the
-[releases page](https://github.com/kjpopov/testls/releases), verify it against
-`SHA256SUMS`, and put `testls` on your `PATH`:
-
-```bash
-tar xzf testls-v0.4.1-x86_64-unknown-linux-musl.tar.gz
-./testls-v0.4.1-x86_64-unknown-linux-musl/testls example.com
+```yaml
+- uses: kjpopov/testls@v0.4.3
+  with:
+    args: --fail-on medium example.com
 ```
 
-This repository is also a Homebrew tap (macOS, Linux) and a Scoop bucket
-(Windows) for the same archives:
+See the [GitHub Action guide](docs/github-action.md) for code scanning,
+job summaries, policies and pinning.
+
+## Install
 
 ```bash
 brew tap kjpopov/testls https://github.com/kjpopov/testls
 brew install kjpopov/testls/testls
 ```
 
-```powershell
-scoop bucket add testls https://github.com/kjpopov/testls
-scoop install testls/testls
-```
+Or download a binary for Linux, macOS or Windows from the
+[releases page](https://github.com/kjpopov/testls/releases), use Scoop, or
+the container image `ghcr.io/kjpopov/testls`. See
+[docs/install.md](docs/install.md).
 
-winget manifests are prepared in `packaging/winget/` and submitted to
-`microsoft/winget-pkgs`; once accepted, `winget install Kjpopov.Testls`
-works.
-
-Once testls is on crates.io (from v0.4.0), `cargo binstall testls` fetches
-the same release archive for your platform, and `cargo install --locked
-testls` builds it from source (Rust 1.97 or newer).
-
-From v0.4.0, each release is also a container image for linux/amd64 and
-linux/arm64 (distroless, unprivileged, no shell):
+## Quick start
 
 ```bash
-podman run --rm ghcr.io/kjpopov/testls:0.4 example.com
+testls example.com                                # scan port 443
+testls --fail-on medium example.com:8443          # exit 1 on medium or worse
+testls --format sarif example.com > testls.sarif  # for code scanning
+testls --policy mozilla-intermediate example.com  # compliance check
+testls explain hsts.missing                       # what a finding means
 ```
 
-In GitHub Actions, the `kjpopov/testls` action installs a release, puts it
-on `PATH` and optionally runs it. Pin it to the commit SHA of a release tag
-(the `^{}` line of
-`git ls-remote https://github.com/kjpopov/testls 'refs/tags/v0.4.1*'`):
+Exit status: `0` no finding at or above `--fail-on` (default `high`), `1`
+at least one, `2` the scan failed.
 
-```yaml
-- uses: kjpopov/testls@<commit-sha> # v0.4.1
-  with:
-    args: --fail-on medium --format sarif example.com
-```
+## Documentation
 
-On macOS the binaries are not notarized yet; clear the quarantine flag with
-`xattr -d com.apple.quarantine testls` if Gatekeeper blocks them.
+- [Usage](docs/usage.md): targets, connection options, output formats,
+  policies, suppressions and baselines
+- [Install](docs/install.md): all packages, shell completions, man pages
+- [GitHub Action](docs/github-action.md)
+- [JSON report format](docs/json-schema.md)
+- [Roadmap and decisions](docs/PLAN.md), [changelog](CHANGELOG.md)
 
-Shell completions (bash, zsh, fish, PowerShell, elvish) and man pages come
-from the binary itself (v0.4.0 and later):
+Next: STARTTLS, intrusive checks and grading (v0.5), then a local web
+service with a REST API and browser UI (v0.6).
 
-```bash
-mkdir -p ~/.local/share/bash-completion/completions ~/.local/share/man/man1
-testls completions bash > ~/.local/share/bash-completion/completions/testls
-testls man --dir ~/.local/share/man/man1
-```
+## Responsible use
 
-For zsh, write the script to a directory on your `fpath`:
+Only scan systems you own or are authorized to test.
 
-```zsh
-mkdir -p ~/.zfunc
-testls completions zsh > ~/.zfunc/_testls
-# in ~/.zshrc, before compinit: fpath=(~/.zfunc $fpath)
-```
+## Contributing
 
-## Quick Start
-
-```bash
-# Scan a host (port 443 by default)
-testls example.com
-
-# Several targets, from the command line and a file (one per line)
-testls example.com example.org:8443 --file hosts.txt
-
-# Every address in a range
-testls 192.0.2.0/28:8443
-testls --all-addresses example.com
-
-# Scan a host name at a fixed address, e.g. a new server before a DNS change
-testls --resolve example.com:443:192.0.2.10 example.com
-
-# Connect from a chosen local address on a multi-homed host
-testls --source-ip 192.0.2.5 example.com
-
-# Scan through an HTTP proxy (CONNECT, no authentication)
-testls --proxy proxy.example:3128 example.com
-
-# JSON output for scripts; exit status 1 if any finding is medium or worse
-testls --format json --fail-on medium example.com:8443
-
-# SARIF log for GitHub code scanning
-testls --format sarif example.com > testls.sarif
-
-# JUnit XML for CI test reports; findings at or above --fail-on fail
-testls --format junit --fail-on medium example.com > testls.xml
-
-# Markdown summary for a CI job summary or pull request comment
-testls --format markdown example.com >> "$GITHUB_STEP_SUMMARY"
-
-# CSV, one row per finding, for spreadsheets and scripts
-testls --format csv example.com example.org > testls.csv
-
-# Self-contained HTML page to share or archive
-testls --format html example.com > testls.html
-
-# Trust the operating system's roots or a private CA instead of Mozilla's
-testls --system-roots intranet.example
-testls --ca-file my-ca.pem 10.0.0.5 --sni intranet.example
-
-# Also ask the CA's OCSP responder or CRL whether the certificate is revoked
-testls --revocation example.com
-
-# Quick check (protocols, cipher suites, certificate) or everything,
-# including revocation and every address of the host
-testls --profile quick example.com
-testls --profile full example.com
-
-# Report everything Mozilla's "intermediate" configuration does not allow
-testls --policy mozilla-intermediate --fail-on medium example.com
-
-# Check against NIST SP 800-52r2 (government servers)
-testls --policy nist-800-52r2 --fail-on medium example.com
-
-# Check against BSI TR-02102-2 (German federal guideline)
-testls --policy bsi-tr-02102-2 --fail-on medium example.com
-
-# Check against PCI DSS v4.0.1 (strong cryptography, no early TLS)
-testls --policy pci-dss-4 --fail-on medium example.com
-
-# Check against CNSA 2.0 (TLSv1.3, ML-KEM-1024, ML-DSA-87)
-testls --policy cnsa-2.0 --fail-on medium example.com
-
-# Explain a finding id shown in brackets, or list all ids
-testls explain hsts.missing
-```
-
-To accept a known finding, add it to `.testls.toml` in the working directory
-(or pass `--config FILE`). Suppressed findings are listed separately, do not
-count towards `--fail-on` and come back after `expires`:
-
-```toml
-[[suppress]]
-id = "cookie.insecure"
-target = "example.com"       # optional, default: every target
-reason = "legacy app, replaced in Q1"
-expires = 2026-12-31         # optional, last day (UTC) the entry applies
-```
-
-To fail only on new findings, save a JSON report and pass it as baseline:
-
-```sh
-testls --format json example.com > baseline.json
-testls --baseline baseline.json --fail-on low example.com
-```
-
-Exit status is `0` when no finding reaches `--fail-on` (default `high`), `1`
-when one does, and `2` when the scan itself fails. Run `testls --help` for all
-options; the JSON format is described in
-[docs/json-schema.md](docs/json-schema.md).
-
-A web service (`testls serve`, REST API and browser UI) is planned for v0.6.
-
-## Features
-
-| Area | Details | Target |
-| --- | --- | --- |
-| Protocol detection | SSLv2, SSLv3, TLS 1.0–1.3 | v0.1 |
-| Cipher audit | Per-protocol cipher suite enumeration, weak/obsolete flags | v0.1 |
-| Certificate checks | Expiry, chain, SAN/hostname, key size, signature algorithm | v0.1 |
-| Output | Human-readable text and JSON, CI-friendly exit codes | v0.1 |
-| SARIF | SARIF 2.1.0 log for code-scanning tools | v0.4 |
-| JUnit | JUnit XML for CI test reports | v0.4 |
-| Markdown | Markdown summary for CI job summaries and PR comments | v0.4 |
-| CSV | One row per finding for spreadsheets and scripts | v0.4 |
-| HTML | Self-contained HTML report to share or archive | v0.4 |
-| Suppressions | `.testls.toml` entries with reason and expiry date | v0.4 |
-| Baseline | `--baseline` report: fail only on new findings | v0.4 |
-| Profiles | `--profile quick\|default\|full` scan depth | v0.4 |
-| Policies | `--policy mozilla-modern\|mozilla-intermediate\|nist-800-52r2\|bsi-tr-02102-2\|pci-dss-4\|cnsa-2.0` compliance findings | v0.4 |
-| Key exchange | Supported groups (X25519, ECDHE curves, ML-KEM hybrids) | v0.2 |
-| HTTP headers | HSTS, preload, header hygiene | v0.2 |
-| Revocation | OCSP stapling, OCSP/CRL | v0.2 |
-| Vulnerabilities | Derived checks: POODLE, BEAST, SWEET32, Logjam, … | v0.3 |
-| Handshake | ClientHello tolerance, TLSv1.3 details, post-quantum readiness | v0.3 |
-| Certificates+ | Lifetime vs CA/B Baseline Requirements, embedded SCTs | v0.3 |
-| Workflow | Multiple targets, SARIF/JUnit/HTML, baselines, policies | v0.4 |
-| Shell integration | `testls completions SHELL` and `testls man` | v0.4 |
-| Packaging | Homebrew, Scoop, winget, `cargo binstall`, container image, GitHub Action | v0.4 |
-| STARTTLS | SMTP, IMAP, POP3, … | v0.5 |
-| Intrusive checks | Heartbleed, CCS injection, Ticketbleed, ROBOT (`--intrusive`) | v0.5 |
-| Grading | Own grading model | v0.5 |
-| Web service | REST + SSE API and embedded web UI | v0.6 |
-
-## Architecture
-
-```text
-┌─────────────────────────────────────────────┐
-│  Web UI (embedded SPA)                      │
-└──────────────────┬──────────────────────────┘
-                   │ REST / SSE
-┌──────────────────▼──────────────────────────┐
-│  testls (Rust, single binary)               │
-│  ├─ Probe engine (raw ClientHello codec)    │
-│  ├─ Full-handshake client (rustls)          │
-│  ├─ Check runner (async, parallel)          │
-│  ├─ HTTP server (axum)                      │
-│  └─ CLI (clap)                              │
-└─────────────────────────────────────────────┘
-```
-
-## Development
-
-```bash
-git clone https://github.com/kjpopov/testls
-cd testls
-cargo build --release
-scripts/gen-ocsp-fixtures.sh   # test fixtures, needs OpenSSL 3 or later
-cargo test
-```
-
-## Responsible Use
-
-Only scan systems you own or are authorized to test. The web service binds to
-localhost by default and is intended as a local or internal tool, not a public
-scanning service.
-
-## Methodology
-
-This project was designed and architected by the maintainer.
-Implementation was assisted by LLM tooling; all code paths were designed,
-reviewed, and tested by a human. See [CONTRIBUTING.md](CONTRIBUTING.md)
-for our AI-assistance disclosure policy.
+See [CONTRIBUTING.md](CONTRIBUTING.md). This project was designed and
+architected by the maintainer; implementation was assisted by LLM tooling,
+and all code paths were designed, reviewed and tested by a human.
 
 ## License
 
-This project is dual-licensed under the [MIT License](LICENSE-MIT) or the
+Dual-licensed under the [MIT License](LICENSE-MIT) or the
 [Apache License 2.0](LICENSE-APACHE), at your option.
 
-## Credits
-
-Inspired by [testssl.sh](https://testssl.sh) by Dirk Wetter.
-`testls` is an independent, clean-room implementation, not a fork, and does
-not reuse testssl.sh code or data (testssl.sh is GPLv2).
+Inspired by [testssl.sh](https://testssl.sh) by Dirk Wetter. `testls` is an
+independent, clean-room implementation, not a fork, and does not reuse
+testssl.sh code or data (testssl.sh is GPLv2).
