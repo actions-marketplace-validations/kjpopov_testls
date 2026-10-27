@@ -117,7 +117,8 @@ timeout. Work on the next branch while a review runs.
    `kjpopov/testls`, workflow `release.yml`, environment `crates-io` to
    every `testls*` crate on crates.io, create that GitHub environment, and
    set the repository variable `CRATES_IO_TRUSTED_PUBLISHING=true`. Until
-   then the job is skipped. Agents never publish to crates.io.
+   then the job is skipped. If it fails halfway, rerun it: crates already
+   published at that version are skipped. Agents never publish to crates.io.
 
 ## Things learned the hard way
 
