@@ -43,3 +43,13 @@ updates:
       default-days: 7
     commit-message:
       prefix: "test"
+
+  - package-ecosystem: docker
+    directory: /packaging/container
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "release"

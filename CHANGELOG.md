@@ -65,6 +65,10 @@ All notable changes to `testls` are listed here. The format follows
 - Homebrew tap (`Formula/`), Scoop bucket (`bucket/`) and winget manifests
   (`packaging/winget/`) for the release archives, generated from a
   release's `SHA256SUMS` by `scripts/gen-packages.py`.
+- Container image `ghcr.io/kjpopov/testls` (linux/amd64 and linux/arm64,
+  distroless, unprivileged), pushed by the release workflow.
+- GitHub Action (`action.yml`): installs a release with checksum
+  verification, adds it to `PATH` and optionally runs it with `args`.
 
 ## [0.3.0] - 2026-10-26
 

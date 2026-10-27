@@ -97,6 +97,49 @@ jobs:
           fi
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" "${flags[@]}"
 
+  # Multi-arch image from the released musl binaries. The Dockerfile only
+  # copies files, so no emulation is needed for the arm64 image.
+  container:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: "*-unknown-linux-musl"
+          path: dist
+          merge-multiple: true
+      - name: Unpack binaries
+        run: |
+          for pair in amd64:x86_64 arm64:aarch64; do
+            arch=${pair%%:*}
+            name="testls-${GITHUB_REF_NAME}-${pair#*:}-unknown-linux-musl"
+            tar xzf "dist/$name.tar.gz" -C dist
+            mkdir -p "context/$arch"
+            cp "dist/$name/testls" "context/$arch/testls"
+          done
+      - name: Build and push
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          version="${GITHUB_REF_NAME#v}"
+          tags=(--tag "$image:$version")
+          if [[ "$version" != *-* ]]; then
+            tags+=(--tag "$image:${version%.*}" --tag "$image:latest")
+          fi
+          echo "$GH_TOKEN" | docker login ghcr.io --username "$ACTOR" --password-stdin
+          docker buildx create --use
+          docker buildx build --platform linux/amd64,linux/arm64 \
+            --file packaging/container/Dockerfile "${tags[@]}" --push context
+          docker logout ghcr.io
+
   # Trusted publishing needs crates that already exist, so the job stays off
   # until the maintainer has published once and sets the repository variable
   # CRATES_IO_TRUSTED_PUBLISHING to "true" (docs/agent-workflow.md, Releases).
@@ -124,7 +167,7 @@ jobs:
             | jq -r '.packages[] | select(.publish != []) | "\(.name) \(.version)"')
           exclude=()
           while read -r name version; do
-            status=$(curl -sS -o /dev/null -w '%{http_code}' \
+            status=$(curl -sS --connect-timeout 20 --max-time 60 -o /dev/null -w '%{http_code}' \
               -A "testls release workflow (https://github.com/$GITHUB_REPOSITORY)" \
               "https://crates.io/api/v1/crates/$name/$version")
             case "$status" in

@@ -109,7 +109,9 @@ timeout. Work on the next branch while a review runs.
    `CHANGELOG.md` section with date and compare links, README status and
    install example, PLAN "Released as vX.Y.Z".
 2. After merge: `git tag -a vX.Y.Z -m "testls vX.Y.Z" MERGE_SHA && git push origin vX.Y.Z`.
-3. `release.yml` builds five targets and publishes the GitHub release; check
+3. `release.yml` builds five targets, publishes the GitHub release and pushes
+   the container image to `ghcr.io/kjpopov/testls` (after the first push the
+   maintainer makes the package public in its settings, once); check
    with `gh run list --workflow release.yml` and `gh release view vX.Y.Z`.
 4. Its `crates-io` job then publishes the workspace with crates.io trusted
    publishing. Maintainer setup, once: publish the first version by hand
