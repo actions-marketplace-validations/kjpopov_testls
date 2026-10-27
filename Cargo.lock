@@ -675,7 +675,7 @@ dependencies = [
 
 [[package]]
 name = "testls"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anstyle-query",
  "clap",
@@ -694,7 +694,7 @@ dependencies = [
 
 [[package]]
 name = "testls-checks"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "ring",
  "rustls-native-certs",
@@ -709,11 +709,11 @@ dependencies = [
 
 [[package]]
 name = "testls-data"
-version = "0.4.0"
+version = "0.4.1"
 
 [[package]]
 name = "testls-probe"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "getrandom 0.4.3",
  "rustls",
@@ -725,7 +725,7 @@ dependencies = [
 
 [[package]]
 name = "testls-report"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -736,7 +736,7 @@ dependencies = [
 
 [[package]]
 name = "testls-wire"
-version = "0.4.0"
+version = "0.4.1"
 
 [[package]]
 name = "thiserror"

@@ -33,8 +33,8 @@ Download a prebuilt binary for Linux (static musl, x86_64/aarch64), macOS
 `SHA256SUMS`, and put `testls` on your `PATH`:
 
 ```bash
-tar xzf testls-v0.4.0-x86_64-unknown-linux-musl.tar.gz
-./testls-v0.4.0-x86_64-unknown-linux-musl/testls example.com
+tar xzf testls-v0.4.1-x86_64-unknown-linux-musl.tar.gz
+./testls-v0.4.1-x86_64-unknown-linux-musl/testls example.com
 ```
 
 This repository is also a Homebrew tap (macOS, Linux) and a Scoop bucket
@@ -68,10 +68,10 @@ podman run --rm ghcr.io/kjpopov/testls:0.4 example.com
 In GitHub Actions, the `kjpopov/testls` action installs a release, puts it
 on `PATH` and optionally runs it. Pin it to the commit SHA of a release tag
 (the `^{}` line of
-`git ls-remote https://github.com/kjpopov/testls 'refs/tags/v0.4.0*'`):
+`git ls-remote https://github.com/kjpopov/testls 'refs/tags/v0.4.1*'`):
 
 ```yaml
-- uses: kjpopov/testls@<commit-sha> # v0.4.0
+- uses: kjpopov/testls@<commit-sha> # v0.4.1
   with:
     args: --fail-on medium --format sarif example.com
 ```
