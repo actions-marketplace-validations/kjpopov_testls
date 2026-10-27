@@ -44,6 +44,7 @@ use testls_report::json::Suppressed;
 #[command(
     version,
     about,
+    max_term_width = 100,
     args_conflicts_with_subcommands = true,
     subcommand_negates_reqs = true
 )]

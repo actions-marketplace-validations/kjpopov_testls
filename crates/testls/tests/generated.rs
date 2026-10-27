@@ -1,4 +1,5 @@
-//! End-to-end tests for the generated shell completions and man page.
+//! End-to-end tests for the help layout, generated shell completions and man
+//! page.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -36,6 +37,38 @@ fn run(args: &[&str]) -> (Option<i32>, String) {
         out.status.code(),
         String::from_utf8(out.stdout).expect("UTF-8 stdout"),
     )
+}
+
+/// `testls --help` lays options out as two columns: flags on the left,
+/// descriptions wrapped in an aligned right column at most 100 columns wide,
+/// even on a wider terminal.
+#[test]
+fn help_is_two_columns() {
+    let out = Command::new(env!("CARGO_BIN_EXE_testls"))
+        .arg("--help")
+        .env("COLUMNS", "200")
+        .env("NO_COLOR", "1")
+        .env_remove("CLICOLOR_FORCE")
+        .output()
+        .expect("run testls");
+    assert_eq!(out.status.code(), Some(0));
+    let help = String::from_utf8(out.stdout).expect("UTF-8 stdout");
+    let options = help.split_once("Options:\n").expect("options section").1;
+    let first = options.lines().next().expect("first option");
+    let column = first.find("Read more targets").expect("--file description");
+    for line in options.lines() {
+        assert!(line.chars().count() <= 100, "too wide: {line:?}");
+        let (Some(left), Some(right)) = (line.get(..column), line.get(column..)) else {
+            panic!("shorter than the flag column: {line:?}");
+        };
+        assert!(!right.starts_with(' '), "misaligned: {line:?}");
+        let flag = left.trim_start();
+        assert!(
+            flag.is_empty() || flag.starts_with('-'),
+            "description in flag column: {line:?}"
+        );
+    }
+    assert!(options.lines().count() > 40, "descriptions are wrapped");
 }
 
 /// `testls completions SHELL` prints a script for each supported shell.

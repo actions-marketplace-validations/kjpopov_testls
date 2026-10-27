@@ -6,8 +6,16 @@ All notable changes to `testls` are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-10-27
+
+Patch release with a readable `--help` and the shorter README on the
+Marketplace page. v0.4.2 was created by mistake from the GitHub web UI; it has no build of
+its own, so skip it.
+
 ### Changed
 
+- `testls --help` shows options as two aligned columns, flags on the left
+  and wrapped descriptions on the right, at most 100 columns wide.
 - The README is short; details moved to `docs/usage.md`, `docs/install.md`
   and a GitHub Action guide in `docs/github-action.md`.
 
@@ -207,7 +215,8 @@ First pre-release.
 - Target parsing for host, host:port, IPv4/IPv6 and URLs, plus `--sni`.
 - Release binaries for Linux (static musl), macOS and Windows.
 
-[Unreleased]: https://github.com/kjpopov/testls/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/kjpopov/testls/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/kjpopov/testls/compare/v0.4.1...v0.4.3
 [0.4.1]: https://github.com/kjpopov/testls/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/kjpopov/testls/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/kjpopov/testls/compare/v0.2.0...v0.3.0
