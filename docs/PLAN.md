@@ -113,6 +113,7 @@ Two connection paths:
   (`scripts/gen-packages.py`)
 - [x] Container image (`ghcr.io/kjpopov/testls`) and GitHub Action
   (`action.yml`)
+- [x] Released as v0.4.0
 
 ### v0.5 — STARTTLS, intrusive probes, grading
 - STARTTLS (SMTP, IMAP, POP3, FTP, XMPP, LDAP, PostgreSQL, MySQL)
