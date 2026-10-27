@@ -4,7 +4,8 @@
 //! The Mozilla profiles follow the Mozilla Server Side TLS guidelines,
 //! version 6.0 (<https://ssl-config.mozilla.org/guidelines/6.0.json>).
 //! The NIST profile follows NIST SP 800-52 revision 2
-//! (<https://doi.org/10.6028/NIST.SP.800-52r2>). The CNSA 2.0 profile
+//! (<https://doi.org/10.6028/NIST.SP.800-52r2>). The BSI profile follows
+//! BSI TR-02102-2, version 2025-01. The CNSA 2.0 profile
 //! follows the NSA CNSA 2.0 TLS 1.3 profile,
 //! draft-becker-cnsa2-tls-profile-05.
 //! Suite and group code points are from the IANA TLS parameter registries.
@@ -40,6 +41,9 @@ pub enum Policy {
     /// NIST SP 800-52r2 for servers used by government clients: TLSv1.2
     /// and TLSv1.3, NIST-approved suites, groups and certificates.
     Nist80052r2,
+    /// BSI TR-02102-2: TLSv1.2 and TLSv1.3 with forward secrecy, RSA keys
+    /// of at least 3000 bits, brainpool or NIST curves.
+    BsiTr021022,
     /// NSA CNSA 2.0: TLSv1.3 with `TLS_AES_256_GCM_SHA384`, ML-KEM-1024 and
     /// ML-DSA-87 only.
     Cnsa2,
@@ -47,10 +51,11 @@ pub enum Policy {
 
 impl Policy {
     /// All policies, in the order they are listed on the command line.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::MozillaModern,
         Self::MozillaIntermediate,
         Self::Nist80052r2,
+        Self::BsiTr021022,
         Self::Cnsa2,
     ];
 
@@ -61,6 +66,7 @@ impl Policy {
             Self::MozillaModern => "mozilla-modern",
             Self::MozillaIntermediate => "mozilla-intermediate",
             Self::Nist80052r2 => "nist-800-52r2",
+            Self::BsiTr021022 => "bsi-tr-02102-2",
             Self::Cnsa2 => "cnsa-2.0",
         }
     }
@@ -71,6 +77,7 @@ impl Policy {
             Self::MozillaModern => &MOZILLA_MODERN,
             Self::MozillaIntermediate => &MOZILLA_INTERMEDIATE,
             Self::Nist80052r2 => &NIST_800_52R2,
+            Self::BsiTr021022 => &BSI_TR_02102_2,
             Self::Cnsa2 => &CNSA_2,
         }
     }
@@ -104,8 +111,12 @@ struct Rules {
     tls13_suites: &'static [u16],
     /// Cipher suites for TLSv1.2 and earlier.
     suites: &'static [u16],
-    /// Named groups for (EC)DHE key exchange.
+    /// Named groups for TLSv1.3 key exchange.
+    tls13_groups: &'static [u16],
+    /// Named groups for (EC)DHE key exchange in TLSv1.2 and earlier.
     groups: &'static [u16],
+    /// Other TLSv1.2 DHE primes, by `testls_data::KnownPrime` name.
+    dh_primes: &'static [&'static str],
     /// Minimum RSA key size in bits, or `None` if RSA keys are not allowed.
     rsa_bits: Option<usize>,
     /// Named curves (OIDs) for ECDSA keys.
@@ -157,7 +168,9 @@ static MOZILLA_MODERN: Rules = Rules {
     required: &[],
     tls13_suites: MOZILLA_TLS13_SUITES,
     suites: &[],
+    tls13_groups: MOZILLA_GROUPS,
     groups: MOZILLA_GROUPS,
+    dh_primes: &[],
     rsa_bits: None,
     curves: MOZILLA_CURVES,
     keys: &[],
@@ -173,7 +186,9 @@ static MOZILLA_INTERMEDIATE: Rules = Rules {
     required: &[],
     tls13_suites: MOZILLA_TLS13_SUITES,
     suites: &[0xc02b, 0xc02f, 0xc02c, 0xc030, 0xcca9, 0xcca8],
+    tls13_groups: MOZILLA_GROUPS,
     groups: MOZILLA_GROUPS,
+    dh_primes: &[],
     rsa_bits: Some(2048),
     curves: MOZILLA_CURVES,
     keys: &[],
@@ -211,6 +226,16 @@ const NIST_GROUPS: &[u16] = &[
     0x0017, 0x0018, 0x0019, 0x0100, 0x0101, 0x0102, 0x0103, 0x0104,
 ];
 
+/// The RFC 3526 MODP groups that SP 800-56A rev. 3 appendix D also
+/// approves for DHE (`MODP-2048` to `MODP-8192`).
+const NIST_DH_PRIMES: &[&str] = &[
+    "MODP group 14",
+    "MODP group 15",
+    "MODP group 16",
+    "MODP group 17",
+    "MODP group 18",
+];
+
 /// Leaf signature algorithms of NIST SP 800-52r2 §3.2.1 and SP 800-57
 /// part 1 (at least 112-bit security, SHA-2): RSA PKCS #1 v1.5 and PSS
 /// (RFC 8017 appendix C) and ECDSA.
@@ -233,11 +258,80 @@ static NIST_800_52R2: Rules = Rules {
     required: &[ProtocolVersion::TLS12, ProtocolVersion::TLS13],
     tls13_suites: NIST_TLS13_SUITES,
     suites: NIST_SUITES,
+    tls13_groups: NIST_GROUPS,
     groups: NIST_GROUPS,
+    dh_primes: NIST_DH_PRIMES,
     rsa_bits: Some(2048),
     curves: MOZILLA_CURVES,
     keys: &[],
     signatures: NIST_SIGNATURES,
+    lifespan_days: None,
+    hsts_max_age: None,
+};
+
+/// TLSv1.2 suites of BSI TR-02102-2 table 3 (ECDHE and DHE with AES in
+/// CBC, GCM or CCM mode). The non-forward-secret suites of table 4 (only
+/// "if forward secrecy is not possible", until 2026) and the PSK suites of
+/// table 5 are excluded.
+const BSI_SUITES: &[u16] = &[
+    // ECDHE-ECDSA.
+    0xc023, 0xc024, 0xc02b, 0xc02c, 0xc0ac, 0xc0ad, // ECDHE-RSA.
+    0xc027, 0xc028, 0xc02f, 0xc030, // DHE-DSS.
+    0x0040, 0x006a, 0x00a2, 0x00a3, // DHE-RSA.
+    0x0067, 0x006b, 0x009e, 0x009f, 0xc09e, 0xc09f,
+];
+
+/// TLSv1.2 groups of BSI TR-02102-2 table 6: `secp256r1`, `secp384r1`,
+/// `secp521r1`, the brainpool curves `26`-`28` (RFC 7027), `ffdhe3072` and
+/// `ffdhe4096`.
+const BSI_TLS12_GROUPS: &[u16] = &[
+    0x0017, 0x0018, 0x0019, 0x001a, 0x001b, 0x001c, 0x0101, 0x0102,
+];
+
+/// TLSv1.3 groups of BSI TR-02102-2 table 10: as table 6, but with the
+/// brainpool code points `31`-`33` that RFC 8734 assigns for TLSv1.3.
+const BSI_TLS13_GROUPS: &[u16] = &[
+    0x0017, 0x0018, 0x0019, 0x001f, 0x0020, 0x0021, 0x0101, 0x0102,
+];
+
+/// ECDSA curves of BSI TR-02102-2 §3.6.2: brainpoolP256r1, brainpoolP384r1,
+/// brainpoolP512r1 (RFC 5639 §4.1) and P-256, P-384, P-521 (RFC 5480
+/// §2.1.1.1).
+const BSI_CURVES: &[(&str, &str)] = &[
+    ("1.3.36.3.3.2.8.1.1.7", "brainpoolP256r1"),
+    ("1.3.36.3.3.2.8.1.1.11", "brainpoolP384r1"),
+    ("1.3.36.3.3.2.8.1.1.13", "brainpoolP512r1"),
+    ("1.2.840.10045.3.1.7", "P-256"),
+    ("1.3.132.0.34", "P-384"),
+    ("1.3.132.0.35", "P-521"),
+];
+
+/// Leaf signature algorithms of BSI TR-02102-2 table 12: RSASSA-PSS and
+/// ECDSA with SHA-2. The `rsa_pkcs1_*` schemes were recommended only up to
+/// 2025.
+const BSI_SIGNATURES: &[(&str, &str)] = &[
+    ("1.2.840.10045.4.3.2", "ecdsa-with-SHA256"),
+    ("1.2.840.10045.4.3.3", "ecdsa-with-SHA384"),
+    ("1.2.840.10045.4.3.4", "ecdsa-with-SHA512"),
+    ("1.2.840.113549.1.1.10", "RSASSA-PSS"),
+];
+
+/// BSI TR-02102-2 (version 2025-01): TLSv1.2 and TLSv1.3 (§3.2), the
+/// TLSv1.3 suites `TLS_AES_128_GCM_SHA256`, `TLS_AES_256_GCM_SHA384` and
+/// `TLS_AES_128_CCM_SHA256` (table 13), RSA keys of at least 3000 bits
+/// (table 14) and ECDSA on the §3.6.2 curves. No HSTS or lifetime limits.
+static BSI_TR_02102_2: Rules = Rules {
+    versions: &[ProtocolVersion::TLS12, ProtocolVersion::TLS13],
+    required: &[],
+    tls13_suites: &[0x1301, 0x1302, 0x1304],
+    suites: BSI_SUITES,
+    tls13_groups: BSI_TLS13_GROUPS,
+    groups: BSI_TLS12_GROUPS,
+    dh_primes: &[],
+    rsa_bits: Some(3000),
+    curves: BSI_CURVES,
+    keys: &[],
+    signatures: BSI_SIGNATURES,
     lifespan_days: None,
     hsts_max_age: None,
 };
@@ -254,7 +348,9 @@ static CNSA_2: Rules = Rules {
     required: &[ProtocolVersion::TLS13],
     tls13_suites: &[0x1302],
     suites: &[],
-    groups: &[0x0202],
+    tls13_groups: &[0x0202],
+    groups: &[],
+    dh_primes: &[],
     rsa_bits: None,
     curves: &[],
     keys: ML_DSA_87,
@@ -396,7 +492,8 @@ fn cipher_deviations(policy: Policy, ciphers: &[CipherResult]) -> Vec<Finding> {
     findings
 }
 
-/// Accepted groups outside the policy, each reported once.
+/// Accepted groups and TLSv1.2 DHE primes outside the policy, each
+/// reported once.
 fn group_deviations(policy: Policy, results: &[KeyExchangeResult]) -> Vec<Finding> {
     let rules = policy.rules();
     let mut seen = Vec::new();
@@ -404,24 +501,69 @@ fn group_deviations(policy: Policy, results: &[KeyExchangeResult]) -> Vec<Findin
         .iter()
         .filter(|r| rules.versions.contains(&r.version))
     {
+        let allowed = if result.version == ProtocolVersion::TLS13 {
+            rules.tls13_groups
+        } else {
+            rules.groups
+        };
         for &group in &result.groups {
-            if !rules.groups.contains(&group) && !seen.contains(&group) {
-                seen.push(group);
+            let what = format!(
+                "key exchange group {} (0x{group:04x}) is accepted",
+                group_name(group)
+            );
+            if !allowed.contains(&group) && !seen.contains(&what) {
+                seen.push(what);
             }
         }
+        if let Some(prime) = &result.dh_prime
+            && let Some(what) = prime_deviation(prime, allowed, rules.dh_primes)
+            && !seen.contains(&what)
+        {
+            seen.push(what);
+        }
     }
-    seen.into_iter()
-        .map(|g| {
-            deviation(
-                "policy.group",
-                policy,
-                &format!(
-                    "key exchange group {} (0x{g:04x}) is accepted",
-                    group_name(g)
-                ),
-            )
-        })
+    seen.iter()
+        .map(|what| deviation("policy.group", policy, what))
         .collect()
+}
+
+/// What to report about TLSv1.2 DHE prime `prime`, unless it is an allowed
+/// RFC 7919 group or one of the `dh_primes` the policy allows by name.
+/// Unknown primes are never allowed.
+fn prime_deviation(prime: &[u8], allowed: &[u16], dh_primes: &[&str]) -> Option<String> {
+    let known = testls_data::known_dh_prime(prime);
+    if let Some(group) = known.and_then(|k| ffdhe_group(k.name)) {
+        return (!allowed.contains(&group)).then(|| {
+            format!(
+                "key exchange group {} (0x{group:04x}) is accepted",
+                group_name(group)
+            )
+        });
+    }
+    match known {
+        Some(k) if dh_primes.contains(&k.name) => None,
+        Some(k) => Some(format!("DHE uses {}", k.name)),
+        None => {
+            let digits: Vec<_> = prime.iter().skip_while(|&&b| b == 0).collect();
+            let bits = digits
+                .first()
+                .map_or(0, |b| digits.len() * 8 - b.leading_zeros() as usize);
+            Some(format!("DHE uses a custom {bits}-bit prime"))
+        }
+    }
+}
+
+/// The `supported_groups` code point (RFC 7919 §8) of RFC 7919 appendix A
+/// group `name`.
+fn ffdhe_group(name: &str) -> Option<u16> {
+    match name {
+        "ffdhe2048" => Some(0x0100),
+        "ffdhe3072" => Some(0x0101),
+        "ffdhe4096" => Some(0x0102),
+        "ffdhe6144" => Some(0x0103),
+        "ffdhe8192" => Some(0x0104),
+        _ => None,
+    }
 }
 
 /// SHA-2 hashes allowed in RSASSA-PSS parameters (RFC 8017 appendix A.2.3,
@@ -599,6 +741,14 @@ mod tests {
             dh_prime: None,
             dh_key_reused: None,
         }
+    }
+
+    /// Decodes upper-case hex.
+    fn unhex(hex: &str) -> Vec<u8> {
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect()
     }
 
     /// Reply carrying `hsts` as its HSTS header, if any.
@@ -901,6 +1051,174 @@ mod tests {
         );
     }
 
+    /// BSI TR-02102-2 allows brainpool groups (with the code points of the
+    /// matching TLS version), DHE with `ffdhe3072` and ECDSA leaves, but
+    /// not SHA-1 CBC suites, `ChaCha20`, x25519, `ffdhe2048`, RSA keys below
+    /// 3000 bits or PKCS #1 v1.5 signatures.
+    #[test]
+    fn bsi_server() {
+        let protocols = protocols(&[ProtocolVersion::TLS12, ProtocolVersion::TLS13]);
+        let ciphers = [
+            ciphers(ProtocolVersion::TLS12, &[0xc02f, 0x009e, 0xc013, 0xcca8]),
+            ciphers(ProtocolVersion::TLS13, &[0x1301, 0x1304, 0x1303]),
+        ];
+        let key_exchange = [
+            groups(
+                ProtocolVersion::TLS12,
+                &[0x0017, 0x001a, 0x0101, 0x0100, 0x0020],
+            ),
+            groups(ProtocolVersion::TLS13, &[0x001f, 0x001d, 0x001b]),
+        ];
+        let chain = [EC_LOCALHOST.to_vec()];
+        let input = PolicyInput {
+            protocols: &protocols,
+            ciphers: Some(&ciphers),
+            cipher_errors: &[],
+            key_exchange: Some(&key_exchange),
+            key_exchange_errors: &[],
+            chain: Some(&chain),
+            http: None,
+        };
+        let tail = ", which bsi-tr-02102-2 does not allow";
+        let expected = [
+            (
+                "policy.cipher",
+                "TLSv1.2 accepts TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
+            ),
+            (
+                "policy.cipher",
+                "TLSv1.2 accepts TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
+            ),
+            (
+                "policy.cipher",
+                "TLSv1.3 accepts TLS_CHACHA20_POLY1305_SHA256",
+            ),
+            (
+                "policy.group",
+                "key exchange group ffdhe2048 (0x0100) is accepted",
+            ),
+            (
+                "policy.group",
+                "key exchange group brainpoolP384r1tls13 (0x0020) is accepted",
+            ),
+            (
+                "policy.group",
+                "key exchange group x25519 (0x001d) is accepted",
+            ),
+            (
+                "policy.group",
+                "key exchange group brainpoolP384r1 (0x001b) is accepted",
+            ),
+        ]
+        .map(|(id, what)| (id.to_owned(), format!("{what}{tail}")));
+        assert_eq!(
+            summary(&policy_findings(Policy::BsiTr021022, &input)),
+            expected
+        );
+
+        let chain = [RSA2048.to_vec()];
+        let input = PolicyInput {
+            ciphers: Some(&[]),
+            key_exchange: Some(&[]),
+            chain: Some(&chain),
+            ..input
+        };
+        let expected = [
+            (
+                "policy.cert_key",
+                "leaf certificate has an RSA key of only 2048 bits",
+            ),
+            (
+                "policy.cert_signature",
+                "leaf certificate is signed with sha256WithRSAEncryption",
+            ),
+        ]
+        .map(|(id, what)| (id.to_owned(), format!("{what}{tail}")));
+        assert_eq!(
+            summary(&policy_findings(Policy::BsiTr021022, &input)),
+            expected
+        );
+    }
+
+    /// Every MODP group NIST SP 800-52r2 accepts names a known prime, so a
+    /// typo cannot turn into a false `DHE uses MODP group N` finding.
+    #[test]
+    fn nist_dh_primes_known() {
+        for name in NIST_DH_PRIMES {
+            assert!(
+                testls_data::known_dh_primes()
+                    .iter()
+                    .any(|k| k.name == *name),
+                "{name} is not a known DH prime"
+            );
+        }
+    }
+
+    /// TLSv1.2 DHE primes count as groups even without `supported_groups`:
+    /// BSI TR-02102-2 rejects `ffdhe2048`, `ffdhe6144`, MODP group 14 and
+    /// custom primes; NIST SP 800-52r2 accepts MODP group 14 but not custom
+    /// primes.
+    #[test]
+    fn dhe_primes() {
+        let dhe = |prime: Option<Vec<u8>>| KeyExchangeResult {
+            dh_prime: prime,
+            ..groups(ProtocolVersion::TLS12, &[])
+        };
+        let known = |name: &str| {
+            testls_data::known_dh_primes()
+                .iter()
+                .find(|k| k.name == name)
+                .map(|k| unhex(k.hex))
+        };
+        let mut custom = vec![0, 0x7f];
+        custom.extend([0xff; 255]);
+        let key_exchange = [
+            dhe(known("ffdhe2048")),
+            dhe(known("ffdhe3072")),
+            dhe(known("ffdhe6144")),
+            dhe(known("MODP group 14")),
+            dhe(Some(custom)),
+        ];
+        let input = PolicyInput {
+            key_exchange: Some(&key_exchange),
+            ..bsi_input()
+        };
+        let messages = |policy| -> Vec<String> {
+            policy_findings(policy, &input)
+                .into_iter()
+                .filter(|f| f.id == "policy.group")
+                .map(|f| f.message)
+                .collect()
+        };
+        let tail = ", which bsi-tr-02102-2 does not allow";
+        assert_eq!(
+            messages(Policy::BsiTr021022),
+            [
+                format!("key exchange group ffdhe2048 (0x0100) is accepted{tail}"),
+                format!("key exchange group ffdhe6144 (0x0103) is accepted{tail}"),
+                format!("DHE uses MODP group 14{tail}"),
+                format!("DHE uses a custom 2047-bit prime{tail}"),
+            ]
+        );
+        assert_eq!(
+            messages(Policy::Nist80052r2),
+            ["DHE uses a custom 2047-bit prime, which nist-800-52r2 does not allow"]
+        );
+    }
+
+    /// Input with nothing measured but an empty cipher and certificate scan.
+    fn bsi_input() -> PolicyInput<'static> {
+        PolicyInput {
+            protocols: &[],
+            ciphers: Some(&[]),
+            cipher_errors: &[],
+            key_exchange: Some(&[]),
+            key_exchange_errors: &[],
+            chain: None,
+            http: None,
+        }
+    }
+
     /// NIST requires TLSv1.3 and SHA-2 hashes in RSASSA-PSS signatures.
     #[test]
     fn nist_requirements() {
@@ -1041,6 +1359,7 @@ mod tests {
         assert_eq!("MOZILLA-MODERN".parse(), Ok(Policy::MozillaModern));
         assert_eq!("NIST-800-52R2".parse(), Ok(Policy::Nist80052r2));
         assert_eq!("CNSA-2.0".parse(), Ok(Policy::Cnsa2));
+        assert_eq!("BSI-TR-02102-2".parse(), Ok(Policy::BsiTr021022));
         assert!("pci".parse::<Policy>().is_err());
     }
 }

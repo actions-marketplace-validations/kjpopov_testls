@@ -47,6 +47,9 @@ All notable changes to `testls` are listed here. The format follows
 - `--policy nist-800-52r2` checks against NIST SP 800-52r2 for government
   servers: TLSv1.2 and TLSv1.3 (both required), the listed suites and groups, RSA of at
   least 2048 bits or ECDSA on P-256/P-384.
+- `--policy bsi-tr-02102-2` checks against BSI TR-02102-2 (2025-01):
+  TLSv1.2 and TLSv1.3, forward-secret suites, NIST and brainpool groups,
+  RSA of at least 3000 bits, RSASSA-PSS or ECDSA signatures.
 - `--policy cnsa-2.0` checks against the NSA CNSA 2.0 TLS profile: TLSv1.3
   only (required), `TLS_AES_256_GCM_SHA384`, ML-KEM-1024 and ML-DSA-87
   certificates.

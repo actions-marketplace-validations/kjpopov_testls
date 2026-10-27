@@ -601,6 +601,20 @@ fn policy_reports_deviations() {
         "{findings:?}"
     );
 
+    let (_, findings) = run(&["--fail-on", "critical", "--policy", "bsi-tr-02102-2"]);
+    assert!(
+        findings
+            .iter()
+            .any(|(id, m)| id == "policy.cipher" && m.contains("TLS_CHACHA20_POLY1305_SHA256")),
+        "{findings:?}"
+    );
+    assert!(
+        findings.iter().all(|(id, m)| id != "policy.hsts"
+            && id != "policy.incomplete"
+            && m.ends_with("which bsi-tr-02102-2 does not allow")),
+        "{findings:?}"
+    );
+
     let (_, findings) = run(&["--fail-on", "critical", "--policy", "cnsa-2.0"]);
     for id in ["policy.cipher", "policy.cert_key", "policy.cert_signature"] {
         assert!(
