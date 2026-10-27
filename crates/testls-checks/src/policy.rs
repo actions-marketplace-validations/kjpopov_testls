@@ -4,7 +4,8 @@
 //! The Mozilla profiles follow the Mozilla Server Side TLS guidelines,
 //! version 6.0 (<https://ssl-config.mozilla.org/guidelines/6.0.json>).
 //! The NIST profile follows NIST SP 800-52 revision 2
-//! (<https://doi.org/10.6028/NIST.SP.800-52r2>). The CNSA 2.0 profile
+//! (<https://doi.org/10.6028/NIST.SP.800-52r2>). The BSI profile follows
+//! BSI TR-02102-2, version 2025-01. The CNSA 2.0 profile
 //! follows the NSA CNSA 2.0 TLS 1.3 profile,
 //! draft-becker-cnsa2-tls-profile-05.
 //! Suite and group code points are from the IANA TLS parameter registries.
@@ -40,6 +41,9 @@ pub enum Policy {
     /// NIST SP 800-52r2 for servers used by government clients: TLSv1.2
     /// and TLSv1.3, NIST-approved suites, groups and certificates.
     Nist80052r2,
+    /// BSI TR-02102-2: TLSv1.2 and TLSv1.3 with forward secrecy, RSA keys
+    /// of at least 3000 bits, brainpool or NIST curves.
+    BsiTr021022,
     /// NSA CNSA 2.0: TLSv1.3 with `TLS_AES_256_GCM_SHA384`, ML-KEM-1024 and
     /// ML-DSA-87 only.
     Cnsa2,
@@ -47,10 +51,11 @@ pub enum Policy {
 
 impl Policy {
     /// All policies, in the order they are listed on the command line.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::MozillaModern,
         Self::MozillaIntermediate,
         Self::Nist80052r2,
+        Self::BsiTr021022,
         Self::Cnsa2,
     ];
 
@@ -61,6 +66,7 @@ impl Policy {
             Self::MozillaModern => "mozilla-modern",
             Self::MozillaIntermediate => "mozilla-intermediate",
             Self::Nist80052r2 => "nist-800-52r2",
+            Self::BsiTr021022 => "bsi-tr-02102-2",
             Self::Cnsa2 => "cnsa-2.0",
         }
     }
@@ -71,6 +77,7 @@ impl Policy {
             Self::MozillaModern => &MOZILLA_MODERN,
             Self::MozillaIntermediate => &MOZILLA_INTERMEDIATE,
             Self::Nist80052r2 => &NIST_800_52R2,
+            Self::BsiTr021022 => &BSI_TR_02102_2,
             Self::Cnsa2 => &CNSA_2,
         }
     }
@@ -238,6 +245,65 @@ static NIST_800_52R2: Rules = Rules {
     curves: MOZILLA_CURVES,
     keys: &[],
     signatures: NIST_SIGNATURES,
+    lifespan_days: None,
+    hsts_max_age: None,
+};
+
+/// TLSv1.2 suites of BSI TR-02102-2 table 3 (ECDHE and DHE with AES in
+/// CBC, GCM or CCM mode). The non-forward-secret suites of table 4 (only
+/// "if forward secrecy is not possible", until 2026) and the PSK suites of
+/// table 5 are excluded.
+const BSI_SUITES: &[u16] = &[
+    // ECDHE-ECDSA.
+    0xc023, 0xc024, 0xc02b, 0xc02c, 0xc0ac, 0xc0ad, // ECDHE-RSA.
+    0xc027, 0xc028, 0xc02f, 0xc030, // DHE-DSS.
+    0x0040, 0x006a, 0x00a2, 0x00a3, // DHE-RSA.
+    0x0067, 0x006b, 0x009e, 0x009f, 0xc09e, 0xc09f,
+];
+
+/// Groups of BSI TR-02102-2 tables 6 (TLSv1.2) and 10 (TLSv1.3):
+/// `secp256r1`, `secp384r1`, `secp521r1`, the brainpool curves (`26`-`28`
+/// for TLSv1.2, `31`-`33` for TLSv1.3), `ffdhe3072` and `ffdhe4096`.
+const BSI_GROUPS: &[u16] = &[
+    0x0017, 0x0018, 0x0019, 0x001a, 0x001b, 0x001c, 0x001f, 0x0020, 0x0021, 0x0101, 0x0102,
+];
+
+/// ECDSA curves of BSI TR-02102-2 §3.6.2: brainpoolP256r1, brainpoolP384r1,
+/// brainpoolP512r1 (RFC 5639 §4.1) and P-256, P-384, P-521 (RFC 5480
+/// §2.1.1.1).
+const BSI_CURVES: &[(&str, &str)] = &[
+    ("1.3.36.3.3.2.8.1.1.7", "brainpoolP256r1"),
+    ("1.3.36.3.3.2.8.1.1.11", "brainpoolP384r1"),
+    ("1.3.36.3.3.2.8.1.1.13", "brainpoolP512r1"),
+    ("1.2.840.10045.3.1.7", "P-256"),
+    ("1.3.132.0.34", "P-384"),
+    ("1.3.132.0.35", "P-521"),
+];
+
+/// Leaf signature algorithms of BSI TR-02102-2 table 12: RSASSA-PSS and
+/// ECDSA with SHA-2. The `rsa_pkcs1_*` schemes were recommended only up to
+/// 2025.
+const BSI_SIGNATURES: &[(&str, &str)] = &[
+    ("1.2.840.10045.4.3.2", "ecdsa-with-SHA256"),
+    ("1.2.840.10045.4.3.3", "ecdsa-with-SHA384"),
+    ("1.2.840.10045.4.3.4", "ecdsa-with-SHA512"),
+    ("1.2.840.113549.1.1.10", "RSASSA-PSS"),
+];
+
+/// BSI TR-02102-2 (version 2025-01): TLSv1.2 and TLSv1.3 (§3.2), the
+/// TLSv1.3 suites `TLS_AES_128_GCM_SHA256`, `TLS_AES_256_GCM_SHA384` and
+/// `TLS_AES_128_CCM_SHA256` (table 13), RSA keys of at least 3000 bits
+/// (table 14) and ECDSA on the §3.6.2 curves. No HSTS or lifetime limits.
+static BSI_TR_02102_2: Rules = Rules {
+    versions: &[ProtocolVersion::TLS12, ProtocolVersion::TLS13],
+    required: &[],
+    tls13_suites: &[0x1301, 0x1302, 0x1304],
+    suites: BSI_SUITES,
+    groups: BSI_GROUPS,
+    rsa_bits: Some(3000),
+    curves: BSI_CURVES,
+    keys: &[],
+    signatures: BSI_SIGNATURES,
     lifespan_days: None,
     hsts_max_age: None,
 };
@@ -901,6 +967,83 @@ mod tests {
         );
     }
 
+    /// BSI TR-02102-2 allows brainpool groups, DHE with `ffdhe3072` and
+    /// ECDSA leaves, but not SHA-1 CBC suites, `ChaCha20`, x25519,
+    /// `ffdhe2048`, RSA keys below 3000 bits or PKCS #1 v1.5 signatures.
+    #[test]
+    fn bsi_server() {
+        let protocols = protocols(&[ProtocolVersion::TLS12, ProtocolVersion::TLS13]);
+        let ciphers = [
+            ciphers(ProtocolVersion::TLS12, &[0xc02f, 0x009e, 0xc013, 0xcca8]),
+            ciphers(ProtocolVersion::TLS13, &[0x1301, 0x1304, 0x1303]),
+        ];
+        let key_exchange = [
+            groups(ProtocolVersion::TLS12, &[0x0017, 0x001a, 0x0101, 0x0100]),
+            groups(ProtocolVersion::TLS13, &[0x001f, 0x001d]),
+        ];
+        let chain = [EC_LOCALHOST.to_vec()];
+        let input = PolicyInput {
+            protocols: &protocols,
+            ciphers: Some(&ciphers),
+            cipher_errors: &[],
+            key_exchange: Some(&key_exchange),
+            key_exchange_errors: &[],
+            chain: Some(&chain),
+            http: None,
+        };
+        let tail = ", which bsi-tr-02102-2 does not allow";
+        let expected = [
+            (
+                "policy.cipher",
+                "TLSv1.2 accepts TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
+            ),
+            (
+                "policy.cipher",
+                "TLSv1.2 accepts TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
+            ),
+            (
+                "policy.cipher",
+                "TLSv1.3 accepts TLS_CHACHA20_POLY1305_SHA256",
+            ),
+            (
+                "policy.group",
+                "key exchange group ffdhe2048 (0x0100) is accepted",
+            ),
+            (
+                "policy.group",
+                "key exchange group x25519 (0x001d) is accepted",
+            ),
+        ]
+        .map(|(id, what)| (id.to_owned(), format!("{what}{tail}")));
+        assert_eq!(
+            summary(&policy_findings(Policy::BsiTr021022, &input)),
+            expected
+        );
+
+        let chain = [RSA2048.to_vec()];
+        let input = PolicyInput {
+            ciphers: Some(&[]),
+            key_exchange: Some(&[]),
+            chain: Some(&chain),
+            ..input
+        };
+        let expected = [
+            (
+                "policy.cert_key",
+                "leaf certificate has an RSA key of only 2048 bits",
+            ),
+            (
+                "policy.cert_signature",
+                "leaf certificate is signed with sha256WithRSAEncryption",
+            ),
+        ]
+        .map(|(id, what)| (id.to_owned(), format!("{what}{tail}")));
+        assert_eq!(
+            summary(&policy_findings(Policy::BsiTr021022, &input)),
+            expected
+        );
+    }
+
     /// NIST requires TLSv1.3 and SHA-2 hashes in RSASSA-PSS signatures.
     #[test]
     fn nist_requirements() {
@@ -1041,6 +1184,7 @@ mod tests {
         assert_eq!("MOZILLA-MODERN".parse(), Ok(Policy::MozillaModern));
         assert_eq!("NIST-800-52R2".parse(), Ok(Policy::Nist80052r2));
         assert_eq!("CNSA-2.0".parse(), Ok(Policy::Cnsa2));
+        assert_eq!("BSI-TR-02102-2".parse(), Ok(Policy::BsiTr021022));
         assert!("pci".parse::<Policy>().is_err());
     }
 }
