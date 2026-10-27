@@ -7,20 +7,22 @@ aarch64), macOS (x86_64 and arm64) and Windows (x86_64).
 
 Download an archive from the
 [releases page](https://github.com/kjpopov/testls/releases), check it
-against `SHA256SUMS` and put `testls` on your `PATH`:
+against `SHA256SUMS` and put `testls` on your `PATH`. For Linux x86_64:
 
 ```bash
 base=https://github.com/kjpopov/testls/releases/download/v0.4.1
 curl -fLO "$base/testls-v0.4.1-x86_64-unknown-linux-musl.tar.gz"
 curl -fLO "$base/SHA256SUMS"
-sha256sum --ignore-missing -c SHA256SUMS   # macOS: shasum -a 256 --ignore-missing -c SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS
 tar xzf testls-v0.4.1-x86_64-unknown-linux-musl.tar.gz
 mkdir -p ~/.local/bin
 install -m 755 testls-v0.4.1-x86_64-unknown-linux-musl/testls ~/.local/bin/
 testls example.com   # needs ~/.local/bin on your PATH
 ```
 
-On macOS the binaries are not notarized yet; if Gatekeeper blocks them,
+On macOS use the `aarch64-apple-darwin` (or `x86_64-apple-darwin`) archive
+and check it with `shasum -a 256 --ignore-missing -c SHA256SUMS`. The
+binaries are not notarized yet; if Gatekeeper blocks them,
 clear the quarantine flag on the extracted binary before installing it, for
 example `xattr -d com.apple.quarantine testls-v0.4.1-aarch64-apple-darwin/testls`.
 
