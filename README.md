@@ -97,6 +97,9 @@ testls --policy mozilla-intermediate --fail-on medium example.com
 # Check against NIST SP 800-52r2 (government servers)
 testls --policy nist-800-52r2 --fail-on medium example.com
 
+# Check against CNSA 2.0 (TLSv1.3, ML-KEM-1024, ML-DSA-87)
+testls --policy cnsa-2.0 --fail-on medium example.com
+
 # Explain a finding id shown in brackets, or list all ids
 testls explain hsts.missing
 ```
@@ -143,7 +146,7 @@ A web service (`testls serve`, REST API and browser UI) is planned for v0.6.
 | Suppressions | `.testls.toml` entries with reason and expiry date | v0.4 |
 | Baseline | `--baseline` report: fail only on new findings | v0.4 |
 | Profiles | `--profile quick\|default\|full` scan depth | v0.4 |
-| Policies | `--policy mozilla-modern\|mozilla-intermediate\|nist-800-52r2` compliance findings | v0.4 |
+| Policies | `--policy mozilla-modern\|mozilla-intermediate\|nist-800-52r2\|cnsa-2.0` compliance findings | v0.4 |
 | Key exchange | Supported groups (X25519, ECDHE curves, ML-KEM hybrids) | v0.2 |
 | HTTP headers | HSTS, preload, header hygiene | v0.2 |
 | Revocation | OCSP stapling, OCSP/CRL | v0.2 |

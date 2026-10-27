@@ -4,7 +4,9 @@
 //! The Mozilla profiles follow the Mozilla Server Side TLS guidelines,
 //! version 6.0 (<https://ssl-config.mozilla.org/guidelines/6.0.json>).
 //! The NIST profile follows NIST SP 800-52 revision 2
-//! (<https://doi.org/10.6028/NIST.SP.800-52r2>).
+//! (<https://doi.org/10.6028/NIST.SP.800-52r2>). The CNSA 2.0 profile
+//! follows the NSA CNSA 2.0 TLS 1.3 profile,
+//! draft-becker-cnsa2-tls-profile-05.
 //! Suite and group code points are from the IANA TLS parameter registries.
 
 use std::fmt;
@@ -38,14 +40,18 @@ pub enum Policy {
     /// NIST SP 800-52r2 for servers used by government clients: TLSv1.2
     /// and TLSv1.3, NIST-approved suites, groups and certificates.
     Nist80052r2,
+    /// NSA CNSA 2.0: TLSv1.3 with `TLS_AES_256_GCM_SHA384`, ML-KEM-1024 and
+    /// ML-DSA-87 only.
+    Cnsa2,
 }
 
 impl Policy {
     /// All policies, in the order they are listed on the command line.
-    pub const ALL: [Self; 3] = [
+    pub const ALL: [Self; 4] = [
         Self::MozillaModern,
         Self::MozillaIntermediate,
         Self::Nist80052r2,
+        Self::Cnsa2,
     ];
 
     /// Name used on the command line and in finding messages.
@@ -55,6 +61,7 @@ impl Policy {
             Self::MozillaModern => "mozilla-modern",
             Self::MozillaIntermediate => "mozilla-intermediate",
             Self::Nist80052r2 => "nist-800-52r2",
+            Self::Cnsa2 => "cnsa-2.0",
         }
     }
 
@@ -64,6 +71,7 @@ impl Policy {
             Self::MozillaModern => &MOZILLA_MODERN,
             Self::MozillaIntermediate => &MOZILLA_INTERMEDIATE,
             Self::Nist80052r2 => &NIST_800_52R2,
+            Self::Cnsa2 => &CNSA_2,
         }
     }
 }
@@ -102,6 +110,8 @@ struct Rules {
     rsa_bits: Option<usize>,
     /// Named curves (OIDs) for ECDSA keys.
     curves: &'static [(&'static str, &'static str)],
+    /// Other leaf key algorithms (OIDs).
+    keys: &'static [(&'static str, &'static str)],
     /// Leaf signature algorithms (OIDs).
     signatures: &'static [(&'static str, &'static str)],
     /// Longest allowed leaf validity period in days, if limited.
@@ -150,6 +160,7 @@ static MOZILLA_MODERN: Rules = Rules {
     groups: MOZILLA_GROUPS,
     rsa_bits: None,
     curves: MOZILLA_CURVES,
+    keys: &[],
     signatures: ECDSA_SIGNATURES,
     lifespan_days: Some(90),
     hsts_max_age: Some(MOZILLA_HSTS_MAX_AGE),
@@ -165,6 +176,7 @@ static MOZILLA_INTERMEDIATE: Rules = Rules {
     groups: MOZILLA_GROUPS,
     rsa_bits: Some(2048),
     curves: MOZILLA_CURVES,
+    keys: &[],
     signatures: INTERMEDIATE_SIGNATURES,
     lifespan_days: Some(366),
     hsts_max_age: Some(MOZILLA_HSTS_MAX_AGE),
@@ -224,7 +236,29 @@ static NIST_800_52R2: Rules = Rules {
     groups: NIST_GROUPS,
     rsa_bits: Some(2048),
     curves: MOZILLA_CURVES,
+    keys: &[],
     signatures: NIST_SIGNATURES,
+    lifespan_days: None,
+    hsts_max_age: None,
+};
+
+/// ML-DSA-87 (FIPS 204), the only CNSA 2.0 signature algorithm, as both
+/// key and signature algorithm (NIST CSOR OID, RFC 9881).
+const ML_DSA_87: &[(&str, &str)] = &[("2.16.840.1.101.3.4.3.19", "ML-DSA-87")];
+
+/// CNSA 2.0 (draft-becker-cnsa2-tls-profile-05): TLSv1.3 only and required
+/// (§6), `TLS_AES_256_GCM_SHA384` (§4), the `MLKEM1024` group (§7.2) and
+/// ML-DSA-87 certificates (§8). No HSTS or lifetime limits.
+static CNSA_2: Rules = Rules {
+    versions: &[ProtocolVersion::TLS13],
+    required: &[ProtocolVersion::TLS13],
+    tls13_suites: &[0x1302],
+    suites: &[],
+    groups: &[0x0202],
+    rsa_bits: None,
+    curves: &[],
+    keys: ML_DSA_87,
+    signatures: ML_DSA_87,
     lifespan_days: None,
     hsts_max_age: None,
 };
@@ -431,7 +465,7 @@ fn certificate_deviations(policy: Policy, leaf: &[u8]) -> Vec<Finding> {
             policy,
             &format!(
                 "leaf certificate is signed with {}{}",
-                label(&signature, NIST_SIGNATURES),
+                label(&signature, NIST_SIGNATURES.iter().chain(ML_DSA_87)),
                 if pss_hash_allowed(&cert) {
                     ""
                 } else {
@@ -455,9 +489,9 @@ fn certificate_deviations(policy: Policy, leaf: &[u8]) -> Vec<Finding> {
 }
 
 /// Name of `oid` from `table`, or the dotted OID itself.
-fn label(oid: &str, table: &[(&str, &'static str)]) -> String {
+fn label<'a>(oid: &str, table: impl IntoIterator<Item = &'a (&'a str, &'static str)>) -> String {
     table
-        .iter()
+        .into_iter()
         .find(|(o, _)| *o == oid)
         .map_or_else(|| oid.to_owned(), |(_, name)| (*name).to_owned())
 }
@@ -465,6 +499,10 @@ fn label(oid: &str, table: &[(&str, &'static str)]) -> String {
 /// Why the leaf's public key is outside the policy, if it is.
 fn key_deviation(rules: &Rules, cert: &X509Certificate<'_>) -> Option<String> {
     let spki = cert.public_key();
+    let algorithm = spki.algorithm.algorithm.to_id_string();
+    if rules.keys.iter().any(|(oid, _)| *oid == algorithm) {
+        return None;
+    }
     match spki.parsed() {
         Ok(PublicKey::RSA(key)) => {
             let bits = key.key_size();
@@ -491,7 +529,7 @@ fn key_deviation(rules: &Rules, cert: &X509Certificate<'_>) -> Option<String> {
         }
         Ok(_) | Err(_) => Some(format!(
             "leaf certificate has a key of algorithm {}",
-            spki.algorithm.algorithm.to_id_string()
+            label(&algorithm, ML_DSA_87)
         )),
     }
 }
@@ -524,6 +562,8 @@ mod tests {
     const RSA1024_SHA1: &[u8] = include_bytes!("testdata/rsa1024-sha1-wildcard.der");
     /// RSA-PSS leaf signed with SHA-1.
     const RSA_PSS_SHA1: &[u8] = include_bytes!("testdata/rsa-pss-sha1.der");
+    /// Self-signed ML-DSA-87 leaf, valid 90 days.
+    const MLDSA87: &[u8] = include_bytes!("testdata/mldsa87-localhost.der");
 
     /// Protocol results with `versions` supported.
     fn protocols(versions: &[ProtocolVersion]) -> Vec<ProtocolResult> {
@@ -921,6 +961,77 @@ mod tests {
         );
     }
 
+    /// CNSA 2.0 accepts only TLSv1.3 with AES-256-GCM, ML-KEM-1024 and an
+    /// ML-DSA-87 certificate.
+    #[test]
+    fn cnsa_server() {
+        let protocols = protocols(&[ProtocolVersion::TLS13]);
+        let ciphers = [ciphers(ProtocolVersion::TLS13, &[0x1302])];
+        let key_exchange = [groups(ProtocolVersion::TLS13, &[0x0202])];
+        let chain = [MLDSA87.to_vec()];
+        let input = PolicyInput {
+            protocols: &protocols,
+            ciphers: Some(&ciphers),
+            cipher_errors: &[],
+            key_exchange: Some(&key_exchange),
+            key_exchange_errors: &[],
+            chain: Some(&chain),
+            http: None,
+        };
+        assert_eq!(policy_findings(Policy::Cnsa2, &input), []);
+        assert_eq!(
+            summary(&certificate_deviations(
+                Policy::MozillaIntermediate,
+                MLDSA87
+            )),
+            [
+                (
+                    "policy.cert_key".to_owned(),
+                    "leaf certificate has a key of algorithm ML-DSA-87, which \
+                     mozilla-intermediate does not allow"
+                        .to_owned()
+                ),
+                (
+                    "policy.cert_signature".to_owned(),
+                    "leaf certificate is signed with ML-DSA-87, which \
+                     mozilla-intermediate does not allow"
+                        .to_owned()
+                )
+            ]
+        );
+
+        let protocols = self::protocols(&[ProtocolVersion::TLS12, ProtocolVersion::TLS13]);
+        let ciphers = [self::ciphers(ProtocolVersion::TLS13, &[0x1301, 0x1302])];
+        let key_exchange = [self::groups(ProtocolVersion::TLS13, &[0x11ec, 0x0202])];
+        let chain = [EC_LOCALHOST.to_vec()];
+        let input = PolicyInput {
+            protocols: &protocols,
+            ciphers: Some(&ciphers),
+            key_exchange: Some(&key_exchange),
+            chain: Some(&chain),
+            ..input
+        };
+        let tail = ", which cnsa-2.0 does not allow";
+        let expected = [
+            ("policy.protocol", "TLSv1.2 is offered"),
+            ("policy.cipher", "TLSv1.3 accepts TLS_AES_128_GCM_SHA256"),
+            (
+                "policy.group",
+                "key exchange group X25519MLKEM768 (0x11ec) is accepted",
+            ),
+            (
+                "policy.cert_key",
+                "leaf certificate has an EC key on curve 1.2.840.10045.3.1.7",
+            ),
+            (
+                "policy.cert_signature",
+                "leaf certificate is signed with ecdsa-with-SHA256",
+            ),
+        ]
+        .map(|(id, what)| (id.to_owned(), format!("{what}{tail}")));
+        assert_eq!(summary(&policy_findings(Policy::Cnsa2, &input)), expected);
+    }
+
     /// Names round-trip through `FromStr`.
     #[test]
     fn names() {
@@ -929,6 +1040,7 @@ mod tests {
         }
         assert_eq!("MOZILLA-MODERN".parse(), Ok(Policy::MozillaModern));
         assert_eq!("NIST-800-52R2".parse(), Ok(Policy::Nist80052r2));
+        assert_eq!("CNSA-2.0".parse(), Ok(Policy::Cnsa2));
         assert!("pci".parse::<Policy>().is_err());
     }
 }
