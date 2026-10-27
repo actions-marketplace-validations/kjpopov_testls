@@ -18,17 +18,23 @@ const MAX_REPLY: usize = 64 * 1024;
 pub enum Starttls {
     /// SMTP `STARTTLS` (RFC 3207).
     Smtp,
+    /// IMAP `STARTTLS` (RFC 9051 §6.2.1).
+    Imap,
+    /// POP3 `STLS` (RFC 2595 §4).
+    Pop3,
 }
 
 impl Starttls {
     /// All protocols, in the order they are listed on the command line.
-    pub const ALL: [Self; 1] = [Self::Smtp];
+    pub const ALL: [Self; 3] = [Self::Smtp, Self::Imap, Self::Pop3];
 
     /// Name used on the command line.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Smtp => "smtp",
+            Self::Imap => "imap",
+            Self::Pop3 => "pop3",
         }
     }
 
@@ -37,6 +43,8 @@ impl Starttls {
     pub fn default_port(self) -> u16 {
         match self {
             Self::Smtp => 25,
+            Self::Imap => 143,
+            Self::Pop3 => 110,
         }
     }
 
@@ -57,6 +65,8 @@ impl Starttls {
         let reader = Replies { data: early };
         match self {
             Self::Smtp => smtp(stream, reader).await,
+            Self::Imap => imap(stream, reader).await,
+            Self::Pop3 => pop3(stream, reader).await,
         }
     }
 }
@@ -103,6 +113,90 @@ async fn smtp(stream: &mut TcpStream, mut reader: Replies) -> Result<(), ProbeEr
     let ready = reader.smtp(stream).await?;
     expect(&ready, 220, "STARTTLS")?;
     reader.finish()
+}
+
+/// IMAP dialogue (RFC 9051 §6.1.1, §6.2.1, §7.1): `* OK` greeting,
+/// `CAPABILITY` must list `STARTTLS`, then `STARTTLS` must be answered `OK`.
+async fn imap(stream: &mut TcpStream, mut reader: Replies) -> Result<(), ProbeError> {
+    let greeting = reader.line(stream).await?;
+    if !starts_with_ignore_case(&greeting, "* OK") {
+        return Err(error(format!("server answered greeting with {greeting:?}")));
+    }
+    send(stream, b"a CAPABILITY\r\n").await?;
+    let caps = reader.imap(stream, "a").await?;
+    expect_imap(&caps, "CAPABILITY")?;
+    let offered = caps.iter().any(|l| {
+        let mut words = l.split_ascii_whitespace();
+        words.next() == Some("*")
+            && words
+                .next()
+                .is_some_and(|w| w.eq_ignore_ascii_case("CAPABILITY"))
+            && words.any(|w| w.eq_ignore_ascii_case("STARTTLS"))
+    });
+    if !offered {
+        return Err(error("IMAP server does not offer STARTTLS".into()));
+    }
+    send(stream, b"b STARTTLS\r\n").await?;
+    let ready = reader.imap(stream, "b").await?;
+    expect_imap(&ready, "STARTTLS")?;
+    reader.finish()
+}
+
+/// Fails unless the tagged (last) line of an IMAP response is `OK`.
+fn expect_imap(lines: &[String], step: &str) -> Result<(), ProbeError> {
+    let last = lines.last().map_or("", String::as_str);
+    match last.split_once(' ') {
+        Some((_, rest)) if starts_with_ignore_case(rest, "OK") => Ok(()),
+        _ => Err(error(format!("server answered {step} with {last:?}"))),
+    }
+}
+
+/// POP3 dialogue (RFC 1939 §4, RFC 2449 §5, RFC 2595 §4): `+OK`
+/// greeting, `CAPA` must list `STLS`, then `STLS` must be answered `+OK`.
+async fn pop3(stream: &mut TcpStream, mut reader: Replies) -> Result<(), ProbeError> {
+    let greeting = reader.line(stream).await?;
+    expect_pop3(&greeting, "greeting")?;
+    send(stream, b"CAPA\r\n").await?;
+    let status = reader.line(stream).await?;
+    expect_pop3(&status, "CAPA")?;
+    let mut offered = false;
+    let mut total = 0;
+    loop {
+        let line = reader.line(stream).await?;
+        if line == "." {
+            break;
+        }
+        total += line.len();
+        if total > MAX_REPLY {
+            return Err(error(format!("server reply exceeds {MAX_REPLY} bytes")));
+        }
+        offered |= line
+            .split_ascii_whitespace()
+            .next()
+            .is_some_and(|k| k.eq_ignore_ascii_case("STLS"));
+    }
+    if !offered {
+        return Err(error("POP3 server does not offer STLS".into()));
+    }
+    send(stream, b"STLS\r\n").await?;
+    let ready = reader.line(stream).await?;
+    expect_pop3(&ready, "STLS")?;
+    reader.finish()
+}
+
+/// Fails unless a POP3 status line is positive (`+OK`).
+fn expect_pop3(line: &str, step: &str) -> Result<(), ProbeError> {
+    if starts_with_ignore_case(line, "+OK") {
+        Ok(())
+    } else {
+        Err(error(format!("server answered {step} with {line:?}")))
+    }
+}
+
+/// Reports whether `s` starts with `prefix`, ignoring ASCII case.
+fn starts_with_ignore_case(s: &str, prefix: &str) -> bool {
+    s.get(..prefix.len())
+        .is_some_and(|p| p.eq_ignore_ascii_case(prefix))
 }
 
 /// Writes `data` to `stream`.
@@ -192,6 +286,28 @@ impl Replies {
         }
     }
 
+    /// Reads IMAP response lines up to and including the one tagged
+    /// `tag` (RFC 9051 §2.2.2); untagged lines come first.
+    async fn imap(&mut self, stream: &mut TcpStream, tag: &str) -> Result<Vec<String>, ProbeError> {
+        let mut lines = Vec::new();
+        let mut total = 0;
+        loop {
+            let line = self.line(stream).await?;
+            total += line.len();
+            if total > MAX_REPLY {
+                return Err(error(format!("server reply exceeds {MAX_REPLY} bytes")));
+            }
+            let tagged = line.split_once(' ').is_some_and(|(t, _)| t == tag);
+            if !tagged && !line.starts_with("* ") {
+                return Err(error(format!("malformed server reply {line:?}")));
+            }
+            lines.push(line);
+            if tagged {
+                return Ok(lines);
+            }
+        }
+    }
+
     /// Fails when the server sent bytes past its last reply.
     fn finish(self) -> Result<(), ProbeError> {
         if self.data.is_empty() {
@@ -233,10 +349,30 @@ mod tests {
         (addr, task)
     }
 
+    /// Script of a fake server; see [`server`].
+    type Script = &'static [(Option<&'static str>, &'static [u8])];
+
     /// Connects to `addr` and runs the SMTP upgrade.
     async fn upgrade(addr: SocketAddr) -> Result<(), ProbeError> {
+        upgrade_with(Starttls::Smtp, addr).await
+    }
+
+    /// Connects to `addr` and runs the `protocol` upgrade.
+    async fn upgrade_with(protocol: Starttls, addr: SocketAddr) -> Result<(), ProbeError> {
         let mut stream = TcpStream::connect(addr).await.unwrap();
-        Starttls::Smtp.upgrade(&mut stream, Vec::new()).await
+        protocol.upgrade(&mut stream, Vec::new()).await
+    }
+
+    /// Runs `protocol` against each script and checks the error mentions
+    /// the expected text.
+    async fn assert_errors(protocol: Starttls, cases: &[(Script, &str)]) {
+        for &(script, expected) in cases {
+            let (addr, _got) = server(script).await;
+            let Err(ProbeError::Connect(e)) = upgrade_with(protocol, addr).await else {
+                panic!("{protocol} upgrade accepted {script:?}");
+            };
+            assert!(e.to_string().contains(expected), "{e}");
+        }
     }
 
     /// The dialogue sends EHLO and STARTTLS and accepts a multi-line
@@ -260,7 +396,6 @@ mod tests {
     /// errors.
     #[tokio::test]
     async fn smtp_errors() {
-        type Script = &'static [(Option<&'static str>, &'static [u8])];
         let cases: [(Script, &str); 6] = [
             (&[(None, b"554 go away\r\n")], "greeting with 554 go away"),
             (&[(None, b"SSH-2.0-x\r\n")], "malformed server reply"),
@@ -289,13 +424,7 @@ mod tests {
                 "data after its STARTTLS reply",
             ),
         ];
-        for (script, expected) in cases {
-            let (addr, _got) = server(script).await;
-            let Err(ProbeError::Connect(e)) = upgrade(addr).await else {
-                panic!("upgrade accepted {script:?}");
-            };
-            assert!(e.to_string().contains(expected), "{e}");
-        }
+        assert_errors(Starttls::Smtp, &cases).await;
     }
 
     /// Mixed codes within one reply are rejected.
@@ -308,6 +437,110 @@ mod tests {
         assert!(e.to_string().contains("malformed"), "{e}");
     }
 
+    /// The IMAP dialogue checks `CAPABILITY` and accepts a tagged `OK`.
+    #[tokio::test]
+    async fn imap_upgrade() {
+        let (addr, got) = server(&[
+            (None, b"* OK [CAPABILITY IMAP4rev1] ready\r\n"),
+            (
+                Some("a CAPABILITY"),
+                b"* CAPABILITY IMAP4rev1 starttls LOGINDISABLED\r\na OK done\r\n",
+            ),
+            (Some("b STARTTLS"), b"b OK Begin TLS negotiation now\r\n"),
+        ])
+        .await;
+        upgrade_with(Starttls::Imap, addr).await.unwrap();
+        assert_eq!(got.await.unwrap(), ["a CAPABILITY", "b STARTTLS"]);
+    }
+
+    /// IMAP refusals, missing STARTTLS and injected bytes are connect errors.
+    #[tokio::test]
+    async fn imap_errors() {
+        let cases: [(Script, &str); 5] = [
+            (&[(None, b"* BYE busy\r\n")], "greeting with \"* BYE busy\""),
+            (
+                &[
+                    (None, b"* OK hi\r\n"),
+                    (Some("a CAPABILITY"), b"* CAPABILITY IMAP4rev1\r\na OK\r\n"),
+                ],
+                "does not offer STARTTLS",
+            ),
+            (
+                &[
+                    (None, b"* OK hi\r\n"),
+                    (Some("a CAPABILITY"), b"garbage\r\n"),
+                ],
+                "malformed server reply",
+            ),
+            (
+                &[
+                    (None, b"* OK hi\r\n"),
+                    (Some("a CAPABILITY"), b"* CAPABILITY STARTTLS\r\na OK\r\n"),
+                    (Some("b STARTTLS"), b"b NO not now\r\n"),
+                ],
+                "STARTTLS with \"b NO not now\"",
+            ),
+            (
+                &[
+                    (None, b"* OK hi\r\n"),
+                    (Some("a CAPABILITY"), b"* CAPABILITY STARTTLS\r\na OK\r\n"),
+                    (Some("b STARTTLS"), b"b OK go\r\n* injected\r\n"),
+                ],
+                "data after its STARTTLS reply",
+            ),
+        ];
+        assert_errors(Starttls::Imap, &cases).await;
+    }
+
+    /// The POP3 dialogue reads the multi-line `CAPA` list and sends `STLS`.
+    #[tokio::test]
+    async fn pop3_upgrade() {
+        let (addr, got) = server(&[
+            (None, b"+OK ready\r\n"),
+            (Some("CAPA"), b"+OK\r\nTOP\r\nstls\r\nSASL PLAIN\r\n.\r\n"),
+            (Some("STLS"), b"+OK Begin TLS negotiation now\r\n"),
+        ])
+        .await;
+        upgrade_with(Starttls::Pop3, addr).await.unwrap();
+        assert_eq!(got.await.unwrap(), ["CAPA", "STLS"]);
+    }
+
+    /// POP3 refusals, missing STLS and injected bytes are connect errors.
+    #[tokio::test]
+    async fn pop3_errors() {
+        let cases: [(Script, &str); 5] = [
+            (&[(None, b"-ERR busy\r\n")], "greeting with \"-ERR busy\""),
+            (
+                &[(None, b"+OK hi\r\n"), (Some("CAPA"), b"-ERR unknown\r\n")],
+                "CAPA with \"-ERR unknown\"",
+            ),
+            (
+                &[
+                    (None, b"+OK hi\r\n"),
+                    (Some("CAPA"), b"+OK\r\nTOP\r\n.\r\n"),
+                ],
+                "does not offer STLS",
+            ),
+            (
+                &[
+                    (None, b"+OK hi\r\n"),
+                    (Some("CAPA"), b"+OK\r\nSTLS\r\n.\r\n"),
+                    (Some("STLS"), b"-ERR no\r\n"),
+                ],
+                "STLS with \"-ERR no\"",
+            ),
+            (
+                &[
+                    (None, b"+OK hi\r\n"),
+                    (Some("CAPA"), b"+OK\r\nSTLS\r\n.\r\n"),
+                    (Some("STLS"), b"+OK go\r\n+OK injected\r\n"),
+                ],
+                "data after its STARTTLS reply",
+            ),
+        ];
+        assert_errors(Starttls::Pop3, &cases).await;
+    }
+
     /// Names round-trip through `FromStr`, case-insensitively.
     #[test]
     fn names() {
@@ -316,5 +549,7 @@ mod tests {
         }
         assert!("gopher".parse::<Starttls>().is_err());
         assert_eq!(Starttls::Smtp.default_port(), 25);
+        assert_eq!(Starttls::Imap.default_port(), 143);
+        assert_eq!(Starttls::Pop3.default_port(), 110);
     }
 }

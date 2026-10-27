@@ -27,3 +27,11 @@ services:
       dockerfile: Dockerfile.postfix
     image: localhost/testls-postfix
     ports: ["127.0.0.1:14425:25"]
+
+  # Dovecot with STARTTLS on IMAP and POP3, TLS 1.2+.
+  mail:
+    build:
+      context: .
+      dockerfile: Dockerfile.dovecot
+    image: localhost/testls-dovecot
+    ports: ["127.0.0.1:14143:143", "127.0.0.1:14110:110"]

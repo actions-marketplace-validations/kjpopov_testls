@@ -1,7 +1,9 @@
 # Integration test servers
 
-`compose.yaml` starts OpenSSL `s_server` instances and a Postfix server
-with SMTP STARTTLS (`Dockerfile.postfix`, port 14425) used by
+`compose.yaml` starts OpenSSL `s_server` instances, a Postfix server
+with SMTP STARTTLS (`Dockerfile.postfix`, port 14425) and a Dovecot
+server with IMAP and POP3 STARTTLS (`Dockerfile.dovecot`, ports 14143 and
+14110) used by
 `crates/testls/tests/servers.rs`.
 
 `server.pem` (SAN `localhost`, `127.0.0.1`; valid 2026–2126) is signed by the
