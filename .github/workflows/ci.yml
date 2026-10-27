@@ -95,6 +95,8 @@ jobs:
       - run: cargo +1.97 check --workspace --locked
 
   static-build:
+    # Keep the check names that branch protection requires.
+    name: static-build (${{ matrix.target }}, ${{ matrix.runner }})
     strategy:
       fail-fast: false
       matrix:
