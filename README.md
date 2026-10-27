@@ -36,6 +36,10 @@ tar xzf testls-v0.3.0-x86_64-unknown-linux-musl.tar.gz
 ./testls-v0.3.0-x86_64-unknown-linux-musl/testls example.com
 ```
 
+Once testls is on crates.io (from v0.4.0), `cargo binstall testls` fetches
+the same release archive for your platform, and `cargo install --locked
+testls` builds it from source (Rust 1.97 or newer).
+
 On macOS the binaries are not notarized yet; clear the quarantine flag with
 `xattr -d com.apple.quarantine testls` if Gatekeeper blocks them.
 
