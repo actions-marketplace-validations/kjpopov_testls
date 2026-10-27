@@ -173,9 +173,13 @@ testls --format json example.com > baseline.json
 ### Internal hosts
 
 Runners on your network can scan private servers. Trust your CA, pin the
-address or go through a proxy:
+address or go through a proxy. Check out the repository so the CA file
+exists:
 
 ```yaml
+- uses: actions/checkout@v7
+  with:
+    persist-credentials: false
 - uses: kjpopov/testls@v0.4.1
   with:
     args: --ca-file certs/internal-ca.pem --resolve app.internal:443:10.0.0.5 app.internal
