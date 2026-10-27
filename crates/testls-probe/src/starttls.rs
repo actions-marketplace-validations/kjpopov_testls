@@ -119,7 +119,10 @@ async fn smtp(stream: &mut TcpStream, mut reader: Replies) -> Result<(), ProbeEr
 /// `CAPABILITY` must list `STARTTLS`, then `STARTTLS` must be answered `OK`.
 async fn imap(stream: &mut TcpStream, mut reader: Replies) -> Result<(), ProbeError> {
     let greeting = reader.line(stream).await?;
-    if !starts_with_ignore_case(&greeting, "* OK") {
+    if !greeting
+        .strip_prefix("* ")
+        .is_some_and(|rest| status_is(rest, "OK"))
+    {
         return Err(error(format!("server answered greeting with {greeting:?}")));
     }
     send(stream, b"a CAPABILITY\r\n").await?;
@@ -146,7 +149,7 @@ async fn imap(stream: &mut TcpStream, mut reader: Replies) -> Result<(), ProbeEr
 fn expect_imap(lines: &[String], step: &str) -> Result<(), ProbeError> {
     let last = lines.last().map_or("", String::as_str);
     match last.split_once(' ') {
-        Some((_, rest)) if starts_with_ignore_case(rest, "OK") => Ok(()),
+        Some((_, rest)) if status_is(rest, "OK") => Ok(()),
         _ => Err(error(format!("server answered {step} with {last:?}"))),
     }
 }
@@ -186,17 +189,19 @@ async fn pop3(stream: &mut TcpStream, mut reader: Replies) -> Result<(), ProbeEr
 
 /// Fails unless a POP3 status line is positive (`+OK`).
 fn expect_pop3(line: &str, step: &str) -> Result<(), ProbeError> {
-    if starts_with_ignore_case(line, "+OK") {
+    if status_is(line, "+OK") {
         Ok(())
     } else {
         Err(error(format!("server answered {step} with {line:?}")))
     }
 }
 
-/// Reports whether `s` starts with `prefix`, ignoring ASCII case.
-fn starts_with_ignore_case(s: &str, prefix: &str) -> bool {
-    s.get(..prefix.len())
-        .is_some_and(|p| p.eq_ignore_ascii_case(prefix))
+/// Reports whether the first space-separated word of `s` is the status
+/// `token` (ASCII case-insensitive), so `OKAY` does not pass as `OK`.
+fn status_is(s: &str, token: &str) -> bool {
+    s.split(' ')
+        .next()
+        .is_some_and(|w| w.eq_ignore_ascii_case(token))
 }
 
 /// Writes `data` to `stream`.
@@ -456,7 +461,7 @@ mod tests {
     /// IMAP refusals, missing STARTTLS and injected bytes are connect errors.
     #[tokio::test]
     async fn imap_errors() {
-        let cases: [(Script, &str); 5] = [
+        let cases: [(Script, &str); 7] = [
             (&[(None, b"* BYE busy\r\n")], "greeting with \"* BYE busy\""),
             (
                 &[
@@ -480,6 +485,15 @@ mod tests {
                 ],
                 "STARTTLS with \"b NO not now\"",
             ),
+            (
+                &[
+                    (None, b"* OK hi\r\n"),
+                    (Some("a CAPABILITY"), b"* CAPABILITY STARTTLS\r\na OK\r\n"),
+                    (Some("b STARTTLS"), b"b OKAY go\r\n"),
+                ],
+                "STARTTLS with \"b OKAY go\"",
+            ),
+            (&[(None, b"* OKAY hi\r\n")], "greeting with \"* OKAY hi\""),
             (
                 &[
                     (None, b"* OK hi\r\n"),
@@ -508,7 +522,7 @@ mod tests {
     /// POP3 refusals, missing STLS and injected bytes are connect errors.
     #[tokio::test]
     async fn pop3_errors() {
-        let cases: [(Script, &str); 5] = [
+        let cases: [(Script, &str); 6] = [
             (&[(None, b"-ERR busy\r\n")], "greeting with \"-ERR busy\""),
             (
                 &[(None, b"+OK hi\r\n"), (Some("CAPA"), b"-ERR unknown\r\n")],
@@ -528,6 +542,14 @@ mod tests {
                     (Some("STLS"), b"-ERR no\r\n"),
                 ],
                 "STLS with \"-ERR no\"",
+            ),
+            (
+                &[
+                    (None, b"+OK hi\r\n"),
+                    (Some("CAPA"), b"+OK\r\nSTLS\r\n.\r\n"),
+                    (Some("STLS"), b"+OKAY\r\n"),
+                ],
+                "STLS with \"+OKAY\"",
             ),
             (
                 &[
