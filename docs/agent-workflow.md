@@ -119,6 +119,12 @@ timeout. Work on the next branch while a review runs.
    set the repository variable `CRATES_IO_TRUSTED_PUBLISHING=true`. Until
    then the job is skipped. If it fails halfway, rerun it: crates already
    published at that version are skipped. Agents never publish to crates.io.
+5. Packages PR `chore/packages-X.Y.Z` once the release exists:
+   `gh release download vX.Y.Z -p SHA256SUMS -O target/SHA256SUMS` and
+   `python3 scripts/gen-packages.py target/SHA256SUMS` update `Formula/`,
+   `bucket/` and `packaging/winget/`. After merge, tell the maintainer to
+   submit `packaging/winget/X.Y.Z/` to `microsoft/winget-pkgs` (for example
+   with `wingetcreate submit`).
 
 ## Things learned the hard way
 

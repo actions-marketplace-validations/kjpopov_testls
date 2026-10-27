@@ -36,6 +36,23 @@ tar xzf testls-v0.3.0-x86_64-unknown-linux-musl.tar.gz
 ./testls-v0.3.0-x86_64-unknown-linux-musl/testls example.com
 ```
 
+This repository is also a Homebrew tap (macOS, Linux) and a Scoop bucket
+(Windows) for the same archives:
+
+```bash
+brew tap kjpopov/testls https://github.com/kjpopov/testls
+brew install kjpopov/testls/testls
+```
+
+```powershell
+scoop bucket add testls https://github.com/kjpopov/testls
+scoop install testls/testls
+```
+
+winget manifests are prepared in `packaging/winget/` and submitted to
+`microsoft/winget-pkgs`; once accepted, `winget install Kjpopov.Testls`
+works.
+
 Once testls is on crates.io (from v0.4.0), `cargo binstall testls` fetches
 the same release archive for your platform, and `cargo install --locked
 testls` builds it from source (Rust 1.97 or newer).
