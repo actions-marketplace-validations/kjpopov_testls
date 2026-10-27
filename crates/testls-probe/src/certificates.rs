@@ -114,6 +114,13 @@ fn config_with(verifier: Arc<AcceptAll>) -> ClientConfig {
         .with_no_client_auth()
 }
 
+/// ML-DSA signature schemes (IANA TLS `SignatureScheme` registry, 0x0904-0x0906).
+const ML_DSA_SCHEMES: [SignatureScheme; 3] = [
+    SignatureScheme::ML_DSA_44,
+    SignatureScheme::ML_DSA_65,
+    SignatureScheme::ML_DSA_87,
+];
+
 /// Verifier that accepts any certificate and handshake signature, and keeps
 /// the stapled OCSP response.
 #[derive(Debug)]
@@ -182,11 +189,20 @@ impl ServerCertVerifier for AcceptAll {
         Ok(HandshakeSignatureValid::assertion())
     }
 
-    /// Advertises every scheme the crypto provider knows.
+    /// Advertises every scheme the crypto provider knows plus ML-DSA, which
+    /// ring cannot verify but this verifier accepts anyway, so servers with
+    /// only an ML-DSA certificate still send their chain.
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.provider
+        let mut schemes = self
+            .provider
             .signature_verification_algorithms
-            .supported_schemes()
+            .supported_schemes();
+        for scheme in ML_DSA_SCHEMES {
+            if !schemes.contains(&scheme) {
+                schemes.push(scheme);
+            }
+        }
+        schemes
     }
 }
 
@@ -236,6 +252,16 @@ mod tests {
             }
         });
         addr
+    }
+
+    /// ML-DSA schemes are advertised once, next to the provider's schemes.
+    #[test]
+    fn advertises_ml_dsa() {
+        let schemes = AcceptAll::new().supported_verify_schemes();
+        for scheme in ML_DSA_SCHEMES {
+            assert_eq!(schemes.iter().filter(|s| **s == scheme).count(), 1);
+        }
+        assert!(schemes.contains(&SignatureScheme::ECDSA_NISTP256_SHA256));
     }
 
     /// TLS 1.3 handshake returns the leaf certificate and version.
