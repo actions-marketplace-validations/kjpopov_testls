@@ -69,6 +69,7 @@ fn err(msg: impl Into<String>) -> ParseTargetError {
 impl std::str::FromStr for Target {
     type Err = ParseTargetError;
 
+    /// Parses a target, defaulting the port to [`DEFAULT_PORT`].
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         Self::parse_with_port(input, DEFAULT_PORT)
     }
@@ -150,6 +151,8 @@ pub struct TargetSpec(pub Vec<Target>);
 impl std::str::FromStr for TargetSpec {
     type Err = ParseTargetError;
 
+    /// Parses a target or CIDR range, defaulting the port to
+    /// [`DEFAULT_PORT`].
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         Self::parse_with_port(input, DEFAULT_PORT)
     }

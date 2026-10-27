@@ -119,20 +119,25 @@ impl Transport {
     /// As for [`connect`] and [`tunnel`]; a failed or timed-out STARTTLS
     /// dialogue is also a [`ProbeError::Connect`].
     pub(crate) async fn connect(&self) -> Result<TcpStream, ProbeError> {
-        let mut stream = self.open().await?;
-        if let Some(starttls) = self.starttls {
-            timeout(self.read_timeout, starttls.upgrade(&mut stream))
-                .await
-                .map_err(|_| ProbeError::Connect(io::ErrorKind::TimedOut.into()))??;
+        let (mut stream, early) = self.open().await?;
+        match (self.starttls, self.proxy) {
+            (Some(starttls), _) => {
+                timeout(self.read_timeout, starttls.upgrade(&mut stream, early))
+                    .await
+                    .map_err(|_| ProbeError::Connect(io::ErrorKind::TimedOut.into()))??;
+            }
+            (None, Some(proxy)) => reject_early(proxy, &early)?,
+            (None, None) => {}
         }
         Ok(stream)
     }
 
-    /// Opens the TCP connection, directly or through the proxy.
-    async fn open(&self) -> Result<TcpStream, ProbeError> {
+    /// Opens the TCP connection, directly or through the proxy. Also
+    /// returns any tunnel data the proxy relayed after its `CONNECT` reply.
+    async fn open(&self) -> Result<(TcpStream, Vec<u8>), ProbeError> {
         match self.proxy {
             Some(proxy) => {
-                tunnel(
+                tunnel_open(
                     proxy,
                     self.source,
                     self.connect_timeout,
@@ -140,7 +145,10 @@ impl Transport {
                 )
                 .await
             }
-            None => connect(self.addr, self.source, self.connect_timeout).await,
+            None => Ok((
+                connect(self.addr, self.source, self.connect_timeout).await?,
+                Vec::new(),
+            )),
         }
     }
 
@@ -212,6 +220,35 @@ pub(crate) async fn tunnel(
     connect_timeout: Duration,
     authority: &str,
 ) -> Result<TcpStream, ProbeError> {
+    let (stream, early) = tunnel_open(proxy, source, connect_timeout, authority).await?;
+    // A client-first tunnel carries nothing before our first write.
+    reject_early(proxy, &early)?;
+    Ok(stream)
+}
+
+/// Fails when the proxy relayed `early` bytes before our first write.
+fn reject_early(proxy: SocketAddr, early: &[u8]) -> Result<(), ProbeError> {
+    if early.is_empty() {
+        Ok(())
+    } else {
+        Err(ProbeError::Connect(io::Error::other(format!(
+            "proxy {proxy} sent data after its CONNECT reply"
+        ))))
+    }
+}
+
+/// Like [`tunnel`], but returns the bytes that arrived after the reply head
+/// instead of rejecting them (RFC 9110 §9.3.6: they are tunnel data, such
+/// as a server-first protocol's greeting).
+///
+/// # Errors
+/// As for [`tunnel`], except for early tunnel data.
+async fn tunnel_open(
+    proxy: SocketAddr,
+    source: Option<IpAddr>,
+    connect_timeout: Duration,
+    authority: &str,
+) -> Result<(TcpStream, Vec<u8>), ProbeError> {
     let proxy_error = |msg: String| ProbeError::Connect(io::Error::other(msg));
     timeout(connect_timeout, async {
         let mut stream = connect(proxy, source, connect_timeout).await?;
@@ -244,13 +281,8 @@ pub(crate) async fn tunnel(
                 head.status
             )));
         }
-        // The tunnel carries nothing before our first write.
-        if data.len() > end {
-            return Err(proxy_error(format!(
-                "proxy {proxy} sent data after its CONNECT reply"
-            )));
-        }
-        Ok(stream)
+        data.drain(..end);
+        Ok((stream, data))
     })
     .await
     .map_err(|_| ProbeError::Connect(io::ErrorKind::TimedOut.into()))?
@@ -405,6 +437,35 @@ mod tests {
             buf[..n].to_vec()
         });
         let mut t = Transport::new(addr);
+        t.starttls = Some(Starttls::Smtp);
+        let r = t.exchange(b"hello").await.unwrap();
+        assert!(matches!(r, HelloResponse::Alert(a) if a.description == 70));
+        assert_eq!(task.await.unwrap(), b"hello");
+    }
+
+    /// Through a proxy, a greeting that arrives with the `CONNECT` reply
+    /// feeds the STARTTLS dialogue instead of failing the tunnel.
+    #[tokio::test]
+    async fn starttls_proxy_greeting() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut buf = [0; 512];
+            let _ = s.read(&mut buf).await.unwrap();
+            s.write_all(b"HTTP/1.1 200 OK\r\n\r\n220 hi\r\n")
+                .await
+                .unwrap();
+            let _ = s.read(&mut buf).await.unwrap();
+            s.write_all(b"250-mx\r\n250 STARTTLS\r\n").await.unwrap();
+            let _ = s.read(&mut buf).await.unwrap();
+            s.write_all(b"220 go\r\n").await.unwrap();
+            let n = s.read(&mut buf).await.unwrap();
+            s.write_all(&[21, 3, 3, 0, 2, 2, 70]).await.unwrap();
+            buf[..n].to_vec()
+        });
+        let mut t = Transport::new("192.0.2.1:25".parse().unwrap());
+        t.proxy = Some(addr);
         t.starttls = Some(Starttls::Smtp);
         let r = t.exchange(b"hello").await.unwrap();
         assert!(matches!(r, HelloResponse::Alert(a) if a.description == 70));
