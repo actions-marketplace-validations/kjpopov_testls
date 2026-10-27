@@ -62,6 +62,9 @@ All notable changes to `testls` are listed here. The format follows
 - crates.io packaging: `cargo binstall testls` fetches the release archive
   and `cargo install --locked testls` builds from source; releases publish
   the crates with trusted publishing once the maintainer enables it.
+- Homebrew tap (`Formula/`), Scoop bucket (`bucket/`) and winget manifests
+  (`packaging/winget/`) for the release archives, generated from a
+  release's `SHA256SUMS` by `scripts/gen-packages.py`.
 
 ## [0.3.0] - 2026-10-26
 

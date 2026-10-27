@@ -1,0 +1,28 @@
+{
+    "version": "0.3.0",
+    "description": "TLS/SSL scanner for the web era, inspired by testssl.sh.",
+    "homepage": "https://github.com/kjpopov/testls",
+    "license": "MIT|Apache-2.0",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/kjpopov/testls/releases/download/v0.3.0/testls-v0.3.0-x86_64-pc-windows-msvc.zip",
+            "hash": "d2c7a8d2cb0110233caf1acc103c67268655fc4aedef604f8eb48490bc70d5ba",
+            "extract_dir": "testls-v0.3.0-x86_64-pc-windows-msvc"
+        }
+    },
+    "bin": "testls.exe",
+    "checkver": {
+        "github": "https://github.com/kjpopov/testls"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/kjpopov/testls/releases/download/v$version/testls-v$version-x86_64-pc-windows-msvc.zip",
+                "extract_dir": "testls-v$version-x86_64-pc-windows-msvc"
+            }
+        },
+        "hash": {
+            "url": "$baseurl/SHA256SUMS"
+        }
+    }
+}
