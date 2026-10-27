@@ -101,8 +101,10 @@ jobs:
         include:
           - target: x86_64-unknown-linux-musl
             runner: ubuntu-latest
+            arch: amd64
           - target: aarch64-unknown-linux-musl
             runner: ubuntu-24.04-arm
+            arch: arm64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -121,3 +123,34 @@ jobs:
         run: |
           file target/${{ matrix.target }}/release/testls
           file target/${{ matrix.target }}/release/testls | grep -Eq 'static(ally|-pie) linked'
+      - name: Container image runs the binary
+        env:
+          TARGET: ${{ matrix.target }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p "image/$ARCH"
+          cp "target/$TARGET/release/testls" "image/$ARCH/testls"
+          docker build --platform "linux/$ARCH" --file packaging/container/Dockerfile --tag testls:ci image
+          docker run --rm testls:ci --version
+          docker run --rm testls:ci explain hsts.missing
+
+  # The composite action in action.yml installs the latest release.
+  action:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: testls
+        uses: $/
+        with:
+          args: explain hsts.missing
+      - name: Installed testls is on PATH
+        shell: bash
+        env:
+          VERSION: ${{ steps.testls.outputs.version }}
+        run: testls --version | grep -Fx "testls ${VERSION#v}"

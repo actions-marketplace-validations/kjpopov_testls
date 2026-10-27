@@ -57,6 +57,22 @@ Once testls is on crates.io (from v0.4.0), `cargo binstall testls` fetches
 the same release archive for your platform, and `cargo install --locked
 testls` builds it from source (Rust 1.97 or newer).
 
+From v0.4.0, each release is also a container image for linux/amd64 and
+linux/arm64 (distroless, unprivileged, no shell):
+
+```bash
+podman run --rm ghcr.io/kjpopov/testls:0.4 example.com
+```
+
+In GitHub Actions, the `kjpopov/testls` action installs a release, puts it
+on `PATH` and optionally runs it (pin the action to a commit SHA):
+
+```yaml
+- uses: kjpopov/testls@v0.4.0
+  with:
+    args: --fail-on medium --format sarif example.com
+```
+
 On macOS the binaries are not notarized yet; clear the quarantine flag with
 `xattr -d com.apple.quarantine testls` if Gatekeeper blocks them.
 
@@ -199,6 +215,7 @@ A web service (`testls serve`, REST API and browser UI) is planned for v0.6.
 | Certificates+ | Lifetime vs CA/B Baseline Requirements, embedded SCTs | v0.3 |
 | Workflow | Multiple targets, SARIF/JUnit/HTML, baselines, policies | v0.4 |
 | Shell integration | `testls completions SHELL` and `testls man` | v0.4 |
+| Packaging | Homebrew, Scoop, winget, `cargo binstall`, container image, GitHub Action | v0.4 |
 | STARTTLS | SMTP, IMAP, POP3, … | v0.5 |
 | Intrusive checks | Heartbleed, CCS injection, Ticketbleed, ROBOT (`--intrusive`) | v0.5 |
 | Grading | Own grading model | v0.5 |

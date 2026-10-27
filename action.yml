@@ -1,0 +1,92 @@
+name: testls
+description: Install the testls TLS/SSL scanner from a GitHub release and optionally run it.
+author: kjpopov
+branding:
+  icon: lock
+  color: green
+
+inputs:
+  version:
+    description: Release to install, such as `v0.4.0`, or `latest`.
+    required: false
+    default: latest
+  args:
+    description: >-
+      Arguments for testls, split on whitespace (no quoting or globbing),
+      such as `--fail-on medium example.com`. Empty installs testls only.
+    required: false
+    default: ""
+  token:
+    description: Token used to look up the latest release.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  version:
+    description: The installed release, such as `v0.4.0`.
+    value: ${{ steps.install.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - id: install
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: kjpopov/testls
+        OS: ${{ runner.os }}
+        ARCH: ${{ runner.arch }}
+      # The PATH entry is built from the fixed target table and a validated tag.
+      run: | # zizmor: ignore[github-env]
+        set -euo pipefail
+        case "$OS/$ARCH" in
+          Linux/X64) target=x86_64-unknown-linux-musl ;;
+          Linux/ARM64) target=aarch64-unknown-linux-musl ;;
+          macOS/X64) target=x86_64-apple-darwin ;;
+          macOS/ARM64) target=aarch64-apple-darwin ;;
+          Windows/X64) target=x86_64-pc-windows-msvc ;;
+          *) echo "::error::no testls release for $OS/$ARCH"; exit 1 ;;
+        esac
+        if [ "$VERSION" = latest ]; then
+          VERSION=$(gh api "repos/$REPO/releases/latest" --jq .tag_name)
+        fi
+        if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+          echo "::error::version must look like v1.2.3 or be latest, got $VERSION"
+          exit 1
+        fi
+        ext=tar.gz
+        if [ "$OS" = Windows ]; then ext=zip; fi
+        name="testls-$VERSION-$target"
+        dir="$RUNNER_TEMP/testls-$VERSION"
+        mkdir -p "$dir"
+        cd "$dir"
+        base="https://github.com/$REPO/releases/download/$VERSION"
+        curl -fsSL --retry 3 -o "$name.$ext" "$base/$name.$ext"
+        curl -fsSL --retry 3 -o SHA256SUMS "$base/SHA256SUMS"
+        expected=$(awk -v f="$name.$ext" '$2 == f { print $1 }' SHA256SUMS)
+        if [ "$OS" = macOS ]; then
+          actual=$(shasum -a 256 "$name.$ext" | cut -d' ' -f1)
+        else
+          actual=$(sha256sum "$name.$ext" | cut -d' ' -f1)
+        fi
+        if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+          echo "::error::checksum mismatch for $name.$ext"
+          exit 1
+        fi
+        if [ "$ext" = zip ]; then
+          7z x -y "$name.$ext" > /dev/null
+        else
+          tar xzf "$name.$ext"
+        fi
+        echo "$dir/$name" >> "$GITHUB_PATH"
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+    - if: inputs.args != ''
+      shell: bash
+      env:
+        ARGS: ${{ inputs.args }}
+      run: |
+        set -f
+        # Word splitting is intended: ARGS holds several arguments.
+        # shellcheck disable=SC2086
+        testls $ARGS
