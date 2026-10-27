@@ -488,7 +488,8 @@ fn group_deviations(policy: Policy, results: &[KeyExchangeResult]) -> Vec<Findin
         } else {
             rules.groups
         };
-        for &group in &result.groups {
+        let dh_group = result.dh_prime.as_deref().and_then(ffdhe_group);
+        for group in result.groups.iter().copied().chain(dh_group) {
             if !allowed.contains(&group) && !seen.contains(&group) {
                 seen.push(group);
             }
@@ -506,6 +507,19 @@ fn group_deviations(policy: Policy, results: &[KeyExchangeResult]) -> Vec<Findin
             )
         })
         .collect()
+}
+
+/// The `supported_groups` code point (RFC 7919 §8) of a TLSv1.2 DHE prime
+/// that is one of the RFC 7919 appendix A groups.
+fn ffdhe_group(prime: &[u8]) -> Option<u16> {
+    match testls_data::known_dh_prime(prime)?.name {
+        "ffdhe2048" => Some(0x0100),
+        "ffdhe3072" => Some(0x0101),
+        "ffdhe4096" => Some(0x0102),
+        "ffdhe6144" => Some(0x0103),
+        "ffdhe8192" => Some(0x0104),
+        _ => None,
+    }
 }
 
 /// SHA-2 hashes allowed in RSASSA-PSS parameters (RFC 8017 appendix A.2.3,
@@ -683,6 +697,14 @@ mod tests {
             dh_prime: None,
             dh_key_reused: None,
         }
+    }
+
+    /// Decodes upper-case hex.
+    fn unhex(hex: &str) -> Vec<u8> {
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect()
     }
 
     /// Reply carrying `hsts` as its HSTS header, if any.
@@ -1072,6 +1094,50 @@ mod tests {
             summary(&policy_findings(Policy::BsiTr021022, &input)),
             expected
         );
+    }
+
+    /// BSI TR-02102-2 rejects TLSv1.2 DHE primes outside its groups, such
+    /// as `ffdhe2048` and `ffdhe6144`, even without `supported_groups`.
+    #[test]
+    fn bsi_dhe_primes() {
+        let tail = ", which bsi-tr-02102-2 does not allow";
+        let dhe_only = |name: &str| KeyExchangeResult {
+            dh_prime: testls_data::known_dh_primes()
+                .iter()
+                .find(|k| k.name == name)
+                .map(|k| unhex(k.hex)),
+            ..groups(ProtocolVersion::TLS12, &[])
+        };
+        let key_exchange = ["ffdhe2048", "ffdhe3072", "ffdhe6144"].map(dhe_only);
+        let dhe = PolicyInput {
+            key_exchange: Some(&key_exchange),
+            ..bsi_input()
+        };
+        let groups: Vec<_> = policy_findings(Policy::BsiTr021022, &dhe)
+            .into_iter()
+            .filter(|f| f.id == "policy.group")
+            .map(|f| f.message)
+            .collect();
+        assert_eq!(
+            groups,
+            [
+                format!("key exchange group ffdhe2048 (0x0100) is accepted{tail}"),
+                format!("key exchange group ffdhe6144 (0x0103) is accepted{tail}"),
+            ]
+        );
+    }
+
+    /// Input with nothing measured but an empty cipher and certificate scan.
+    fn bsi_input() -> PolicyInput<'static> {
+        PolicyInput {
+            protocols: &[],
+            ciphers: Some(&[]),
+            cipher_errors: &[],
+            key_exchange: Some(&[]),
+            key_exchange_errors: &[],
+            chain: None,
+            http: None,
+        }
     }
 
     /// NIST requires TLSv1.3 and SHA-2 hashes in RSASSA-PSS signatures.
