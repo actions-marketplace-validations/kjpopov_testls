@@ -524,3 +524,43 @@ fn bad_target_file_is_scan_error() {
     let stderr = String::from_utf8(out.stderr).expect("utf-8 output");
     assert!(stderr.contains(":2: unsupported URL scheme"), "{stderr}");
 }
+
+/// `--starttls smtp` upgrades the Postfix connection before every probe and
+/// skips the HTTP headers.
+#[test]
+#[ignore = "needs tests/servers running"]
+fn smtp_starttls() {
+    let s = scan(
+        "127.0.0.1:14425",
+        &[
+            "--starttls",
+            "smtp",
+            "--sni",
+            "localhost",
+            "--ca-file",
+            CA_FILE,
+        ],
+    );
+    assert_eq!(s.line("TLSv1.1 "), "TLSv1.1  not offered");
+    assert_eq!(s.line("TLSv1.2 "), "TLSv1.2  offered");
+    assert_eq!(s.line("TLSv1.3 "), "TLSv1.3  offered");
+    assert_eq!(s.line("Certificate"), "Certificate (TLSv1.3)");
+    assert_eq!(s.line("#0"), "#0 CN=localhost");
+    assert!(!s.has("HTTP headers"), "{}", s.stdout);
+    assert!(!s.has("cert.untrusted"), "{}", s.stdout);
+}
+
+/// Without STARTTLS, the plain SMTP port answers no `ClientHello`, so no
+/// protocol is offered.
+#[test]
+#[ignore = "needs tests/servers running"]
+fn smtp_without_starttls() {
+    let s = scan(
+        "127.0.0.1:14425",
+        &["--profile", "quick", "--ca-file", CA_FILE],
+    );
+    assert_eq!(s.line("TLSv1.2 "), "TLSv1.2  not offered");
+    assert_eq!(s.line("TLSv1.3 "), "TLSv1.3  not offered");
+    assert!(s.has("[protocol.no_modern]"), "{}", s.stdout);
+    assert_eq!(s.code, 1);
+}
