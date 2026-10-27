@@ -2,33 +2,36 @@
 class Testls < Formula
   desc "TLS/SSL scanner for the web era, inspired by testssl.sh"
   homepage "https://github.com/kjpopov/testls"
-  version "0.3.0"
+  version "0.4.0"
   license any_of: ["MIT", "Apache-2.0"]
 
   on_macos do
     on_arm do
-      url "https://github.com/kjpopov/testls/releases/download/v0.3.0/testls-v0.3.0-aarch64-apple-darwin.tar.gz"
-      sha256 "ee832b8aa6febfc89b963260b8c987683872069eff35a637b69494d77bf3f8d8"
+      url "https://github.com/kjpopov/testls/releases/download/v0.4.0/testls-v0.4.0-aarch64-apple-darwin.tar.gz"
+      sha256 "1b4ce4d11f265cc449f1adec400b655e2e7b2aa1c0ef83df4536dc443a34c868"
     end
     on_intel do
-      url "https://github.com/kjpopov/testls/releases/download/v0.3.0/testls-v0.3.0-x86_64-apple-darwin.tar.gz"
-      sha256 "ee8f83957011d5b2d6dee4d8f13f8a252126992880c58f0266ffffcbca264999"
+      url "https://github.com/kjpopov/testls/releases/download/v0.4.0/testls-v0.4.0-x86_64-apple-darwin.tar.gz"
+      sha256 "03acc8f384615bf30311c3ecba970c571be3ed4ccc175b6f54971191b1f20369"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/kjpopov/testls/releases/download/v0.3.0/testls-v0.3.0-aarch64-unknown-linux-musl.tar.gz"
-      sha256 "9f6a14643012202f09947394dbcf667b12c227c2832a2a897192351f301a4c73"
+      url "https://github.com/kjpopov/testls/releases/download/v0.4.0/testls-v0.4.0-aarch64-unknown-linux-musl.tar.gz"
+      sha256 "fe605e93a037c73bd93196ae8d00a9a970acda24ec95f7458216366e07ad2e9d"
     end
     on_intel do
-      url "https://github.com/kjpopov/testls/releases/download/v0.3.0/testls-v0.3.0-x86_64-unknown-linux-musl.tar.gz"
-      sha256 "74cb066f1e3435294d29f3f30ee5d785f34b6435661ff882c3cbbfe257eff5fb"
+      url "https://github.com/kjpopov/testls/releases/download/v0.4.0/testls-v0.4.0-x86_64-unknown-linux-musl.tar.gz"
+      sha256 "86a54aac5eabfc4ef62f069a8408d50c03b4f6c83ee1816587b027458d764078"
     end
   end
 
   def install
     bin.install "testls"
+    generate_completions_from_executable(bin/"testls", "completions", shells: [:bash, :zsh, :fish])
+    man1.mkpath
+    system bin/"testls", "man", "--dir", man1
   end
 
   test do
