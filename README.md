@@ -39,6 +39,15 @@ tar xzf testls-v0.3.0-x86_64-unknown-linux-musl.tar.gz
 On macOS the binaries are not notarized yet; clear the quarantine flag with
 `xattr -d com.apple.quarantine testls` if Gatekeeper blocks them.
 
+Shell completions (bash, zsh, fish, PowerShell, elvish) and the man page
+come from the binary itself:
+
+```bash
+testls completions bash > ~/.local/share/bash-completion/completions/testls
+testls completions zsh > "${fpath[1]}/_testls"
+testls man > ~/.local/share/man/man1/testls.1
+```
+
 ## Quick Start
 
 ```bash
@@ -160,6 +169,7 @@ A web service (`testls serve`, REST API and browser UI) is planned for v0.6.
 | Handshake | ClientHello tolerance, TLSv1.3 details, post-quantum readiness | v0.3 |
 | Certificates+ | Lifetime vs CA/B Baseline Requirements, embedded SCTs | v0.3 |
 | Workflow | Multiple targets, SARIF/JUnit/HTML, baselines, policies | v0.4 |
+| Shell integration | `testls completions SHELL` and `testls man` | v0.4 |
 | STARTTLS | SMTP, IMAP, POP3, … | v0.5 |
 | Intrusive checks | Heartbleed, CCS injection, Ticketbleed, ROBOT (`--intrusive`) | v0.5 |
 | Grading | Own grading model | v0.5 |

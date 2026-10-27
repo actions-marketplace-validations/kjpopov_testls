@@ -56,6 +56,8 @@ All notable changes to `testls` are listed here. The format follows
 - `--policy cnsa-2.0` checks against the NSA CNSA 2.0 TLS profile: TLSv1.3
   only (required), `TLS_AES_256_GCM_SHA384`, ML-KEM-1024 and ML-DSA-87
   certificates.
+- `testls completions SHELL` prints a completion script for bash, zsh,
+  fish, PowerShell or elvish, and `testls man` prints the man page.
 
 ## [0.3.0] - 2026-10-26
 

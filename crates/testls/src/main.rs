@@ -7,14 +7,14 @@ mod revocation;
 mod target;
 
 use std::fmt::Write as _;
-use std::io::IsTerminal as _;
+use std::io::{IsTerminal as _, Write as _};
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::builder::TypedValueParser as _;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory as _, Parser, Subcommand};
 use testls_checks::{
     Finding, Policy, PolicyInput, RevocationCheck, Severity, TrustStore, Vulnerability,
     assess_vulnerabilities, baseline_findings, certificate_findings, cipher_findings,
@@ -177,6 +177,14 @@ enum Command {
         /// Finding id as shown in brackets in the findings list.
         id: Option<String>,
     },
+    /// Print a shell completion script.
+    Completions {
+        /// Shell to complete for.
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
+    /// Print the man page in roff format.
+    Man,
 }
 
 /// Resolves the target to every distinct socket address it maps to, in
@@ -276,12 +284,42 @@ fn explain_text(id: Option<&str>) -> Result<String, String> {
     ))
 }
 
+/// Completion script for `shell`, as printed by `testls completions`.
+fn completion_script(shell: clap_complete::Shell) -> Vec<u8> {
+    let mut out = Vec::new();
+    clap_complete::generate(shell, &mut Cli::command(), "testls", &mut out);
+    out
+}
+
+/// Man page in roff format, as printed by `testls man`.
+fn man_page() -> Vec<u8> {
+    let mut out = Vec::new();
+    clap_mangen::Man::new(Cli::command())
+        .render(&mut out)
+        .expect("writing to a Vec cannot fail");
+    out
+}
+
+/// Writes generated output to stdout: exit code 0, or 2 when stdout fails.
+fn print_bytes(bytes: &[u8]) -> ExitCode {
+    let mut stdout = std::io::stdout().lock();
+    match stdout.write_all(bytes).and_then(|()| stdout.flush()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: cannot write output: {e}");
+            ExitCode::from(2)
+        }
+    }
+}
+
 /// Runs the selected command and maps the outcome to the exit code contract.
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
     match &cli.command {
         Some(Command::Explain { id }) => explain_command(id.as_deref()),
+        Some(Command::Completions { shell }) => print_bytes(&completion_script(*shell)),
+        Some(Command::Man) => print_bytes(&man_page()),
         None => scan_all(&cli).await,
     }
 }
@@ -1132,6 +1170,27 @@ mod tests {
         assert_eq!(all.lines().count(), explanations().len());
         assert!(all.lines().any(|l| l.starts_with("hsts.missing ")));
         assert!(explain_text(Some("nope")).is_err());
+    }
+
+    /// Completion scripts and the man page cover the scan flags and
+    /// subcommands, and their commands parse without a target.
+    #[test]
+    fn generated_docs() {
+        for shell in [clap_complete::Shell::Bash, clap_complete::Shell::Zsh] {
+            let script = String::from_utf8(completion_script(shell)).expect("UTF-8");
+            assert!(script.contains("--fail-on"), "{shell}");
+            assert!(script.contains("explain"), "{shell}");
+        }
+        let man = String::from_utf8(man_page()).expect("UTF-8");
+        assert!(man.starts_with(".ie \\n(.g .ds Aq"), "{man}");
+        assert!(man.contains(".TH testls 1"), "{man}");
+        assert!(man.contains("\\-\\-policy"), "{man}");
+        let cli = Cli::try_parse_from(["testls", "completions", "fish"]).expect("completions");
+        assert!(matches!(cli.command, Some(Command::Completions { .. })));
+        assert!(Cli::try_parse_from(["testls", "completions", "tcsh"]).is_err());
+        let cli = Cli::try_parse_from(["testls", "man"]).expect("man");
+        assert!(matches!(cli.command, Some(Command::Man)));
+        Cli::command().debug_assert();
     }
 
     /// A scan needs a target; `explain` does not, and the two do not mix.
