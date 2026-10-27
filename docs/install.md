@@ -13,7 +13,7 @@ against `SHA256SUMS` and put `testls` on your `PATH`:
 base=https://github.com/kjpopov/testls/releases/download/v0.4.1
 curl -fLO "$base/testls-v0.4.1-x86_64-unknown-linux-musl.tar.gz"
 curl -fLO "$base/SHA256SUMS"
-sha256sum --ignore-missing -c SHA256SUMS   # macOS: shasum -a 256 --ignore-missing -c
+sha256sum --ignore-missing -c SHA256SUMS   # macOS: shasum -a 256 --ignore-missing -c SHA256SUMS
 tar xzf testls-v0.4.1-x86_64-unknown-linux-musl.tar.gz
 mkdir -p ~/.local/bin
 install -m 755 testls-v0.4.1-x86_64-unknown-linux-musl/testls ~/.local/bin/

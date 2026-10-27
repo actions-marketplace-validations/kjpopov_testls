@@ -87,12 +87,15 @@ testls --format markdown example.com >> "$GITHUB_STEP_SUMMARY"
 ## Compliance policies
 
 `--policy` reports everything a published configuration does not allow
-(severity `medium`). Repeat it to check several.
+(severity `medium`). Repeat it to check several. When a part the policy
+covers was skipped (for example by `--profile quick`) or its probe failed,
+an extra `policy.incomplete` finding (severity `info`) names it; it does not
+trigger `--fail-on medium`.
 
 | Policy | Source |
 | --- | --- |
 | `mozilla-modern`, `mozilla-intermediate` | Mozilla Server Side TLS 6.0 |
-| `nist-800-52r2` | NIST SP 800-52 Rev. 2 (US government servers) |
+| `nist-800-52r2` | NIST SP 800-52 Rev. 2 (TLS servers and clients of US federal systems) |
 | `bsi-tr-02102-2` | BSI TR-02102-2 (German federal guideline) |
 | `pci-dss-4` | PCI DSS v4.0.1 (strong cryptography, no early TLS) |
 | `cnsa-2.0` | CNSA 2.0 (TLSv1.3, ML-KEM-1024, ML-DSA-87) |

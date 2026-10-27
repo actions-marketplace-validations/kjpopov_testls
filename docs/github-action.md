@@ -8,7 +8,7 @@ optionally runs it.
 Runs on GitHub-hosted and self-hosted runners: Linux (x64, ARM64), macOS
 (x64, ARM64) and Windows (x64). It needs network access to github.com and
 to the hosts you scan. GitHub-hosted runners have every tool it uses;
-self-hosted runners need `bash`, `curl`, `awk`, `gh` (only for
+self-hosted runners need `bash`, `curl`, `awk`, `cut`, `gh` (only for
 `version: latest`), `sha256sum` (`shasum` on macOS), and `tar` (`7z` on
 Windows).
 
