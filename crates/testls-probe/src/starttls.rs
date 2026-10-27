@@ -41,16 +41,22 @@ impl Starttls {
     }
 
     /// Runs the protocol's dialogue on `stream` until the server is ready
-    /// for a `ClientHello`.
+    /// for a `ClientHello`. `early` holds server bytes already read from
+    /// `stream` (by a proxy tunnel) and is consumed first.
     ///
     /// # Errors
     /// Returns [`ProbeError::Connect`] when the server refuses, does not
     /// offer STARTTLS, sends a malformed or oversized reply, closes the
     /// connection, or sends bytes after its final reply (which would be
     /// injected into the TLS stream).
-    pub(crate) async fn upgrade(self, stream: &mut TcpStream) -> Result<(), ProbeError> {
+    pub(crate) async fn upgrade(
+        self,
+        stream: &mut TcpStream,
+        early: Vec<u8>,
+    ) -> Result<(), ProbeError> {
+        let reader = Replies { data: early };
         match self {
-            Self::Smtp => smtp(stream).await,
+            Self::Smtp => smtp(stream, reader).await,
         }
     }
 }
@@ -79,8 +85,7 @@ fn error(msg: String) -> ProbeError {
 
 /// SMTP dialogue (RFC 5321 §4.2, RFC 3207 §4): greeting, `EHLO`, check
 /// the `STARTTLS` keyword, `STARTTLS`, expect 220.
-async fn smtp(stream: &mut TcpStream) -> Result<(), ProbeError> {
-    let mut reader = Replies::default();
+async fn smtp(stream: &mut TcpStream, mut reader: Replies) -> Result<(), ProbeError> {
     let greeting = reader.smtp(stream).await?;
     expect(&greeting, 220, "greeting")?;
     send(stream, b"EHLO testls.invalid\r\n").await?;
@@ -231,7 +236,7 @@ mod tests {
     /// Connects to `addr` and runs the SMTP upgrade.
     async fn upgrade(addr: SocketAddr) -> Result<(), ProbeError> {
         let mut stream = TcpStream::connect(addr).await.unwrap();
-        Starttls::Smtp.upgrade(&mut stream).await
+        Starttls::Smtp.upgrade(&mut stream, Vec::new()).await
     }
 
     /// The dialogue sends EHLO and STARTTLS and accepts a multi-line

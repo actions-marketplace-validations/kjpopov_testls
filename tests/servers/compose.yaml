@@ -19,3 +19,11 @@ services:
     image: localhost/testls-server
     command: ["-serverpref", "-min_protocol", "TLSv1.2", "-cipher", "ECDHE+AESGCM:ECDHE+CHACHA20"]
     ports: ["127.0.0.1:14434:4433"]
+
+  # Postfix with optional STARTTLS on SMTP, TLS 1.2+.
+  smtp:
+    build:
+      context: .
+      dockerfile: Dockerfile.postfix
+    image: localhost/testls-postfix
+    ports: ["127.0.0.1:14425:25"]

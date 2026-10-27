@@ -25,7 +25,7 @@ use testls_checks::{
 };
 use testls_probe::{
     CipherResult, Fetcher, HandshakeDetails, HttpResponse, Intolerance, KeyExchangeResult,
-    ProtocolResult, ProtocolSupport, Transport, detect_protocols, enumerate_ciphers,
+    ProtocolResult, ProtocolSupport, Starttls, Transport, detect_protocols, enumerate_ciphers,
     fetch_certificates, fetch_http_headers, probe_details, probe_features, probe_intolerance,
     probe_key_exchange,
 };
@@ -56,8 +56,8 @@ struct Cli {
     /// Targets: host, host:port, [ipv6]:port, https:// URL, or a CIDR range
     /// such as `192.0.2.0/28` or `[2001:db8::/120]:8443` (at most 16 host
     /// bits). Several targets are scanned one after another.
-    #[arg(required_unless_present = "file", value_name = "TARGET")]
-    targets: Vec<TargetSpec>,
+    #[arg(required_unless_present = "file", value_name = "TARGET", value_parser = target_arg)]
+    targets: Vec<String>,
 
     /// Read more targets from FILE, one per line in the same forms; blank
     /// lines and lines starting with `#` are skipped.
@@ -138,6 +138,14 @@ struct Cli {
     /// proxy is bound and target addresses are not filtered by family.
     #[arg(long, value_name = "HOST:PORT")]
     proxy: Option<ProxySpec>,
+
+    /// Upgrade each connection with this protocol's STARTTLS command before
+    /// the TLS handshake. Targets without a port use the protocol's
+    /// standard port (25 for `smtp`), and HTTP headers are not checked.
+    #[arg(long, value_name = "PROTOCOL",
+          value_parser = clap::builder::PossibleValuesParser::new(Starttls::ALL.map(Starttls::as_str))
+              .map(|s| s.parse::<Starttls>().expect("listed value")))]
+    starttls: Option<Starttls>,
 
     /// Read suppressions from this TOML file instead of `.testls.toml` in
     /// the working directory (which is optional).
@@ -347,11 +355,17 @@ async fn main() -> ExitCode {
 /// Collects the targets from the command line and `--file`, in that order,
 /// with CIDR ranges expanded.
 fn targets(cli: &Cli) -> Result<Vec<Target>, String> {
-    let mut targets: Vec<Target> = cli.targets.iter().flat_map(|s| s.0.clone()).collect();
+    let port = default_port(cli);
+    let mut targets = Vec::new();
+    for arg in &cli.targets {
+        let spec = TargetSpec::parse_with_port(arg, port).map_err(|e| format!("{arg}: {e}"))?;
+        targets.extend(spec.0);
+    }
     if let Some(path) = &cli.file {
         let text = std::fs::read_to_string(path)
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-        targets.extend(parse_target_list(&text).map_err(|e| format!("{}:{e}", path.display()))?);
+        targets
+            .extend(parse_target_list(&text, port).map_err(|e| format!("{}:{e}", path.display()))?);
     }
     if targets.is_empty() {
         return Err("no targets given".to_owned());
@@ -359,15 +373,29 @@ fn targets(cli: &Cli) -> Result<Vec<Target>, String> {
     Ok(targets)
 }
 
+/// Checks a command-line target, keeping it as text so that [`targets`]
+/// can apply the `--starttls` default port.
+fn target_arg(s: &str) -> Result<String, target::ParseTargetError> {
+    s.parse::<TargetSpec>().map(|_| s.to_owned())
+}
+
+/// Port for targets that name none: the `--starttls` protocol's standard
+/// port, else 443.
+fn default_port(cli: &Cli) -> u16 {
+    cli.starttls
+        .map_or(target::DEFAULT_PORT, Starttls::default_port)
+}
+
 /// Parses a target list: one target per line, skipping blank lines and
-/// `#` comments. Errors name the 1-based line number.
-fn parse_target_list(text: &str) -> Result<Vec<Target>, String> {
+/// `#` comments, with `port` for targets that name none. Errors name the
+/// 1-based line number.
+fn parse_target_list(text: &str, port: u16) -> Result<Vec<Target>, String> {
     text.lines()
         .enumerate()
         .map(|(n, line)| (n + 1, line.trim()))
         .filter(|(_, line)| !line.is_empty() && !line.starts_with('#'))
         .map(|(n, line)| {
-            line.parse::<TargetSpec>()
+            TargetSpec::parse_with_port(line, port)
                 .map(|s| s.0)
                 .map_err(|e| format!("{n}: {e}"))
         })
@@ -579,6 +607,7 @@ fn transport(cli: &Cli, addr: SocketAddr, proxy: Option<SocketAddr>) -> Transpor
     transport.read_timeout = Duration::from_secs(cli.read_timeout);
     transport.source = cli.source_ip;
     transport.proxy = proxy;
+    transport.starttls = cli.starttls;
     transport
 }
 
@@ -923,7 +952,11 @@ async fn later_sections(
     Result<Intolerance, String>,
     Result<HandshakeDetails, String>,
 ) {
-    let http = if deep {
+    let http = if let Some(protocol) = transport.starttls {
+        let status = format!("not checked over --starttls {protocol}");
+        show(format!("\nHTTP headers: {status}"));
+        Err(status)
+    } else if deep {
         let (http, http_findings) = http_section(transport, sni).await;
         show(format!("\n{}", text::http(&http, paint)));
         findings.extend(http_findings);
@@ -1232,25 +1265,55 @@ mod tests {
         let cli = Cli::try_parse_from(["testls", "192.0.2.0/30"]).expect("range");
         assert_eq!(targets(&cli).expect("targets").len(), 4);
         let cli = Cli::try_parse_from(["testls", "--file", "hosts.txt"]).expect("file only");
-        assert_eq!(cli.targets, vec![]);
+        assert_eq!(cli.targets, Vec::<String>::new());
+        assert!(Cli::try_parse_from(["testls", "http://a.example"]).is_err());
+    }
+
+    /// `--starttls` picks the protocol's port for targets that name none.
+    #[test]
+    fn starttls_ports() {
+        let cli =
+            Cli::try_parse_from(["testls", "--starttls", "smtp", "a.example", "b.example:587"])
+                .expect("starttls");
+        assert_eq!(cli.starttls, Some(Starttls::Smtp));
+        let names: Vec<String> = targets(&cli)
+            .expect("targets")
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(names, ["a.example:25", "b.example:587"]);
+        let cli =
+            Cli::try_parse_from(["testls", "--starttls", "smtp", "192.0.2.0/31"]).expect("range");
+        let names: Vec<String> = targets(&cli)
+            .expect("targets")
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(names, ["192.0.2.0:25", "192.0.2.1:25"]);
+        assert_eq!(
+            parse_target_list("a.example\n", 25).expect("list")[0].port,
+            25
+        );
+        assert!(Cli::try_parse_from(["testls", "--starttls", "gopher", "a.example"]).is_err());
     }
 
     /// Target lists skip blanks and comments and name the bad line.
     #[test]
     fn target_lists() {
-        let list = parse_target_list("# hosts\n\na.example\n  b.example:8443  \n").expect("list");
+        let list =
+            parse_target_list("# hosts\n\na.example\n  b.example:8443  \n", 443).expect("list");
         let names: Vec<String> = list.iter().map(ToString::to_string).collect();
         assert_eq!(names, ["a.example:443", "b.example:8443"]);
-        let list = parse_target_list("192.0.2.0/31:8443\n").expect("range");
+        let list = parse_target_list("192.0.2.0/31:8443\n", 443).expect("range");
         assert_eq!(list.len(), 2);
         assert!(
-            parse_target_list("ok.example\n192.0.2.0/8\n")
+            parse_target_list("ok.example\n192.0.2.0/8\n", 443)
                 .unwrap_err()
                 .starts_with("2: ")
         );
-        let err = parse_target_list("a.example\nhttp://b.example\n").unwrap_err();
+        let err = parse_target_list("a.example\nhttp://b.example\n", 443).unwrap_err();
         assert!(err.starts_with("2: "), "{err}");
-        assert_eq!(parse_target_list("# only\n").expect("empty"), vec![]);
+        assert_eq!(parse_target_list("# only\n", 443).expect("empty"), vec![]);
     }
 
     /// A failed single target prints no JSON; failed targets in a run of

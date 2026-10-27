@@ -6,6 +6,12 @@ All notable changes to `testls` are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `--starttls smtp` upgrades each connection with SMTP `STARTTLS` before
+  the TLS handshake, so mail servers can be scanned. Targets without a port
+  use 25; HTTP headers are not checked.
+
 ## [0.4.3] - 2026-10-27
 
 Patch release with a readable `--help` and the shorter README on the

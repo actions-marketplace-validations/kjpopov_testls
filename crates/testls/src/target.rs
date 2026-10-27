@@ -69,7 +69,16 @@ fn err(msg: impl Into<String>) -> ParseTargetError {
 impl std::str::FromStr for Target {
     type Err = ParseTargetError;
 
+    /// Parses a target, defaulting the port to [`DEFAULT_PORT`].
     fn from_str(input: &str) -> Result<Self, Self::Err> {
+        Self::parse_with_port(input, DEFAULT_PORT)
+    }
+}
+
+impl Target {
+    /// Parses `input` like [`str::parse`], using `default_port` when the
+    /// target names neither a port nor a URL scheme.
+    pub fn parse_with_port(input: &str, default_port: u16) -> Result<Self, ParseTargetError> {
         let s = input.trim();
         let (s, scheme_port) = match s.split_once("://") {
             Some((scheme, rest)) => {
@@ -123,7 +132,7 @@ impl std::str::FromStr for Target {
                 .ok()
                 .filter(|&p| p != 0)
                 .ok_or_else(|| err(format!("invalid port `{p}`")))?,
-            None => scheme_port.unwrap_or(DEFAULT_PORT),
+            None => scheme_port.unwrap_or(default_port),
         };
         Ok(Self { host, port })
     }
@@ -142,11 +151,21 @@ pub struct TargetSpec(pub Vec<Target>);
 impl std::str::FromStr for TargetSpec {
     type Err = ParseTargetError;
 
+    /// Parses a target or CIDR range, defaulting the port to
+    /// [`DEFAULT_PORT`].
     fn from_str(input: &str) -> Result<Self, Self::Err> {
+        Self::parse_with_port(input, DEFAULT_PORT)
+    }
+}
+
+impl TargetSpec {
+    /// Parses `input` like [`str::parse`], using `default_port` when the
+    /// target or range names neither a port nor a URL scheme.
+    pub fn parse_with_port(input: &str, default_port: u16) -> Result<Self, ParseTargetError> {
         let s = input.trim();
         match cidr_parts(s)? {
-            Some((ip, len, port)) => expand_cidr(ip, len, port).map(Self),
-            None => Ok(Self(vec![s.parse()?])),
+            Some((ip, len, port)) => expand_cidr(ip, len, port, default_port).map(Self),
+            None => Ok(Self(vec![Target::parse_with_port(s, default_port)?])),
         }
     }
 }
@@ -201,8 +220,14 @@ fn cidr_parts(s: &str) -> Result<Option<CidrParts<'_>>, ParseTargetError> {
     }
 }
 
-/// Lists every address of the range `ip/len` with `port` (default 443).
-fn expand_cidr(ip: IpAddr, len: &str, port: Option<&str>) -> Result<Vec<Target>, ParseTargetError> {
+/// Lists every address of the range `ip/len` with `port` (default
+/// `default_port`).
+fn expand_cidr(
+    ip: IpAddr,
+    len: &str,
+    port: Option<&str>,
+    default_port: u16,
+) -> Result<Vec<Target>, ParseTargetError> {
     let bits = if ip.is_ipv4() { 32 } else { 128 };
     let len: u32 = len
         .parse()
@@ -216,7 +241,7 @@ fn expand_cidr(ip: IpAddr, len: &str, port: Option<&str>) -> Result<Vec<Target>,
         )));
     }
     let port = match port {
-        None => DEFAULT_PORT,
+        None => default_port,
         Some(p) => p
             .parse::<u16>()
             .ok()

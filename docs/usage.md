@@ -28,6 +28,10 @@ testls example.com example.org:8443 --file hosts.txt
 # Every address in a range, or every address of a host
 testls 192.0.2.0/28:8443
 testls --all-addresses example.com
+
+# A mail server with SMTP STARTTLS (port 25 by default)
+testls --starttls smtp mail.example.com
+testls --starttls smtp mail.example.com:587
 ```
 
 ## Connection control
