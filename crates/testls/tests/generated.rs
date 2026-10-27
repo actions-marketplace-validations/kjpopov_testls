@@ -1,6 +1,30 @@
 //! End-to-end tests for the generated shell completions and man page.
 
+use std::path::PathBuf;
 use std::process::Command;
+
+/// Directory under `CARGO_TARGET_TMPDIR` unique to this test process,
+/// removed again on drop.
+struct TempDir(PathBuf);
+
+impl TempDir {
+    /// Creates a fresh directory named after `name` and the process id, so
+    /// concurrent `cargo test` runs sharing a target directory do not clash.
+    fn new(name: &str) -> Self {
+        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create dir");
+        Self(dir)
+    }
+}
+
+impl Drop for TempDir {
+    /// Removes the directory and its contents.
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
 
 /// Runs `testls` with `args` and returns its exit code and stdout.
 fn run(args: &[&str]) -> (Option<i32>, String) {
@@ -44,9 +68,8 @@ fn man_page() {
 /// fails with exit code 2 when the directory is missing.
 #[test]
 fn man_pages_in_dir() {
-    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("man-pages");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("create dir");
+    let guard = TempDir::new("man-pages");
+    let dir = &guard.0;
     let path = dir.to_str().expect("UTF-8 path");
     assert_eq!(run(&["man", "--dir", path]).0, Some(0));
     let main = std::fs::read_to_string(dir.join("testls.1")).expect("testls.1");
