@@ -1140,6 +1140,20 @@ mod tests {
         );
     }
 
+    /// Every MODP group NIST SP 800-52r2 accepts names a known prime, so a
+    /// typo cannot turn into a false `DHE uses MODP group N` finding.
+    #[test]
+    fn nist_dh_primes_known() {
+        for name in NIST_DH_PRIMES {
+            assert!(
+                testls_data::known_dh_primes()
+                    .iter()
+                    .any(|k| k.name == *name),
+                "{name} is not a known DH prime"
+            );
+        }
+    }
+
     /// TLSv1.2 DHE primes count as groups even without `supported_groups`:
     /// BSI TR-02102-2 rejects `ffdhe2048`, `ffdhe6144`, MODP group 14 and
     /// custom primes; NIST SP 800-52r2 accepts MODP group 14 but not custom
