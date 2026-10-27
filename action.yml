@@ -62,8 +62,8 @@ runs:
         mkdir -p "$dir"
         cd "$dir"
         base="https://github.com/$REPO/releases/download/$VERSION"
-        curl -fsSL --retry 3 -o "$name.$ext" "$base/$name.$ext"
-        curl -fsSL --retry 3 -o SHA256SUMS "$base/SHA256SUMS"
+        curl -fsSL --retry 3 --connect-timeout 20 --max-time 300 -o "$name.$ext" "$base/$name.$ext"
+        curl -fsSL --retry 3 --connect-timeout 20 --max-time 60 -o SHA256SUMS "$base/SHA256SUMS"
         expected=$(awk -v f="$name.$ext" '$2 == f { print $1 }' SHA256SUMS)
         if [ "$OS" = macOS ]; then
           actual=$(shasum -a 256 "$name.$ext" | cut -d' ' -f1)

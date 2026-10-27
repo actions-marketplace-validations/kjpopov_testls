@@ -167,7 +167,7 @@ jobs:
             | jq -r '.packages[] | select(.publish != []) | "\(.name) \(.version)"')
           exclude=()
           while read -r name version; do
-            status=$(curl -sS -o /dev/null -w '%{http_code}' \
+            status=$(curl -sS --connect-timeout 20 --max-time 60 -o /dev/null -w '%{http_code}' \
               -A "testls release workflow (https://github.com/$GITHUB_REPOSITORY)" \
               "https://crates.io/api/v1/crates/$name/$version")
             case "$status" in
