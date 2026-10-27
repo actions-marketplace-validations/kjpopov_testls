@@ -578,7 +578,7 @@ const EXPLANATIONS: &[Explanation] = &[
     entry(
         "policy.cert_key",
         "Certificate key type or size outside the policy",
-        "The chosen policy limits leaf keys, e.g. Mozilla modern allows only ECDSA on P-256 or P-384, Mozilla intermediate and NIST SP 800-52r2 also RSA of at least 2048 bits, BSI TR-02102-2 RSA of at least 3000 bits or ECDSA on NIST or brainpool curves, PCI DSS RSA of at least 2048 bits, ECDSA on NIST or brainpool curves or EdDSA, CNSA 2.0 only ML-DSA-87. Reissue the certificate with an allowed key.",
+        "The chosen policy limits leaf keys, e.g. Mozilla modern allows only ECDSA on P-256 or P-384, Mozilla intermediate and NIST SP 800-52r2 also RSA of at least 2048 bits, BSI TR-02102-2 RSA of at least 3000 bits or ECDSA on NIST or brainpool curves, PCI DSS RSA of at least 2048 bits, ECDSA on NIST curves from P-224 up or brainpool curves, or EdDSA, CNSA 2.0 only ML-DSA-87. Reissue the certificate with an allowed key.",
         "Mozilla Server Side TLS 6.0; NIST SP 800-52r2 §3.2.1; BSI TR-02102-2 table 14, §3.6.2; PCI DSS v4.0.1 glossary 'Strong Cryptography'; draft-becker-cnsa2-tls-profile §8",
     ),
     entry(

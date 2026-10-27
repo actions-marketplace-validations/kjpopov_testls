@@ -363,13 +363,25 @@ static BSI_TR_02102_2: Rules = Rules {
 const TLS13_SUITES: &[u16] = &[0x1301, 0x1302, 0x1303, 0x1304, 0x1305];
 
 /// Groups of at least 112-bit security (NIST SP 800-57 part 1 table 2):
-/// `secp256r1`, `secp384r1`, `secp521r1`, `x25519`, `x448`, the brainpool
+/// `secp224r1`, `secp256r1`, `secp384r1`, `secp521r1`, `x25519`, `x448`, the brainpool
 /// curves for TLSv1.2 (RFC 7027) and TLSv1.3 (RFC 8734), `ffdhe2048` to
 /// `ffdhe8192` (RFC 7919), ML-KEM (draft-ietf-tls-mlkem) and the hybrid
 /// ML-KEM groups (draft-ietf-tls-ecdhe-mlkem).
 const PCI_GROUPS: &[u16] = &[
-    0x0017, 0x0018, 0x0019, 0x001d, 0x001e, 0x001a, 0x001b, 0x001c, 0x001f, 0x0020, 0x0021, 0x0100,
-    0x0101, 0x0102, 0x0103, 0x0104, 0x0200, 0x0201, 0x0202, 0x11eb, 0x11ec, 0x11ed,
+    0x0015, 0x0017, 0x0018, 0x0019, 0x001d, 0x001e, 0x001a, 0x001b, 0x001c, 0x001f, 0x0020, 0x0021,
+    0x0100, 0x0101, 0x0102, 0x0103, 0x0104, 0x0200, 0x0201, 0x0202, 0x11eb, 0x11ec, 0x11ed,
+];
+
+/// ECDSA curves of at least 112-bit security (NIST SP 800-57 part 1 table 2):
+/// P-224 (RFC 5480 §2.1.1.1) plus the BSI list.
+const PCI_CURVES: &[(&str, &str)] = &[
+    ("1.3.132.0.33", "P-224"),
+    ("1.3.36.3.3.2.8.1.1.7", "brainpoolP256r1"),
+    ("1.3.36.3.3.2.8.1.1.11", "brainpoolP384r1"),
+    ("1.3.36.3.3.2.8.1.1.13", "brainpoolP512r1"),
+    ("1.2.840.10045.3.1.7", "P-256"),
+    ("1.3.132.0.34", "P-384"),
+    ("1.3.132.0.35", "P-521"),
 ];
 
 /// `EdDSA` key and signature algorithms (RFC 8410 §3): Ed25519 and Ed448.
@@ -395,7 +407,7 @@ const PCI_SIGNATURES: &[(&str, &str)] = &[
 /// no suite list, so every TLSv1.2 suite without a broken or 64-bit block
 /// cipher passes, including CBC and non-forward-secret suites; groups, DHE
 /// primes and keys need 112-bit security (RSA and DHE 2048 bits, ECC
-/// 256 bits). DSA keys are reported because FIPS 186-5 withdrew DSA
+/// 224 bits). DSA keys are reported because FIPS 186-5 withdrew DSA
 /// signature generation. No HSTS or lifetime limits.
 static PCI_DSS_4: Rules = Rules {
     versions: &[ProtocolVersion::TLS12, ProtocolVersion::TLS13],
@@ -408,7 +420,7 @@ static PCI_DSS_4: Rules = Rules {
     dh_primes: &[],
     dh_min_bits: Some(2048),
     rsa_bits: Some(2048),
-    curves: BSI_CURVES,
+    curves: PCI_CURVES,
     keys: EDDSA,
     signatures: PCI_SIGNATURES,
     lifespan_days: None,
@@ -764,7 +776,10 @@ fn key_deviation(rules: &Rules, cert: &X509Certificate<'_>) -> Option<String> {
                 .map(|oid| oid.to_id_string());
             match curve {
                 Some(c) if rules.curves.iter().any(|(oid, _)| *oid == c) => None,
-                Some(c) => Some(format!("leaf certificate has an EC key on curve {c}")),
+                Some(c) => Some(format!(
+                    "leaf certificate has an EC key on curve {}",
+                    label(&c, PCI_CURVES)
+                )),
                 None => Some("leaf certificate has an EC key without a named curve".to_owned()),
             }
         }
@@ -807,6 +822,9 @@ mod tests {
     const MLDSA87: &[u8] = include_bytes!("testdata/mldsa87-localhost.der");
     /// Self-signed Ed25519 leaf, valid 90 days.
     const ED25519: &[u8] = include_bytes!("testdata/ed25519-localhost.der");
+    /// Self-signed localhost certificate with a P-224 key, signed with
+    /// `ecdsa-with-SHA256`, valid for 90 days.
+    const P224: &[u8] = include_bytes!("testdata/p224-localhost.der");
 
     /// Protocol results with `versions` supported.
     fn protocols(versions: &[ProtocolVersion]) -> Vec<ProtocolResult> {
@@ -1440,7 +1458,7 @@ mod tests {
             ),
             (
                 "policy.cert_key",
-                "leaf certificate has an EC key on curve 1.2.840.10045.3.1.7",
+                "leaf certificate has an EC key on curve P-256",
             ),
             (
                 "policy.cert_signature",
@@ -1475,6 +1493,7 @@ mod tests {
         ];
         let key_exchange = [
             groups(ProtocolVersion::TLS13, &[0x11ec, 0x001d, 0x0018]),
+            groups(ProtocolVersion::TLS12, &[0x0015, 0x0017]),
             dhe(known("MODP group 14")),
             dhe(known("RFC 5114 2048-bit group (256-bit subgroup)")),
             dhe(Some(custom2048)),
@@ -1492,6 +1511,15 @@ mod tests {
         assert_eq!(policy_findings(Policy::PciDss4, &input), []);
         assert_eq!(certificate_deviations(Policy::PciDss4, ED25519), []);
         assert_eq!(certificate_deviations(Policy::PciDss4, EC_LOCALHOST), []);
+        assert_eq!(certificate_deviations(Policy::PciDss4, P224), []);
+        assert_eq!(
+            summary(&certificate_deviations(Policy::BsiTr021022, P224)),
+            [(
+                "policy.cert_key".to_owned(),
+                "leaf certificate has an EC key on curve P-224, which bsi-tr-02102-2 does not allow"
+                    .to_owned()
+            )]
+        );
 
         let mut custom2047 = vec![0x7f];
         custom2047.extend([0xff; 255]);
