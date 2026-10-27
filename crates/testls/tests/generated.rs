@@ -47,6 +47,8 @@ fn help_is_two_columns() {
     let out = Command::new(env!("CARGO_BIN_EXE_testls"))
         .arg("--help")
         .env("COLUMNS", "200")
+        .env("NO_COLOR", "1")
+        .env_remove("CLICOLOR_FORCE")
         .output()
         .expect("run testls");
     assert_eq!(out.status.code(), Some(0));
