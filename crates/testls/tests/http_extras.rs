@@ -615,6 +615,11 @@ fn policy_reports_deviations() {
         "{findings:?}"
     );
 
+    // The rustls server offers only TLSv1.2 and TLSv1.3 AEAD suites with
+    // forward secrecy and an ECDSA P-256 certificate: compliant.
+    let (_, findings) = run(&["--fail-on", "critical", "--policy", "pci-dss-4"]);
+    assert_eq!(findings, []);
+
     let (_, findings) = run(&["--fail-on", "critical", "--policy", "cnsa-2.0"]);
     for id in ["policy.cipher", "policy.cert_key", "policy.cert_signature"] {
         assert!(

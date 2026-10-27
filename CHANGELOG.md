@@ -50,6 +50,9 @@ All notable changes to `testls` are listed here. The format follows
 - `--policy bsi-tr-02102-2` checks against BSI TR-02102-2 (2025-01):
   TLSv1.2 and TLSv1.3, forward-secret suites, NIST and brainpool groups,
   RSA of at least 3000 bits, RSASSA-PSS or ECDSA signatures.
+- `--policy pci-dss-4` checks against PCI DSS v4.0.1 requirement 4.2.1:
+  TLSv1.2 and TLSv1.3, no broken or 64-bit block cipher suites, groups,
+  DHE primes and keys of at least 112-bit strength.
 - `--policy cnsa-2.0` checks against the NSA CNSA 2.0 TLS profile: TLSv1.3
   only (required), `TLS_AES_256_GCM_SHA384`, ML-KEM-1024 and ML-DSA-87
   certificates.

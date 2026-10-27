@@ -7,7 +7,9 @@
 //! (<https://doi.org/10.6028/NIST.SP.800-52r2>). The BSI profile follows
 //! BSI TR-02102-2, version 2025-01. The CNSA 2.0 profile
 //! follows the NSA CNSA 2.0 TLS 1.3 profile,
-//! draft-becker-cnsa2-tls-profile-05.
+//! draft-becker-cnsa2-tls-profile-05. The PCI DSS profile reads
+//! requirement 4.2.1 of PCI DSS v4.0.1 and its glossary entry "Strong
+//! Cryptography" (at least 112 bits of effective key strength).
 //! Suite and group code points are from the IANA TLS parameter registries.
 
 use std::fmt;
@@ -22,7 +24,7 @@ use x509_parser::parse_x509_certificate;
 use x509_parser::public_key::PublicKey;
 use x509_parser::signature_algorithm::SignatureAlgorithm;
 
-use crate::{Finding, Severity, cipher_name, group_name, parse_hsts};
+use crate::{Finding, Severity, cipher_name, cipher_severity, group_name, parse_hsts};
 
 /// Seconds in a day.
 const DAY: i64 = 24 * 60 * 60;
@@ -44,6 +46,9 @@ pub enum Policy {
     /// BSI TR-02102-2: TLSv1.2 and TLSv1.3 with forward secrecy, RSA keys
     /// of at least 3000 bits, brainpool or NIST curves.
     BsiTr021022,
+    /// PCI DSS v4.0.1: TLSv1.2 and TLSv1.3 with strong cryptography (at
+    /// least 112-bit security), no RC4, DES, 3DES or other broken suites.
+    PciDss4,
     /// NSA CNSA 2.0: TLSv1.3 with `TLS_AES_256_GCM_SHA384`, ML-KEM-1024 and
     /// ML-DSA-87 only.
     Cnsa2,
@@ -51,11 +56,12 @@ pub enum Policy {
 
 impl Policy {
     /// All policies, in the order they are listed on the command line.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::MozillaModern,
         Self::MozillaIntermediate,
         Self::Nist80052r2,
         Self::BsiTr021022,
+        Self::PciDss4,
         Self::Cnsa2,
     ];
 
@@ -67,6 +73,7 @@ impl Policy {
             Self::MozillaIntermediate => "mozilla-intermediate",
             Self::Nist80052r2 => "nist-800-52r2",
             Self::BsiTr021022 => "bsi-tr-02102-2",
+            Self::PciDss4 => "pci-dss-4",
             Self::Cnsa2 => "cnsa-2.0",
         }
     }
@@ -78,6 +85,7 @@ impl Policy {
             Self::MozillaIntermediate => &MOZILLA_INTERMEDIATE,
             Self::Nist80052r2 => &NIST_800_52R2,
             Self::BsiTr021022 => &BSI_TR_02102_2,
+            Self::PciDss4 => &PCI_DSS_4,
             Self::Cnsa2 => &CNSA_2,
         }
     }
@@ -111,12 +119,18 @@ struct Rules {
     tls13_suites: &'static [u16],
     /// Cipher suites for TLSv1.2 and earlier.
     suites: &'static [u16],
+    /// Whether every other TLSv1.2 suite of at least 112-bit strength is
+    /// allowed too (see [`strong_suite`]).
+    strong_suites: bool,
     /// Named groups for TLSv1.3 key exchange.
     tls13_groups: &'static [u16],
     /// Named groups for (EC)DHE key exchange in TLSv1.2 and earlier.
     groups: &'static [u16],
     /// Other TLSv1.2 DHE primes, by `testls_data::KnownPrime` name.
     dh_primes: &'static [&'static str],
+    /// Size in bits from which any other TLSv1.2 DHE prime, known or
+    /// custom, is allowed.
+    dh_min_bits: Option<usize>,
     /// Minimum RSA key size in bits, or `None` if RSA keys are not allowed.
     rsa_bits: Option<usize>,
     /// Named curves (OIDs) for ECDSA keys.
@@ -168,9 +182,11 @@ static MOZILLA_MODERN: Rules = Rules {
     required: &[],
     tls13_suites: MOZILLA_TLS13_SUITES,
     suites: &[],
+    strong_suites: false,
     tls13_groups: MOZILLA_GROUPS,
     groups: MOZILLA_GROUPS,
     dh_primes: &[],
+    dh_min_bits: None,
     rsa_bits: None,
     curves: MOZILLA_CURVES,
     keys: &[],
@@ -186,9 +202,11 @@ static MOZILLA_INTERMEDIATE: Rules = Rules {
     required: &[],
     tls13_suites: MOZILLA_TLS13_SUITES,
     suites: &[0xc02b, 0xc02f, 0xc02c, 0xc030, 0xcca9, 0xcca8],
+    strong_suites: false,
     tls13_groups: MOZILLA_GROUPS,
     groups: MOZILLA_GROUPS,
     dh_primes: &[],
+    dh_min_bits: None,
     rsa_bits: Some(2048),
     curves: MOZILLA_CURVES,
     keys: &[],
@@ -258,9 +276,11 @@ static NIST_800_52R2: Rules = Rules {
     required: &[ProtocolVersion::TLS12, ProtocolVersion::TLS13],
     tls13_suites: NIST_TLS13_SUITES,
     suites: NIST_SUITES,
+    strong_suites: false,
     tls13_groups: NIST_GROUPS,
     groups: NIST_GROUPS,
     dh_primes: NIST_DH_PRIMES,
+    dh_min_bits: None,
     rsa_bits: Some(2048),
     curves: MOZILLA_CURVES,
     keys: &[],
@@ -325,13 +345,72 @@ static BSI_TR_02102_2: Rules = Rules {
     required: &[],
     tls13_suites: &[0x1301, 0x1302, 0x1304],
     suites: BSI_SUITES,
+    strong_suites: false,
     tls13_groups: BSI_TLS13_GROUPS,
     groups: BSI_TLS12_GROUPS,
     dh_primes: &[],
+    dh_min_bits: None,
     rsa_bits: Some(3000),
     curves: BSI_CURVES,
     keys: &[],
     signatures: BSI_SIGNATURES,
+    lifespan_days: None,
+    hsts_max_age: None,
+};
+
+/// All TLSv1.3 suites of RFC 8446 appendix B.4: AES-GCM, ChaCha20-Poly1305
+/// and AES-CCM all have 128-bit or larger keys.
+const TLS13_SUITES: &[u16] = &[0x1301, 0x1302, 0x1303, 0x1304, 0x1305];
+
+/// Groups of at least 112-bit security (NIST SP 800-57 part 1 table 2):
+/// `secp256r1`, `secp384r1`, `secp521r1`, `x25519`, `x448`, the brainpool
+/// curves for TLSv1.2 (RFC 7027) and TLSv1.3 (RFC 8734), `ffdhe2048` to
+/// `ffdhe8192` (RFC 7919), ML-KEM (draft-ietf-tls-mlkem) and the hybrid
+/// ML-KEM groups (draft-ietf-tls-ecdhe-mlkem).
+const PCI_GROUPS: &[u16] = &[
+    0x0017, 0x0018, 0x0019, 0x001d, 0x001e, 0x001a, 0x001b, 0x001c, 0x001f, 0x0020, 0x0021, 0x0100,
+    0x0101, 0x0102, 0x0103, 0x0104, 0x0200, 0x0201, 0x0202, 0x11eb, 0x11ec, 0x11ed,
+];
+
+/// `EdDSA` key and signature algorithms (RFC 8410 §3): Ed25519 and Ed448.
+const EDDSA: &[(&str, &str)] = &[("1.3.101.112", "Ed25519"), ("1.3.101.113", "Ed448")];
+
+/// Leaf signature algorithms of at least 112-bit security: the NIST list
+/// (SHA-2 with RSA or ECDSA) plus `EdDSA`.
+const PCI_SIGNATURES: &[(&str, &str)] = &[
+    ("1.2.840.10045.4.3.2", "ecdsa-with-SHA256"),
+    ("1.2.840.10045.4.3.3", "ecdsa-with-SHA384"),
+    ("1.2.840.10045.4.3.4", "ecdsa-with-SHA512"),
+    ("1.2.840.113549.1.1.11", "sha256WithRSAEncryption"),
+    ("1.2.840.113549.1.1.12", "sha384WithRSAEncryption"),
+    ("1.2.840.113549.1.1.13", "sha512WithRSAEncryption"),
+    ("1.2.840.113549.1.1.10", "RSASSA-PSS"),
+    ("1.3.101.112", "Ed25519"),
+    ("1.3.101.113", "Ed448"),
+];
+
+/// PCI DSS v4.0.1 requirement 4.2.1: no SSL or early TLS, so TLSv1.2 and
+/// TLSv1.3, and "strong cryptography" (glossary: at least 112 bits of
+/// effective key strength, pointing to NIST SP 800-57 part 1). PCI DSS names
+/// no suite list, so every TLSv1.2 suite without a broken or 64-bit block
+/// cipher passes, including CBC and non-forward-secret suites; groups, DHE
+/// primes and keys need 112-bit security (RSA and DHE 2048 bits, ECC
+/// 256 bits). DSA keys are reported because FIPS 186-5 withdrew DSA
+/// signature generation. No HSTS or lifetime limits.
+static PCI_DSS_4: Rules = Rules {
+    versions: &[ProtocolVersion::TLS12, ProtocolVersion::TLS13],
+    required: &[],
+    tls13_suites: TLS13_SUITES,
+    suites: &[],
+    strong_suites: true,
+    tls13_groups: PCI_GROUPS,
+    groups: PCI_GROUPS,
+    dh_primes: &[],
+    dh_min_bits: Some(2048),
+    rsa_bits: Some(2048),
+    curves: BSI_CURVES,
+    keys: EDDSA,
+    signatures: PCI_SIGNATURES,
     lifespan_days: None,
     hsts_max_age: None,
 };
@@ -348,9 +427,11 @@ static CNSA_2: Rules = Rules {
     required: &[ProtocolVersion::TLS13],
     tls13_suites: &[0x1302],
     suites: &[],
+    strong_suites: false,
     tls13_groups: &[0x0202],
     groups: &[],
     dh_primes: &[],
+    dh_min_bits: None,
     rsa_bits: None,
     curves: &[],
     keys: ML_DSA_87,
@@ -470,13 +551,16 @@ fn cipher_deviations(policy: Policy, ciphers: &[CipherResult]) -> Vec<Finding> {
         .iter()
         .filter(|r| rules.versions.contains(&r.version))
     {
-        let allowed = if result.version == ProtocolVersion::TLS13 {
+        let tls13 = result.version == ProtocolVersion::TLS13;
+        let allowed = if tls13 {
             rules.tls13_suites
         } else {
             rules.suites
         };
         for &suite in &result.suites {
-            if !u16::try_from(suite).is_ok_and(|s| allowed.contains(&s)) {
+            let listed = u16::try_from(suite).is_ok_and(|s| allowed.contains(&s));
+            let strong = rules.strong_suites && !tls13 && strong_suite(result.version, suite);
+            if !(listed || strong) {
                 findings.push(deviation(
                     "policy.cipher",
                     policy,
@@ -516,7 +600,7 @@ fn group_deviations(policy: Policy, results: &[KeyExchangeResult]) -> Vec<Findin
             }
         }
         if let Some(prime) = &result.dh_prime
-            && let Some(what) = prime_deviation(prime, allowed, rules.dh_primes)
+            && let Some(what) = prime_deviation(prime, allowed, rules)
             && !seen.contains(&what)
         {
             seen.push(what);
@@ -528,9 +612,9 @@ fn group_deviations(policy: Policy, results: &[KeyExchangeResult]) -> Vec<Findin
 }
 
 /// What to report about TLSv1.2 DHE prime `prime`, unless it is an allowed
-/// RFC 7919 group or one of the `dh_primes` the policy allows by name.
-/// Unknown primes are never allowed.
-fn prime_deviation(prime: &[u8], allowed: &[u16], dh_primes: &[&str]) -> Option<String> {
+/// RFC 7919 group, one of the `dh_primes` the policy allows by name, or at
+/// least `dh_min_bits` long. Otherwise unknown primes are never allowed.
+fn prime_deviation(prime: &[u8], allowed: &[u16], rules: &Rules) -> Option<String> {
     let known = testls_data::known_dh_prime(prime);
     if let Some(group) = known.and_then(|k| ffdhe_group(k.name)) {
         return (!allowed.contains(&group)).then(|| {
@@ -540,17 +624,32 @@ fn prime_deviation(prime: &[u8], allowed: &[u16], dh_primes: &[&str]) -> Option<
             )
         });
     }
-    match known {
-        Some(k) if dh_primes.contains(&k.name) => None,
-        Some(k) => Some(format!("DHE uses {}", k.name)),
-        None => {
-            let digits: Vec<_> = prime.iter().skip_while(|&&b| b == 0).collect();
-            let bits = digits
-                .first()
-                .map_or(0, |b| digits.len() * 8 - b.leading_zeros() as usize);
-            Some(format!("DHE uses a custom {bits}-bit prime"))
-        }
+    let digits: Vec<_> = prime.iter().skip_while(|&&b| b == 0).collect();
+    let bits = digits
+        .first()
+        .map_or(0, |b| digits.len() * 8 - b.leading_zeros() as usize);
+    if rules.dh_min_bits.is_some_and(|min| bits >= min) {
+        return None;
     }
+    match known {
+        Some(k) if rules.dh_primes.contains(&k.name) => None,
+        Some(k) => Some(format!("DHE uses {}", k.name)),
+        None => Some(format!("DHE uses a custom {bits}-bit prime")),
+    }
+}
+
+/// Whether TLSv1.2 suite `id` reaches 112-bit strength: no rating of
+/// medium or worse in [`cipher_severity`] (null, anonymous, export, RC4,
+/// DES, RC2, MD5, 3DES), no other 64-bit block cipher (IDEA, GOST 28147
+/// and Magma, Sweet32) and a name the IANA registry knows.
+fn strong_suite(version: ProtocolVersion, id: u32) -> bool {
+    let (severity, key, _) = cipher_severity(version, id);
+    let name = cipher_name(version, id);
+    severity < Severity::Medium
+        && key != "unknown"
+        && !["_IDEA_", "_28147_", "_MAGMA_"]
+            .iter()
+            .any(|block64| name.contains(block64))
 }
 
 /// The `supported_groups` code point (RFC 7919 §8) of RFC 7919 appendix A
@@ -607,7 +706,7 @@ fn certificate_deviations(policy: Policy, leaf: &[u8]) -> Vec<Finding> {
             policy,
             &format!(
                 "leaf certificate is signed with {}{}",
-                label(&signature, NIST_SIGNATURES.iter().chain(ML_DSA_87)),
+                label(&signature, PCI_SIGNATURES.iter().chain(ML_DSA_87)),
                 if pss_hash_allowed(&cert) {
                     ""
                 } else {
@@ -671,7 +770,7 @@ fn key_deviation(rules: &Rules, cert: &X509Certificate<'_>) -> Option<String> {
         }
         Ok(_) | Err(_) => Some(format!(
             "leaf certificate has a key of algorithm {}",
-            label(&algorithm, ML_DSA_87)
+            label(&algorithm, ML_DSA_87.iter().chain(EDDSA))
         )),
     }
 }
@@ -706,6 +805,8 @@ mod tests {
     const RSA_PSS_SHA1: &[u8] = include_bytes!("testdata/rsa-pss-sha1.der");
     /// Self-signed ML-DSA-87 leaf, valid 90 days.
     const MLDSA87: &[u8] = include_bytes!("testdata/mldsa87-localhost.der");
+    /// Self-signed Ed25519 leaf, valid 90 days.
+    const ED25519: &[u8] = include_bytes!("testdata/ed25519-localhost.der");
 
     /// Protocol results with `versions` supported.
     fn protocols(versions: &[ProtocolVersion]) -> Vec<ProtocolResult> {
@@ -1350,6 +1451,97 @@ mod tests {
         assert_eq!(summary(&policy_findings(Policy::Cnsa2, &input)), expected);
     }
 
+    /// PCI DSS accepts any TLSv1.2 suite, group, DHE prime and key of at
+    /// least 112-bit strength, CBC and non-forward-secret suites included,
+    /// and rejects early TLS, 64-bit block ciphers and short keys.
+    #[test]
+    fn pci_server() {
+        let known = |name: &str| {
+            testls_data::known_dh_primes()
+                .iter()
+                .find(|k| k.name == name)
+                .map(|k| unhex(k.hex))
+        };
+        let dhe = |prime: Option<Vec<u8>>| KeyExchangeResult {
+            dh_prime: prime,
+            ..groups(ProtocolVersion::TLS12, &[0x0017])
+        };
+        let mut custom2048 = vec![0x80];
+        custom2048.extend([0xff; 255]);
+        let protocols = protocols(&[ProtocolVersion::TLS12, ProtocolVersion::TLS13]);
+        let ciphers = [
+            ciphers(ProtocolVersion::TLS12, &[0xc02f, 0xc013, 0x009c, 0x0041]),
+            ciphers(ProtocolVersion::TLS13, &[0x1301, 0x1302, 0x1303, 0x1304]),
+        ];
+        let key_exchange = [
+            groups(ProtocolVersion::TLS13, &[0x11ec, 0x001d, 0x0018]),
+            dhe(known("MODP group 14")),
+            dhe(known("RFC 5114 2048-bit group (256-bit subgroup)")),
+            dhe(Some(custom2048)),
+        ];
+        let chain = [RSA2048.to_vec()];
+        let input = PolicyInput {
+            protocols: &protocols,
+            ciphers: Some(&ciphers),
+            cipher_errors: &[],
+            key_exchange: Some(&key_exchange),
+            key_exchange_errors: &[],
+            chain: Some(&chain),
+            http: None,
+        };
+        assert_eq!(policy_findings(Policy::PciDss4, &input), []);
+        assert_eq!(certificate_deviations(Policy::PciDss4, ED25519), []);
+        assert_eq!(certificate_deviations(Policy::PciDss4, EC_LOCALHOST), []);
+
+        let mut custom2047 = vec![0x7f];
+        custom2047.extend([0xff; 255]);
+        let protocols = self::protocols(&[ProtocolVersion::TLS11, ProtocolVersion::TLS12]);
+        let ciphers = [self::ciphers(
+            ProtocolVersion::TLS12,
+            &[0xc02f, 0x000a, 0x0005, 0x0007, 0xffff],
+        )];
+        let key_exchange = [
+            self::groups(ProtocolVersion::TLS12, &[0x0017, 0x0016]),
+            dhe(known("MODP group 5")),
+            dhe(Some(custom2047)),
+        ];
+        let chain = [RSA1024_SHA1.to_vec()];
+        let input = PolicyInput {
+            protocols: &protocols,
+            ciphers: Some(&ciphers),
+            key_exchange: Some(&key_exchange),
+            chain: Some(&chain),
+            ..input
+        };
+        let tail = ", which pci-dss-4 does not allow";
+        let expected = [
+            ("policy.protocol", "TLSv1.1 is offered"),
+            (
+                "policy.cipher",
+                "TLSv1.2 accepts TLS_RSA_WITH_3DES_EDE_CBC_SHA",
+            ),
+            ("policy.cipher", "TLSv1.2 accepts TLS_RSA_WITH_RC4_128_SHA"),
+            ("policy.cipher", "TLSv1.2 accepts TLS_RSA_WITH_IDEA_CBC_SHA"),
+            ("policy.cipher", "TLSv1.2 accepts unknown"),
+            (
+                "policy.group",
+                "key exchange group secp256k1 (0x0016) is accepted",
+            ),
+            ("policy.group", "DHE uses MODP group 5"),
+            ("policy.group", "DHE uses a custom 2047-bit prime"),
+            (
+                "policy.cert_key",
+                "leaf certificate has an RSA key of only 1024 bits",
+            ),
+            (
+                "policy.cert_signature",
+                "leaf certificate is signed with 1.2.840.113549.1.1.5",
+            ),
+        ]
+        .map(|(id, what)| (id.to_owned(), format!("{what}{tail}")));
+        assert_eq!(summary(&policy_findings(Policy::PciDss4, &input)), expected);
+    }
+
     /// Names round-trip through `FromStr`.
     #[test]
     fn names() {
@@ -1360,6 +1552,7 @@ mod tests {
         assert_eq!("NIST-800-52R2".parse(), Ok(Policy::Nist80052r2));
         assert_eq!("CNSA-2.0".parse(), Ok(Policy::Cnsa2));
         assert_eq!("BSI-TR-02102-2".parse(), Ok(Policy::BsiTr021022));
+        assert_eq!("PCI-DSS-4".parse(), Ok(Policy::PciDss4));
         assert!("pci".parse::<Policy>().is_err());
     }
 }

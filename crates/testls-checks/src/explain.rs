@@ -578,8 +578,8 @@ const EXPLANATIONS: &[Explanation] = &[
     entry(
         "policy.cert_key",
         "Certificate key type or size outside the policy",
-        "The chosen policy limits leaf keys, e.g. Mozilla modern allows only ECDSA on P-256 or P-384, Mozilla intermediate and NIST SP 800-52r2 also RSA of at least 2048 bits, BSI TR-02102-2 RSA of at least 3000 bits or ECDSA on NIST or brainpool curves, CNSA 2.0 only ML-DSA-87. Reissue the certificate with an allowed key.",
-        "Mozilla Server Side TLS 6.0; NIST SP 800-52r2 §3.2.1; BSI TR-02102-2 table 14, §3.6.2; draft-becker-cnsa2-tls-profile §8",
+        "The chosen policy limits leaf keys, e.g. Mozilla modern allows only ECDSA on P-256 or P-384, Mozilla intermediate and NIST SP 800-52r2 also RSA of at least 2048 bits, BSI TR-02102-2 RSA of at least 3000 bits or ECDSA on NIST or brainpool curves, PCI DSS RSA of at least 2048 bits, ECDSA on NIST or brainpool curves or EdDSA, CNSA 2.0 only ML-DSA-87. Reissue the certificate with an allowed key.",
+        "Mozilla Server Side TLS 6.0; NIST SP 800-52r2 §3.2.1; BSI TR-02102-2 table 14, §3.6.2; PCI DSS v4.0.1 glossary 'Strong Cryptography'; draft-becker-cnsa2-tls-profile §8",
     ),
     entry(
         "policy.cert_lifespan",
@@ -590,20 +590,20 @@ const EXPLANATIONS: &[Explanation] = &[
     entry(
         "policy.cert_signature",
         "Certificate signature algorithm outside the policy",
-        "The chosen policy lists the signature algorithms the leaf certificate may use, e.g. ECDSA with SHA-2 and, for Mozilla intermediate, sha256WithRSAEncryption; NIST SP 800-52r2 also allows RSA with SHA-384, SHA-512 and RSASSA-PSS; BSI TR-02102-2 only RSASSA-PSS with SHA-2 and ECDSA with SHA-2; CNSA 2.0 allows only ML-DSA-87.",
-        "Mozilla Server Side TLS 6.0; NIST SP 800-52r2 §3.2.1; BSI TR-02102-2 table 12; draft-becker-cnsa2-tls-profile §8",
+        "The chosen policy lists the signature algorithms the leaf certificate may use, e.g. ECDSA with SHA-2 and, for Mozilla intermediate, sha256WithRSAEncryption; NIST SP 800-52r2 also allows RSA with SHA-384, SHA-512 and RSASSA-PSS; BSI TR-02102-2 only RSASSA-PSS with SHA-2 and ECDSA with SHA-2; PCI DSS the NIST list plus Ed25519 and Ed448; CNSA 2.0 allows only ML-DSA-87.",
+        "Mozilla Server Side TLS 6.0; NIST SP 800-52r2 §3.2.1; BSI TR-02102-2 table 12; PCI DSS v4.0.1 glossary 'Strong Cryptography'; draft-becker-cnsa2-tls-profile §8",
     ),
     entry(
         "policy.cipher",
         "Cipher suite outside the policy",
-        "The server accepts a cipher suite the chosen policy does not list. It may not be broken, but disabling it brings the configuration in line with the policy.",
-        "Mozilla Server Side TLS 6.0; NIST SP 800-52r2 §3.3.1; BSI TR-02102-2 tables 3 and 13; draft-becker-cnsa2-tls-profile §4",
+        "The server accepts a cipher suite the chosen policy does not list. It may not be broken, but disabling it brings the configuration in line with the policy. PCI DSS lists no suites; it rejects broken suites and 64-bit block ciphers such as 3DES.",
+        "Mozilla Server Side TLS 6.0; NIST SP 800-52r2 §3.3.1; BSI TR-02102-2 tables 3 and 13; PCI DSS v4.0.1 req. 4.2.1; draft-becker-cnsa2-tls-profile §4",
     ),
     entry(
         "policy.group",
         "Key exchange group outside the policy",
-        "The server accepts a named group or TLSv1.2 DHE prime the chosen policy does not list; Mozilla allows X25519MLKEM768, x25519, secp256r1 and secp384r1, NIST SP 800-52r2 the NIST curves, ffdhe groups and MODP groups of 2048 bits or more, BSI TR-02102-2 the NIST and brainpool curves, ffdhe3072 and ffdhe4096, CNSA 2.0 only MLKEM1024.",
-        "Mozilla Server Side TLS 6.0; NIST SP 800-52r2 §3.4.2.2; BSI TR-02102-2 tables 6 and 10; draft-becker-cnsa2-tls-profile §7.2",
+        "The server accepts a named group or TLSv1.2 DHE prime the chosen policy does not list; Mozilla allows X25519MLKEM768, x25519, secp256r1 and secp384r1, NIST SP 800-52r2 the NIST curves, ffdhe groups and MODP groups of 2048 bits or more, BSI TR-02102-2 the NIST and brainpool curves, ffdhe3072 and ffdhe4096, PCI DSS any group or DHE prime of at least 112-bit security, CNSA 2.0 only MLKEM1024.",
+        "Mozilla Server Side TLS 6.0; NIST SP 800-52r2 §3.4.2.2; BSI TR-02102-2 tables 6 and 10; PCI DSS v4.0.1 glossary 'Strong Cryptography', NIST SP 800-57 part 1 table 2; draft-becker-cnsa2-tls-profile §7.2",
     ),
     entry(
         "policy.hsts",
@@ -620,8 +620,8 @@ const EXPLANATIONS: &[Explanation] = &[
     entry(
         "policy.protocol",
         "Protocol version outside the policy or missing",
-        "The server offers a protocol version the chosen policy does not allow; Mozilla modern and CNSA 2.0 allow only TLSv1.3, Mozilla intermediate, NIST SP 800-52r2 and BSI TR-02102-2 TLSv1.2 and TLSv1.3. NIST SP 800-52r2 also requires both TLSv1.2 and TLSv1.3 to be offered, CNSA 2.0 requires TLSv1.3.",
-        "Mozilla Server Side TLS 6.0; NIST SP 800-52r2 §3.1; BSI TR-02102-2 §3.2; draft-becker-cnsa2-tls-profile §6",
+        "The server offers a protocol version the chosen policy does not allow; Mozilla modern and CNSA 2.0 allow only TLSv1.3, Mozilla intermediate, NIST SP 800-52r2, BSI TR-02102-2 and PCI DSS TLSv1.2 and TLSv1.3. NIST SP 800-52r2 also requires both TLSv1.2 and TLSv1.3 to be offered, CNSA 2.0 requires TLSv1.3.",
+        "Mozilla Server Side TLS 6.0; NIST SP 800-52r2 §3.1; BSI TR-02102-2 §3.2; PCI DSS v4.0.1 req. 4.2.1; draft-becker-cnsa2-tls-profile §6",
     ),
 ];
 
