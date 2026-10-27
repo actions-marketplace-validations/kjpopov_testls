@@ -10,13 +10,19 @@ Download an archive from the
 against `SHA256SUMS` and put `testls` on your `PATH`:
 
 ```bash
+base=https://github.com/kjpopov/testls/releases/download/v0.4.1
+curl -fLO "$base/testls-v0.4.1-x86_64-unknown-linux-musl.tar.gz"
+curl -fLO "$base/SHA256SUMS"
+sha256sum --ignore-missing -c SHA256SUMS   # macOS: shasum -a 256 --ignore-missing -c
 tar xzf testls-v0.4.1-x86_64-unknown-linux-musl.tar.gz
-./testls-v0.4.1-x86_64-unknown-linux-musl/testls example.com
+mkdir -p ~/.local/bin
+install -m 755 testls-v0.4.1-x86_64-unknown-linux-musl/testls ~/.local/bin/
+testls example.com   # needs ~/.local/bin on your PATH
 ```
 
 On macOS the binaries are not notarized yet; if Gatekeeper blocks them,
-clear the quarantine flag on the extracted binary, for example
-`xattr -d com.apple.quarantine testls-v0.4.1-aarch64-apple-darwin/testls`.
+clear the quarantine flag on the extracted binary before installing it, for
+example `xattr -d com.apple.quarantine testls-v0.4.1-aarch64-apple-darwin/testls`.
 
 ## Homebrew (macOS, Linux)
 
