@@ -111,7 +111,9 @@ struct Rules {
     tls13_suites: &'static [u16],
     /// Cipher suites for TLSv1.2 and earlier.
     suites: &'static [u16],
-    /// Named groups for (EC)DHE key exchange.
+    /// Named groups for TLSv1.3 key exchange.
+    tls13_groups: &'static [u16],
+    /// Named groups for (EC)DHE key exchange in TLSv1.2 and earlier.
     groups: &'static [u16],
     /// Minimum RSA key size in bits, or `None` if RSA keys are not allowed.
     rsa_bits: Option<usize>,
@@ -164,6 +166,7 @@ static MOZILLA_MODERN: Rules = Rules {
     required: &[],
     tls13_suites: MOZILLA_TLS13_SUITES,
     suites: &[],
+    tls13_groups: MOZILLA_GROUPS,
     groups: MOZILLA_GROUPS,
     rsa_bits: None,
     curves: MOZILLA_CURVES,
@@ -180,6 +183,7 @@ static MOZILLA_INTERMEDIATE: Rules = Rules {
     required: &[],
     tls13_suites: MOZILLA_TLS13_SUITES,
     suites: &[0xc02b, 0xc02f, 0xc02c, 0xc030, 0xcca9, 0xcca8],
+    tls13_groups: MOZILLA_GROUPS,
     groups: MOZILLA_GROUPS,
     rsa_bits: Some(2048),
     curves: MOZILLA_CURVES,
@@ -240,6 +244,7 @@ static NIST_800_52R2: Rules = Rules {
     required: &[ProtocolVersion::TLS12, ProtocolVersion::TLS13],
     tls13_suites: NIST_TLS13_SUITES,
     suites: NIST_SUITES,
+    tls13_groups: NIST_GROUPS,
     groups: NIST_GROUPS,
     rsa_bits: Some(2048),
     curves: MOZILLA_CURVES,
@@ -261,11 +266,17 @@ const BSI_SUITES: &[u16] = &[
     0x0067, 0x006b, 0x009e, 0x009f, 0xc09e, 0xc09f,
 ];
 
-/// Groups of BSI TR-02102-2 tables 6 (TLSv1.2) and 10 (TLSv1.3):
-/// `secp256r1`, `secp384r1`, `secp521r1`, the brainpool curves (`26`-`28`
-/// for TLSv1.2, `31`-`33` for TLSv1.3), `ffdhe3072` and `ffdhe4096`.
-const BSI_GROUPS: &[u16] = &[
-    0x0017, 0x0018, 0x0019, 0x001a, 0x001b, 0x001c, 0x001f, 0x0020, 0x0021, 0x0101, 0x0102,
+/// TLSv1.2 groups of BSI TR-02102-2 table 6: `secp256r1`, `secp384r1`,
+/// `secp521r1`, the brainpool curves `26`-`28` (RFC 7027), `ffdhe3072` and
+/// `ffdhe4096`.
+const BSI_TLS12_GROUPS: &[u16] = &[
+    0x0017, 0x0018, 0x0019, 0x001a, 0x001b, 0x001c, 0x0101, 0x0102,
+];
+
+/// TLSv1.3 groups of BSI TR-02102-2 table 10: as table 6, but with the
+/// brainpool code points `31`-`33` that RFC 8734 assigns for TLSv1.3.
+const BSI_TLS13_GROUPS: &[u16] = &[
+    0x0017, 0x0018, 0x0019, 0x001f, 0x0020, 0x0021, 0x0101, 0x0102,
 ];
 
 /// ECDSA curves of BSI TR-02102-2 §3.6.2: brainpoolP256r1, brainpoolP384r1,
@@ -299,7 +310,8 @@ static BSI_TR_02102_2: Rules = Rules {
     required: &[],
     tls13_suites: &[0x1301, 0x1302, 0x1304],
     suites: BSI_SUITES,
-    groups: BSI_GROUPS,
+    tls13_groups: BSI_TLS13_GROUPS,
+    groups: BSI_TLS12_GROUPS,
     rsa_bits: Some(3000),
     curves: BSI_CURVES,
     keys: &[],
@@ -320,7 +332,8 @@ static CNSA_2: Rules = Rules {
     required: &[ProtocolVersion::TLS13],
     tls13_suites: &[0x1302],
     suites: &[],
-    groups: &[0x0202],
+    tls13_groups: &[0x0202],
+    groups: &[],
     rsa_bits: None,
     curves: &[],
     keys: ML_DSA_87,
@@ -470,8 +483,13 @@ fn group_deviations(policy: Policy, results: &[KeyExchangeResult]) -> Vec<Findin
         .iter()
         .filter(|r| rules.versions.contains(&r.version))
     {
+        let allowed = if result.version == ProtocolVersion::TLS13 {
+            rules.tls13_groups
+        } else {
+            rules.groups
+        };
         for &group in &result.groups {
-            if !rules.groups.contains(&group) && !seen.contains(&group) {
+            if !allowed.contains(&group) && !seen.contains(&group) {
                 seen.push(group);
             }
         }
@@ -967,9 +985,10 @@ mod tests {
         );
     }
 
-    /// BSI TR-02102-2 allows brainpool groups, DHE with `ffdhe3072` and
-    /// ECDSA leaves, but not SHA-1 CBC suites, `ChaCha20`, x25519,
-    /// `ffdhe2048`, RSA keys below 3000 bits or PKCS #1 v1.5 signatures.
+    /// BSI TR-02102-2 allows brainpool groups (with the code points of the
+    /// matching TLS version), DHE with `ffdhe3072` and ECDSA leaves, but
+    /// not SHA-1 CBC suites, `ChaCha20`, x25519, `ffdhe2048`, RSA keys below
+    /// 3000 bits or PKCS #1 v1.5 signatures.
     #[test]
     fn bsi_server() {
         let protocols = protocols(&[ProtocolVersion::TLS12, ProtocolVersion::TLS13]);
@@ -978,8 +997,11 @@ mod tests {
             ciphers(ProtocolVersion::TLS13, &[0x1301, 0x1304, 0x1303]),
         ];
         let key_exchange = [
-            groups(ProtocolVersion::TLS12, &[0x0017, 0x001a, 0x0101, 0x0100]),
-            groups(ProtocolVersion::TLS13, &[0x001f, 0x001d]),
+            groups(
+                ProtocolVersion::TLS12,
+                &[0x0017, 0x001a, 0x0101, 0x0100, 0x0020],
+            ),
+            groups(ProtocolVersion::TLS13, &[0x001f, 0x001d, 0x001b]),
         ];
         let chain = [EC_LOCALHOST.to_vec()];
         let input = PolicyInput {
@@ -1011,7 +1033,15 @@ mod tests {
             ),
             (
                 "policy.group",
+                "key exchange group brainpoolP384r1tls13 (0x0020) is accepted",
+            ),
+            (
+                "policy.group",
                 "key exchange group x25519 (0x001d) is accepted",
+            ),
+            (
+                "policy.group",
+                "key exchange group brainpoolP384r1 (0x001b) is accepted",
             ),
         ]
         .map(|(id, what)| (id.to_owned(), format!("{what}{tail}")));
