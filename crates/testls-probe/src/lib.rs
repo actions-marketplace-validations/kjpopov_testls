@@ -11,6 +11,7 @@ mod http;
 mod intolerance;
 mod protocols;
 mod response;
+mod starttls;
 
 use std::fmt;
 use std::io;
@@ -32,6 +33,7 @@ pub use intolerance::{Intolerance, probe_intolerance};
 pub use protocols::{ProtocolResult, ProtocolSupport, classify, detect_protocols, probe_protocol};
 pub use response::HelloResponse;
 use response::ResponseParser;
+pub use starttls::Starttls;
 use testls_wire::{DecodeError, EncodeError};
 
 /// Error from a single probe.
@@ -88,6 +90,9 @@ pub struct Transport {
     pub source: Option<IpAddr>,
     /// HTTP proxy to tunnel through with `CONNECT`; direct when `None`.
     pub proxy: Option<SocketAddr>,
+    /// Plain-text protocol to upgrade with STARTTLS before each hello;
+    /// TLS from the first byte when `None`.
+    pub starttls: Option<Starttls>,
 }
 
 impl Transport {
@@ -101,16 +106,30 @@ impl Transport {
             read_timeout: Duration::from_secs(10),
             source: None,
             proxy: None,
+            starttls: None,
         }
     }
 
     /// Opens a TCP connection to [`Transport::addr`] from
     /// [`Transport::source`], through [`Transport::proxy`] when set, within
-    /// the connect timeout.
+    /// the connect timeout, then runs the [`Transport::starttls`] dialogue
+    /// within the read timeout.
     ///
     /// # Errors
-    /// As for [`connect`] and [`tunnel`].
+    /// As for [`connect`] and [`tunnel`]; a failed or timed-out STARTTLS
+    /// dialogue is also a [`ProbeError::Connect`].
     pub(crate) async fn connect(&self) -> Result<TcpStream, ProbeError> {
+        let mut stream = self.open().await?;
+        if let Some(starttls) = self.starttls {
+            timeout(self.read_timeout, starttls.upgrade(&mut stream))
+                .await
+                .map_err(|_| ProbeError::Connect(io::ErrorKind::TimedOut.into()))??;
+        }
+        Ok(stream)
+    }
+
+    /// Opens the TCP connection, directly or through the proxy.
+    async fn open(&self) -> Result<TcpStream, ProbeError> {
         match self.proxy {
             Some(proxy) => {
                 tunnel(
@@ -365,6 +384,50 @@ mod tests {
             head.await.unwrap(),
             "CONNECT [2001:db8::1]:8443 HTTP/1.1\r\nHost: [2001:db8::1]:8443\r\n\r\n"
         );
+    }
+
+    /// With STARTTLS the hello follows the upgrade dialogue on the same
+    /// connection.
+    #[tokio::test]
+    async fn starttls_exchange() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut buf = [0; 512];
+            s.write_all(b"220 hi\r\n").await.unwrap();
+            let _ = s.read(&mut buf).await.unwrap();
+            s.write_all(b"250-mx\r\n250 STARTTLS\r\n").await.unwrap();
+            let _ = s.read(&mut buf).await.unwrap();
+            s.write_all(b"220 go\r\n").await.unwrap();
+            let n = s.read(&mut buf).await.unwrap();
+            s.write_all(&[21, 3, 3, 0, 2, 2, 70]).await.unwrap();
+            buf[..n].to_vec()
+        });
+        let mut t = Transport::new(addr);
+        t.starttls = Some(Starttls::Smtp);
+        let r = t.exchange(b"hello").await.unwrap();
+        assert!(matches!(r, HelloResponse::Alert(a) if a.description == 70));
+        assert_eq!(task.await.unwrap(), b"hello");
+    }
+
+    /// A server that stalls during STARTTLS gives a connect timeout, so
+    /// callers know no hello was sent.
+    #[tokio::test]
+    async fn starttls_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (_s, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        });
+        let mut t = Transport::new(addr);
+        t.read_timeout = Duration::from_millis(100);
+        t.starttls = Some(Starttls::Smtp);
+        let Err(ProbeError::Connect(e)) = t.exchange(b"x").await else {
+            panic!("stalled STARTTLS did not time out");
+        };
+        assert_eq!(e.kind(), io::ErrorKind::TimedOut);
     }
 
     /// A refused or garbled `CONNECT` is a connect error.
