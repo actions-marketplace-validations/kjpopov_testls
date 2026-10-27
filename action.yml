@@ -1,4 +1,4 @@
-name: testls
+name: testls TLS scanner
 description: Install the testls TLS/SSL scanner from a GitHub release and optionally run it.
 author: kjpopov
 branding:
