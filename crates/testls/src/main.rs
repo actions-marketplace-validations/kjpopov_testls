@@ -183,8 +183,14 @@ enum Command {
         #[arg(value_enum)]
         shell: clap_complete::Shell,
     },
-    /// Print the man page in roff format.
-    Man,
+    /// Print the man page in roff format, or write all pages to a directory.
+    Man {
+        /// Write `testls.1` and one page per subcommand (such as
+        /// `testls-explain.1`) to this directory instead of printing
+        /// `testls.1`.
+        #[arg(long, value_name = "DIR")]
+        dir: Option<PathBuf>,
+    },
 }
 
 /// Resolves the target to every distinct socket address it maps to, in
@@ -300,6 +306,18 @@ fn man_page() -> Vec<u8> {
     out
 }
 
+/// Writes `testls.1` and one page per subcommand to `dir`, which must
+/// exist: exit code 0, or 2 when a page cannot be written.
+fn write_man_pages(dir: &std::path::Path) -> ExitCode {
+    match clap_mangen::generate_to(Cli::command(), dir) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: cannot write man pages to {}: {e}", dir.display());
+            ExitCode::from(2)
+        }
+    }
+}
+
 /// Writes generated output to stdout: exit code 0, or 2 when stdout fails.
 fn print_bytes(bytes: &[u8]) -> ExitCode {
     let mut stdout = std::io::stdout().lock();
@@ -319,7 +337,8 @@ async fn main() -> ExitCode {
     match &cli.command {
         Some(Command::Explain { id }) => explain_command(id.as_deref()),
         Some(Command::Completions { shell }) => print_bytes(&completion_script(*shell)),
-        Some(Command::Man) => print_bytes(&man_page()),
+        Some(Command::Man { dir: None }) => print_bytes(&man_page()),
+        Some(Command::Man { dir: Some(dir) }) => write_man_pages(dir),
         None => scan_all(&cli).await,
     }
 }
@@ -1189,7 +1208,9 @@ mod tests {
         assert!(matches!(cli.command, Some(Command::Completions { .. })));
         assert!(Cli::try_parse_from(["testls", "completions", "tcsh"]).is_err());
         let cli = Cli::try_parse_from(["testls", "man"]).expect("man");
-        assert!(matches!(cli.command, Some(Command::Man)));
+        assert!(matches!(cli.command, Some(Command::Man { dir: None })));
+        let cli = Cli::try_parse_from(["testls", "man", "--dir", "pages"]).expect("man --dir");
+        assert!(matches!(cli.command, Some(Command::Man { dir: Some(_) })));
         Cli::command().debug_assert();
     }
 

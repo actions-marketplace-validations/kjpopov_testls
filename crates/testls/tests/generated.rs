@@ -39,3 +39,30 @@ fn man_page() {
     assert!(page.contains(".TH testls 1"), "{page}");
     assert!(page.contains(".SH SUBCOMMANDS"), "{page}");
 }
+
+/// `testls man --dir DIR` writes the pages the main page refers to, and
+/// fails with exit code 2 when the directory is missing.
+#[test]
+fn man_pages_in_dir() {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("man-pages");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create dir");
+    let path = dir.to_str().expect("UTF-8 path");
+    assert_eq!(run(&["man", "--dir", path]).0, Some(0));
+    let main = std::fs::read_to_string(dir.join("testls.1")).expect("testls.1");
+    for sub in ["explain", "completions", "man"] {
+        assert!(
+            main.contains(&format!("testls\\-{sub}(1)")),
+            "{sub}: {main}"
+        );
+        let page = std::fs::read_to_string(dir.join(format!("testls-{sub}.1"))).expect(sub);
+        assert!(
+            page.contains(&format!(".TH testls-{sub} 1")),
+            "{sub}: {page}"
+        );
+    }
+    assert!(!dir.join("testls-help.1").exists());
+    let missing = dir.join("missing");
+    let missing = missing.to_str().expect("UTF-8 path");
+    assert_eq!(run(&["man", "--dir", missing]).0, Some(2));
+}

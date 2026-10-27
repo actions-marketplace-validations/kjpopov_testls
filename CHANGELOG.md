@@ -57,7 +57,8 @@ All notable changes to `testls` are listed here. The format follows
   only (required), `TLS_AES_256_GCM_SHA384`, ML-KEM-1024 and ML-DSA-87
   certificates.
 - `testls completions SHELL` prints a completion script for bash, zsh,
-  fish, PowerShell or elvish, and `testls man` prints the man page.
+  fish, PowerShell or elvish, `testls man` prints the man page, and
+  `testls man --dir DIR` writes it with one page per subcommand.
 
 ## [0.3.0] - 2026-10-26
 

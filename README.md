@@ -39,13 +39,21 @@ tar xzf testls-v0.3.0-x86_64-unknown-linux-musl.tar.gz
 On macOS the binaries are not notarized yet; clear the quarantine flag with
 `xattr -d com.apple.quarantine testls` if Gatekeeper blocks them.
 
-Shell completions (bash, zsh, fish, PowerShell, elvish) and the man page
-come from the binary itself:
+Shell completions (bash, zsh, fish, PowerShell, elvish) and man pages come
+from the binary itself (releases after v0.3.0, or a build from source):
 
 ```bash
+mkdir -p ~/.local/share/bash-completion/completions ~/.local/share/man/man1
 testls completions bash > ~/.local/share/bash-completion/completions/testls
-testls completions zsh > "${fpath[1]}/_testls"
-testls man > ~/.local/share/man/man1/testls.1
+testls man --dir ~/.local/share/man/man1
+```
+
+For zsh, write the script to a directory on your `fpath`:
+
+```zsh
+mkdir -p ~/.zfunc
+testls completions zsh > ~/.zfunc/_testls
+# in ~/.zshrc, before compinit: fpath=(~/.zfunc $fpath)
 ```
 
 ## Quick Start
