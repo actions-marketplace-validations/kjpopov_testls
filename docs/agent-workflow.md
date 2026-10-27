@@ -106,8 +106,9 @@ timeout. Work on the next branch while a review runs.
 
 1. Release PR `chore/release-X.Y.Z`: version in `Cargo.toml` (workspace and
    internal `=X.Y.Z` deps), `cargo update -w --offline`, `fuzz/Cargo.lock`,
-   `CHANGELOG.md` section with date and compare links, README status and
-   install example, PLAN "Released as vX.Y.Z".
+   `CHANGELOG.md` section with date and compare links, version in the
+   examples of `README.md`, `docs/install.md` and `docs/github-action.md`,
+   PLAN "Released as vX.Y.Z".
 2. After merge: `git tag -a vX.Y.Z -m "testls vX.Y.Z" MERGE_SHA && git push origin vX.Y.Z`.
 3. `release.yml` builds five targets, publishes the GitHub release and pushes
    the container image to `ghcr.io/kjpopov/testls` (after the first push the
@@ -130,7 +131,11 @@ timeout. Work on the next branch while a review runs.
 6. Marketplace: the maintainer edits the GitHub release and ticks "Publish
    this Action to the GitHub Marketplace". GitHub checks `action.yml` at the
    tag, and its `name` must be unique across actions, users and
-   organizations (`testls` is taken).
+   organizations (`testls` is taken). The Marketplace page shows the root
+   `README.md`, so it leads with the action and links to
+   `docs/github-action.md`. Publish on the release the workflow created;
+   creating a new release in the web UI makes a new tag (v0.4.2 that way
+   had no build).
 
 ## Things learned the hard way
 
