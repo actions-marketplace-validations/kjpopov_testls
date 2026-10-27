@@ -579,7 +579,7 @@ const EXPLANATIONS: &[Explanation] = &[
         "policy.cert_key",
         "Certificate key type or size outside the policy",
         "The chosen policy limits leaf keys, e.g. Mozilla modern allows only ECDSA on P-256 or P-384, Mozilla intermediate and NIST SP 800-52r2 also RSA of at least 2048 bits, BSI TR-02102-2 RSA of at least 3000 bits or ECDSA on NIST or brainpool curves, CNSA 2.0 only ML-DSA-87. Reissue the certificate with an allowed key.",
-        "Mozilla Server Side TLS 6.0; NIST SP 800-52r2 §3.2.1; BSI TR-02102-2 §3.6.2; draft-becker-cnsa2-tls-profile §8",
+        "Mozilla Server Side TLS 6.0; NIST SP 800-52r2 §3.2.1; BSI TR-02102-2 table 14, §3.6.2; draft-becker-cnsa2-tls-profile §8",
     ),
     entry(
         "policy.cert_lifespan",
@@ -591,7 +591,7 @@ const EXPLANATIONS: &[Explanation] = &[
         "policy.cert_signature",
         "Certificate signature algorithm outside the policy",
         "The chosen policy lists the signature algorithms the leaf certificate may use, e.g. ECDSA with SHA-2 and, for Mozilla intermediate, sha256WithRSAEncryption; NIST SP 800-52r2 also allows RSA with SHA-384, SHA-512 and RSASSA-PSS; BSI TR-02102-2 only RSASSA-PSS with SHA-2 and ECDSA with SHA-2; CNSA 2.0 allows only ML-DSA-87.",
-        "Mozilla Server Side TLS 6.0; NIST SP 800-52r2 §3.2.1; BSI TR-02102-2 §3.6; draft-becker-cnsa2-tls-profile §8",
+        "Mozilla Server Side TLS 6.0; NIST SP 800-52r2 §3.2.1; BSI TR-02102-2 table 12; draft-becker-cnsa2-tls-profile §8",
     ),
     entry(
         "policy.cipher",
