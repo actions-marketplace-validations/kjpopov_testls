@@ -6,6 +6,11 @@ All notable changes to `testls` are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-27
+
+Workflow: several targets, connection control, CI report formats,
+suppressions and baselines, scan profiles, compliance policies and packaging.
+
 ### Added
 
 - Several targets per run: list them on the command line or in a file with
@@ -188,7 +193,8 @@ First pre-release.
 - Target parsing for host, host:port, IPv4/IPv6 and URLs, plus `--sni`.
 - Release binaries for Linux (static musl), macOS and Windows.
 
-[Unreleased]: https://github.com/kjpopov/testls/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/kjpopov/testls/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/kjpopov/testls/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/kjpopov/testls/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/kjpopov/testls/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/kjpopov/testls/compare/v0.1.0-alpha.1...v0.1.0

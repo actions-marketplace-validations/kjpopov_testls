@@ -10,10 +10,11 @@
 TLS/SSL scanner for the web era, written in Rust and inspired by
 [testssl.sh](https://testssl.sh). Single static binary. No bash. No subprocess.
 
-> **Status: v0.3.** The command-line scanner checks protocols, cipher suites,
+> **Status: v0.4.** The command-line scanner checks protocols, cipher suites,
 > key exchange, certificates, revocation, HTTP security headers, derived
-> vulnerabilities, ClientHello tolerance and post-quantum readiness; the
-> features marked v0.4 and later are planned. See
+> vulnerabilities, ClientHello tolerance and post-quantum readiness, with
+> CI-friendly reports, suppressions, baselines and compliance policies; the
+> features marked v0.5 and later are planned. See
 > [docs/PLAN.md](docs/PLAN.md) and [CHANGELOG.md](CHANGELOG.md).
 
 ## Why
@@ -32,8 +33,8 @@ Download a prebuilt binary for Linux (static musl, x86_64/aarch64), macOS
 `SHA256SUMS`, and put `testls` on your `PATH`:
 
 ```bash
-tar xzf testls-v0.3.0-x86_64-unknown-linux-musl.tar.gz
-./testls-v0.3.0-x86_64-unknown-linux-musl/testls example.com
+tar xzf testls-v0.4.0-x86_64-unknown-linux-musl.tar.gz
+./testls-v0.4.0-x86_64-unknown-linux-musl/testls example.com
 ```
 
 This repository is also a Homebrew tap (macOS, Linux) and a Scoop bucket
@@ -79,7 +80,7 @@ On macOS the binaries are not notarized yet; clear the quarantine flag with
 `xattr -d com.apple.quarantine testls` if Gatekeeper blocks them.
 
 Shell completions (bash, zsh, fish, PowerShell, elvish) and man pages come
-from the binary itself (releases after v0.3.0, or a build from source):
+from the binary itself (v0.4.0 and later):
 
 ```bash
 mkdir -p ~/.local/share/bash-completion/completions ~/.local/share/man/man1
