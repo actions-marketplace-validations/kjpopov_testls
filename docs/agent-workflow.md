@@ -127,7 +127,8 @@ timeout. Work on the next branch while a review runs.
    `python3 scripts/gen-packages.py target/SHA256SUMS` update `Formula/`,
    `bucket/` and `packaging/winget/`. After merge, tell the maintainer to
    submit `packaging/winget/X.Y.Z/` to `microsoft/winget-pkgs` (for example
-   with `wingetcreate submit`).
+   with `wingetcreate submit`), unless [HANDOFF.md](HANDOFF.md) says winget
+   is postponed.
 6. Marketplace: the maintainer edits the GitHub release and ticks "Publish
    this Action to the GitHub Marketplace". GitHub checks `action.yml` at the
    tag, and its `name` must be unique across actions, users and
