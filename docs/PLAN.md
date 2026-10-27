@@ -115,7 +115,7 @@ Two connection paths:
   (`action.yml`)
 - [x] Released as v0.4.0
 - [x] Released as v0.4.1 (Marketplace action name)
-- [x] Released as v0.4.3 (short README; v0.4.2 was a web UI mistake)
+- [x] Released as v0.4.3 (two-column `--help`, short README; v0.4.2 was a web UI mistake)
 
 ### v0.5 — STARTTLS, intrusive probes, grading
 - STARTTLS (SMTP, IMAP, POP3, FTP, XMPP, LDAP, PostgreSQL, MySQL)

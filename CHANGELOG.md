@@ -8,12 +8,14 @@ All notable changes to `testls` are listed here. The format follows
 
 ## [0.4.3] - 2026-10-27
 
-Documentation release so the Marketplace page shows the shorter README.
-v0.4.2 was created by mistake from the GitHub web UI; it has no build of
+Patch release with a readable `--help` and the shorter README on the
+Marketplace page. v0.4.2 was created by mistake from the GitHub web UI; it has no build of
 its own, so skip it.
 
 ### Changed
 
+- `testls --help` shows options as two aligned columns, flags on the left
+  and wrapped descriptions on the right, at most 100 columns wide.
 - The README is short; details moved to `docs/usage.md`, `docs/install.md`
   and a GitHub Action guide in `docs/github-action.md`.
 
