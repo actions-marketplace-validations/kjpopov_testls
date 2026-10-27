@@ -90,6 +90,8 @@ data from IANA registries and RFCs, and cite the source in a comment.
 ## Notes for AI agents
 
 - Follow everything above; AI-written changes get the same human review.
+- After this file, read [docs/HANDOFF.md](docs/HANDOFF.md) (state left by
+  the last session) and update it before a session ends.
 - Be extremly concise. Sacrifice grammar for the sake of being concise and
   concision.
 - Don't call GitHub APIs or change repository settings. Push branches and let
