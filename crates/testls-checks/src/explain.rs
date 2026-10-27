@@ -602,7 +602,7 @@ const EXPLANATIONS: &[Explanation] = &[
     entry(
         "policy.group",
         "Key exchange group outside the policy",
-        "The server accepts a named group the chosen policy does not list; Mozilla allows X25519MLKEM768, x25519, secp256r1 and secp384r1, NIST SP 800-52r2 the NIST curves and ffdhe groups, BSI TR-02102-2 the NIST and brainpool curves, ffdhe3072 and ffdhe4096, CNSA 2.0 only MLKEM1024.",
+        "The server accepts a named group or TLSv1.2 DHE prime the chosen policy does not list; Mozilla allows X25519MLKEM768, x25519, secp256r1 and secp384r1, NIST SP 800-52r2 the NIST curves, ffdhe groups and MODP groups of 2048 bits or more, BSI TR-02102-2 the NIST and brainpool curves, ffdhe3072 and ffdhe4096, CNSA 2.0 only MLKEM1024.",
         "Mozilla Server Side TLS 6.0; NIST SP 800-52r2 §3.4.2.2; BSI TR-02102-2 tables 6 and 10; draft-becker-cnsa2-tls-profile §7.2",
     ),
     entry(

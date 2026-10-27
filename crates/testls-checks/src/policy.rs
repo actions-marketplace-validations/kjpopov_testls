@@ -115,6 +115,8 @@ struct Rules {
     tls13_groups: &'static [u16],
     /// Named groups for (EC)DHE key exchange in TLSv1.2 and earlier.
     groups: &'static [u16],
+    /// Other TLSv1.2 DHE primes, by `testls_data::KnownPrime` name.
+    dh_primes: &'static [&'static str],
     /// Minimum RSA key size in bits, or `None` if RSA keys are not allowed.
     rsa_bits: Option<usize>,
     /// Named curves (OIDs) for ECDSA keys.
@@ -168,6 +170,7 @@ static MOZILLA_MODERN: Rules = Rules {
     suites: &[],
     tls13_groups: MOZILLA_GROUPS,
     groups: MOZILLA_GROUPS,
+    dh_primes: &[],
     rsa_bits: None,
     curves: MOZILLA_CURVES,
     keys: &[],
@@ -185,6 +188,7 @@ static MOZILLA_INTERMEDIATE: Rules = Rules {
     suites: &[0xc02b, 0xc02f, 0xc02c, 0xc030, 0xcca9, 0xcca8],
     tls13_groups: MOZILLA_GROUPS,
     groups: MOZILLA_GROUPS,
+    dh_primes: &[],
     rsa_bits: Some(2048),
     curves: MOZILLA_CURVES,
     keys: &[],
@@ -222,6 +226,16 @@ const NIST_GROUPS: &[u16] = &[
     0x0017, 0x0018, 0x0019, 0x0100, 0x0101, 0x0102, 0x0103, 0x0104,
 ];
 
+/// The RFC 3526 MODP groups that SP 800-56A rev. 3 appendix D also
+/// approves for DHE (`MODP-2048` to `MODP-8192`).
+const NIST_DH_PRIMES: &[&str] = &[
+    "MODP group 14",
+    "MODP group 15",
+    "MODP group 16",
+    "MODP group 17",
+    "MODP group 18",
+];
+
 /// Leaf signature algorithms of NIST SP 800-52r2 §3.2.1 and SP 800-57
 /// part 1 (at least 112-bit security, SHA-2): RSA PKCS #1 v1.5 and PSS
 /// (RFC 8017 appendix C) and ECDSA.
@@ -246,6 +260,7 @@ static NIST_800_52R2: Rules = Rules {
     suites: NIST_SUITES,
     tls13_groups: NIST_GROUPS,
     groups: NIST_GROUPS,
+    dh_primes: NIST_DH_PRIMES,
     rsa_bits: Some(2048),
     curves: MOZILLA_CURVES,
     keys: &[],
@@ -312,6 +327,7 @@ static BSI_TR_02102_2: Rules = Rules {
     suites: BSI_SUITES,
     tls13_groups: BSI_TLS13_GROUPS,
     groups: BSI_TLS12_GROUPS,
+    dh_primes: &[],
     rsa_bits: Some(3000),
     curves: BSI_CURVES,
     keys: &[],
@@ -334,6 +350,7 @@ static CNSA_2: Rules = Rules {
     suites: &[],
     tls13_groups: &[0x0202],
     groups: &[],
+    dh_primes: &[],
     rsa_bits: None,
     curves: &[],
     keys: ML_DSA_87,
@@ -475,7 +492,8 @@ fn cipher_deviations(policy: Policy, ciphers: &[CipherResult]) -> Vec<Finding> {
     findings
 }
 
-/// Accepted groups outside the policy, each reported once.
+/// Accepted groups and TLSv1.2 DHE primes outside the policy, each
+/// reported once.
 fn group_deviations(policy: Policy, results: &[KeyExchangeResult]) -> Vec<Finding> {
     let rules = policy.rules();
     let mut seen = Vec::new();
@@ -488,31 +506,57 @@ fn group_deviations(policy: Policy, results: &[KeyExchangeResult]) -> Vec<Findin
         } else {
             rules.groups
         };
-        let dh_group = result.dh_prime.as_deref().and_then(ffdhe_group);
-        for group in result.groups.iter().copied().chain(dh_group) {
-            if !allowed.contains(&group) && !seen.contains(&group) {
-                seen.push(group);
+        for &group in &result.groups {
+            let what = format!(
+                "key exchange group {} (0x{group:04x}) is accepted",
+                group_name(group)
+            );
+            if !allowed.contains(&group) && !seen.contains(&what) {
+                seen.push(what);
             }
         }
+        if let Some(prime) = &result.dh_prime
+            && let Some(what) = prime_deviation(prime, allowed, rules.dh_primes)
+            && !seen.contains(&what)
+        {
+            seen.push(what);
+        }
     }
-    seen.into_iter()
-        .map(|g| {
-            deviation(
-                "policy.group",
-                policy,
-                &format!(
-                    "key exchange group {} (0x{g:04x}) is accepted",
-                    group_name(g)
-                ),
-            )
-        })
+    seen.iter()
+        .map(|what| deviation("policy.group", policy, what))
         .collect()
 }
 
-/// The `supported_groups` code point (RFC 7919 §8) of a TLSv1.2 DHE prime
-/// that is one of the RFC 7919 appendix A groups.
-fn ffdhe_group(prime: &[u8]) -> Option<u16> {
-    match testls_data::known_dh_prime(prime)?.name {
+/// What to report about TLSv1.2 DHE prime `prime`, unless it is an allowed
+/// RFC 7919 group or one of the `dh_primes` the policy allows by name.
+/// Unknown primes are never allowed.
+fn prime_deviation(prime: &[u8], allowed: &[u16], dh_primes: &[&str]) -> Option<String> {
+    let known = testls_data::known_dh_prime(prime);
+    if let Some(group) = known.and_then(|k| ffdhe_group(k.name)) {
+        return (!allowed.contains(&group)).then(|| {
+            format!(
+                "key exchange group {} (0x{group:04x}) is accepted",
+                group_name(group)
+            )
+        });
+    }
+    match known {
+        Some(k) if dh_primes.contains(&k.name) => None,
+        Some(k) => Some(format!("DHE uses {}", k.name)),
+        None => {
+            let digits: Vec<_> = prime.iter().skip_while(|&&b| b == 0).collect();
+            let bits = digits
+                .first()
+                .map_or(0, |b| digits.len() * 8 - b.leading_zeros() as usize);
+            Some(format!("DHE uses a custom {bits}-bit prime"))
+        }
+    }
+}
+
+/// The `supported_groups` code point (RFC 7919 §8) of RFC 7919 appendix A
+/// group `name`.
+fn ffdhe_group(name: &str) -> Option<u16> {
+    match name {
         "ffdhe2048" => Some(0x0100),
         "ffdhe3072" => Some(0x0101),
         "ffdhe4096" => Some(0x0102),
@@ -1096,34 +1140,55 @@ mod tests {
         );
     }
 
-    /// BSI TR-02102-2 rejects TLSv1.2 DHE primes outside its groups, such
-    /// as `ffdhe2048` and `ffdhe6144`, even without `supported_groups`.
+    /// TLSv1.2 DHE primes count as groups even without `supported_groups`:
+    /// BSI TR-02102-2 rejects `ffdhe2048`, `ffdhe6144`, MODP group 14 and
+    /// custom primes; NIST SP 800-52r2 accepts MODP group 14 but not custom
+    /// primes.
     #[test]
-    fn bsi_dhe_primes() {
-        let tail = ", which bsi-tr-02102-2 does not allow";
-        let dhe_only = |name: &str| KeyExchangeResult {
-            dh_prime: testls_data::known_dh_primes()
-                .iter()
-                .find(|k| k.name == name)
-                .map(|k| unhex(k.hex)),
+    fn dhe_primes() {
+        let dhe = |prime: Option<Vec<u8>>| KeyExchangeResult {
+            dh_prime: prime,
             ..groups(ProtocolVersion::TLS12, &[])
         };
-        let key_exchange = ["ffdhe2048", "ffdhe3072", "ffdhe6144"].map(dhe_only);
-        let dhe = PolicyInput {
+        let known = |name: &str| {
+            testls_data::known_dh_primes()
+                .iter()
+                .find(|k| k.name == name)
+                .map(|k| unhex(k.hex))
+        };
+        let mut custom = vec![0, 0x7f];
+        custom.extend([0xff; 255]);
+        let key_exchange = [
+            dhe(known("ffdhe2048")),
+            dhe(known("ffdhe3072")),
+            dhe(known("ffdhe6144")),
+            dhe(known("MODP group 14")),
+            dhe(Some(custom)),
+        ];
+        let input = PolicyInput {
             key_exchange: Some(&key_exchange),
             ..bsi_input()
         };
-        let groups: Vec<_> = policy_findings(Policy::BsiTr021022, &dhe)
-            .into_iter()
-            .filter(|f| f.id == "policy.group")
-            .map(|f| f.message)
-            .collect();
+        let messages = |policy| -> Vec<String> {
+            policy_findings(policy, &input)
+                .into_iter()
+                .filter(|f| f.id == "policy.group")
+                .map(|f| f.message)
+                .collect()
+        };
+        let tail = ", which bsi-tr-02102-2 does not allow";
         assert_eq!(
-            groups,
+            messages(Policy::BsiTr021022),
             [
                 format!("key exchange group ffdhe2048 (0x0100) is accepted{tail}"),
                 format!("key exchange group ffdhe6144 (0x0103) is accepted{tail}"),
+                format!("DHE uses MODP group 14{tail}"),
+                format!("DHE uses a custom 2047-bit prime{tail}"),
             ]
+        );
+        assert_eq!(
+            messages(Policy::Nist80052r2),
+            ["DHE uses a custom 2047-bit prime, which nist-800-52r2 does not allow"]
         );
     }
 
