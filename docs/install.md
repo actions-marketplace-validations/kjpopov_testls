@@ -10,12 +10,13 @@ Download an archive from the
 against `SHA256SUMS` and put `testls` on your `PATH`:
 
 ```bash
-tar xzf testls-v0.4.3-x86_64-unknown-linux-musl.tar.gz
-./testls-v0.4.3-x86_64-unknown-linux-musl/testls example.com
+tar xzf testls-v0.4.1-x86_64-unknown-linux-musl.tar.gz
+./testls-v0.4.1-x86_64-unknown-linux-musl/testls example.com
 ```
 
-On macOS the binaries are not notarized yet; clear the quarantine flag with
-`xattr -d com.apple.quarantine testls` if Gatekeeper blocks them.
+On macOS the binaries are not notarized yet; if Gatekeeper blocks them,
+clear the quarantine flag on the extracted binary, for example
+`xattr -d com.apple.quarantine testls-v0.4.1-aarch64-apple-darwin/testls`.
 
 ## Homebrew (macOS, Linux)
 
@@ -77,7 +78,8 @@ testls completions zsh > ~/.zfunc/_testls
 # in ~/.zshrc, before compinit: fpath=(~/.zfunc $fpath)
 ```
 
-Homebrew installs both automatically.
+Homebrew installs the bash, zsh and fish completions and the man pages
+automatically.
 
 ## From source
 
