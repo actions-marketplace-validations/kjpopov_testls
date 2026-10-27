@@ -30,6 +30,7 @@ TARGETS = [
 ARCHIVE = re.compile(
     r"^testls-v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)-(" + "|".join(map(re.escape, TARGETS)) + r")\.(?:tar\.gz|zip)$"
 )
+EXTENSIONS = {t: ".zip" if "windows" in t else ".tar.gz" for t in TARGETS}
 WINGET_ID = "Kjpopov.Testls"
 WINGET_SCHEMA = "1.10.0"
 
@@ -41,11 +42,20 @@ def read_sums(path):
     for line in pathlib.Path(path).read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
-        digest, name = line.split(maxsplit=1)
+        parts = line.split(maxsplit=1)
+        if len(parts) != 2:
+            sys.exit(f"unexpected SHA256SUMS line: {line}")
+        digest, name = parts
         name = name.lstrip("*")
         match = ARCHIVE.match(name)
-        if not match or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        if (
+            not match
+            or not name.endswith(EXTENSIONS[match[2]])
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)
+        ):
             sys.exit(f"unexpected SHA256SUMS line: {line}")
+        if match[2] in archives:
+            sys.exit(f"SHA256SUMS lists {match[2]} more than once")
         if version not in (None, match[1]):
             sys.exit(f"SHA256SUMS mixes versions {version} and {match[1]}")
         version = match[1]
