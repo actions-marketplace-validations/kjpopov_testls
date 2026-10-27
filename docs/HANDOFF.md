@@ -1,8 +1,8 @@
 # Session handoff
 
-State left by the last agent session for the next one. Read this after
-[AGENTS.md](../AGENTS.md) and [agent-workflow.md](agent-workflow.md); update
-it when a session ends.
+State left by the last agent session for the next one. Read this right
+after [AGENTS.md](../AGENTS.md) (then [agent-workflow.md](agent-workflow.md)
+if `gh` is allowed); update it when a session ends.
 
 ## State (2026-10-27)
 
