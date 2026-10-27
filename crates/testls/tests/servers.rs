@@ -546,8 +546,30 @@ fn smtp_starttls() {
     assert_eq!(s.line("TLSv1.3 "), "TLSv1.3  offered");
     assert_eq!(s.line("Certificate"), "Certificate (TLSv1.3)");
     assert_eq!(s.line("#0"), "#0 CN=localhost");
-    assert!(!s.has("HTTP headers"), "{}", s.stdout);
+    assert_eq!(
+        s.line("HTTP headers"),
+        "HTTP headers: not checked over --starttls smtp"
+    );
     assert!(!s.has("cert.untrusted"), "{}", s.stdout);
+
+    let j = scan(
+        "127.0.0.1:14425",
+        &[
+            "--starttls",
+            "smtp",
+            "--sni",
+            "localhost",
+            "--ca-file",
+            CA_FILE,
+            "--format",
+            "json",
+        ],
+    );
+    let v: serde_json::Value = serde_json::from_str(&j.stdout).expect("valid JSON");
+    assert_eq!(
+        v["http"]["error"],
+        serde_json::json!("not checked over --starttls smtp")
+    );
 }
 
 /// Without STARTTLS, the plain SMTP port answers no `ClientHello`, so no

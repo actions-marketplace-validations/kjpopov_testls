@@ -953,7 +953,9 @@ async fn later_sections(
     Result<HandshakeDetails, String>,
 ) {
     let http = if let Some(protocol) = transport.starttls {
-        Err(format!("not checked over --starttls {protocol}"))
+        let status = format!("not checked over --starttls {protocol}");
+        show(format!("\nHTTP headers: {status}"));
+        Err(status)
     } else if deep {
         let (http, http_findings) = http_section(transport, sni).await;
         show(format!("\n{}", text::http(&http, paint)));
