@@ -59,6 +59,9 @@ All notable changes to `testls` are listed here. The format follows
 - `testls completions SHELL` prints a completion script for bash, zsh,
   fish, PowerShell or elvish, `testls man` prints the man page, and
   `testls man --dir DIR` writes it with one page per subcommand.
+- crates.io packaging: `cargo binstall testls` fetches the release archive
+  and `cargo install --locked testls` builds from source; releases publish
+  the crates with trusted publishing once the maintainer enables it.
 
 ## [0.3.0] - 2026-10-26
 

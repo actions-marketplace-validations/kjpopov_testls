@@ -111,6 +111,13 @@ timeout. Work on the next branch while a review runs.
 2. After merge: `git tag -a vX.Y.Z -m "testls vX.Y.Z" MERGE_SHA && git push origin vX.Y.Z`.
 3. `release.yml` builds five targets and publishes the GitHub release; check
    with `gh run list --workflow release.yml` and `gh release view vX.Y.Z`.
+4. Its `crates-io` job then publishes the workspace with crates.io trusted
+   publishing. Maintainer setup, once: publish the first version by hand
+   (`cargo publish --workspace`), add trusted publishing for
+   `kjpopov/testls`, workflow `release.yml`, environment `crates-io` to
+   every `testls*` crate on crates.io, create that GitHub environment, and
+   set the repository variable `CRATES_IO_TRUSTED_PUBLISHING=true`. Until
+   then the job is skipped. Agents never publish to crates.io.
 
 ## Things learned the hard way
 
