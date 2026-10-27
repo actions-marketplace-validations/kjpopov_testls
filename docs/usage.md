@@ -68,7 +68,7 @@ testls --profile full example.com
 | `sarif` | SARIF 2.1.0 log for GitHub code scanning |
 | `junit` | JUnit XML for CI test reports |
 | `markdown` | CI job summaries and pull request comments |
-| `csv` | One row per finding, for spreadsheets |
+| `csv` | One row per finding, for spreadsheets; a target that failed to scan gets a `scan.error` row |
 | `html` | Self-contained page to share or archive |
 
 ```bash
