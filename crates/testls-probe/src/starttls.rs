@@ -28,17 +28,21 @@ pub enum Starttls {
     Xmpp,
     /// LDAP `StartTLS` extended operation (RFC 4511 §4.14).
     Ldap,
+    /// PostgreSQL `SSLRequest` (PostgreSQL docs, "Frontend/Backend Protocol",
+    /// "SSL Session Encryption").
+    Postgres,
 }
 
 impl Starttls {
     /// All protocols, in the order they are listed on the command line.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Smtp,
         Self::Imap,
         Self::Pop3,
         Self::Ftp,
         Self::Xmpp,
         Self::Ldap,
+        Self::Postgres,
     ];
 
     /// Name used on the command line.
@@ -51,6 +55,7 @@ impl Starttls {
             Self::Ftp => "ftp",
             Self::Xmpp => "xmpp",
             Self::Ldap => "ldap",
+            Self::Postgres => "postgres",
         }
     }
 
@@ -64,6 +69,7 @@ impl Starttls {
             Self::Ftp => 21,
             Self::Xmpp => 5222,
             Self::Ldap => 389,
+            Self::Postgres => 5432,
         }
     }
 
@@ -91,6 +97,7 @@ impl Starttls {
             Self::Ftp => ftp(stream, reader).await,
             Self::Xmpp => xmpp(stream, reader, host).await,
             Self::Ldap => ldap(stream, reader).await,
+            Self::Postgres => postgres(stream, reader).await,
         }
     }
 }
@@ -234,6 +241,25 @@ async fn ftp(stream: &mut TcpStream, mut reader: Replies) -> Result<(), ProbeErr
     let ready = reader.ftp(stream).await?;
     expect(&ready, 234, "AUTH TLS")?;
     reader.finish()
+}
+
+/// PostgreSQL `SSLRequest` message: length 8 and request code 80877103
+/// (PostgreSQL docs, "Frontend/Backend Protocol", "Message Formats").
+const POSTGRES_SSL_REQUEST: &[u8] = &[0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x2f];
+
+/// PostgreSQL dialogue: send `SSLRequest`, expect the single byte `S`.
+/// `N` means the server has no TLS; an `ErrorResponse` (`E`) comes from
+/// servers that predate `SSLRequest`.
+async fn postgres(stream: &mut TcpStream, mut reader: Replies) -> Result<(), ProbeError> {
+    send(stream, POSTGRES_SSL_REQUEST).await?;
+    match reader.byte(stream).await? {
+        b'S' => reader.finish(),
+        b'N' => Err(error("PostgreSQL server does not offer TLS".into())),
+        b'E' => Err(error("server answered SSLRequest with an error".into())),
+        b => Err(error(format!(
+            "malformed server reply: unexpected byte {b:#04x}"
+        ))),
+    }
 }
 
 /// TLS namespace of the XMPP `starttls`, `proceed` and `failure` elements
@@ -682,6 +708,14 @@ impl Replies {
             }
             self.fill(stream).await?;
         }
+    }
+
+    /// Reads a single byte.
+    async fn byte(&mut self, stream: &mut TcpStream) -> Result<u8, ProbeError> {
+        if self.data.is_empty() {
+            self.fill(stream).await?;
+        }
+        Ok(self.data.remove(0))
     }
 
     /// Fails when the server sent bytes past its last reply.
@@ -1254,6 +1288,51 @@ mod tests {
         }
     }
 
+    /// Fake PostgreSQL server: reads the 8-byte `SSLRequest`, answers with
+    /// `reply` and returns what it read.
+    async fn postgres_server(
+        reply: &'static [u8],
+    ) -> (SocketAddr, tokio::task::JoinHandle<Vec<u8>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut got = [0; 8];
+            s.read_exact(&mut got).await.unwrap();
+            s.write_all(reply).await.unwrap();
+            got.to_vec()
+        });
+        (addr, task)
+    }
+
+    /// The client sends `SSLRequest` and accepts `S`.
+    #[tokio::test]
+    async fn postgres_upgrade() {
+        let (addr, got) = postgres_server(b"S").await;
+        upgrade_with(Starttls::Postgres, addr).await.unwrap();
+        assert_eq!(got.await.unwrap(), POSTGRES_SSL_REQUEST);
+    }
+
+    /// Refusals, errors, other bytes, closed connections and injected bytes
+    /// are connect errors.
+    #[tokio::test]
+    async fn postgres_errors() {
+        let cases: &[(&'static [u8], &str)] = &[
+            (b"N", "does not offer TLS"),
+            (b"E\0\0\0\x08SFATAL\0\0", "with an error"),
+            (b"H", "unexpected byte 0x48"),
+            (b"", "closed the connection"),
+            (b"S\x16\x03\x03", "data after its STARTTLS reply"),
+        ];
+        for &(reply, expected) in cases {
+            let (addr, _got) = postgres_server(reply).await;
+            let Err(ProbeError::Connect(e)) = upgrade_with(Starttls::Postgres, addr).await else {
+                panic!("PostgreSQL upgrade accepted {reply:?}");
+            };
+            assert!(e.to_string().contains(expected), "{e}");
+        }
+    }
+
     /// Names round-trip through `FromStr`, case-insensitively.
     #[test]
     fn names() {
@@ -1267,5 +1346,6 @@ mod tests {
         assert_eq!(Starttls::Ftp.default_port(), 21);
         assert_eq!(Starttls::Xmpp.default_port(), 5222);
         assert_eq!(Starttls::Ldap.default_port(), 389);
+        assert_eq!(Starttls::Postgres.default_port(), 5432);
     }
 }
