@@ -371,10 +371,19 @@ async fn ldap(stream: &mut TcpStream, mut reader: Replies) -> Result<(), ProbeEr
     send(stream, LDAP_STARTTLS).await?;
     let message = reader.ber(stream).await?;
     let (id, rest) = ber_field(&message, 0x02)?;
-    let (response, _controls) = ber_field(rest, 0x78)?;
+    let (response, controls) = ber_field(rest, 0x78)?;
     let (code, rest) = ber_field(response, 0x0a)?;
     let (_matched_dn, rest) = ber_field(rest, 0x04)?;
-    let (diagnostic, _) = ber_field(rest, 0x04)?;
+    let (diagnostic, rest) = ber_field(rest, 0x04)?;
+    // Only referral [3], responseName [10] and responseValue [11] may
+    // follow, and only controls [0] after the response (RFC 4511 §4.1.1,
+    // §4.1.9, §4.12).
+    let rest = optional_ber_field(rest, 0xa3)?;
+    let rest = optional_ber_field(rest, 0x8a)?;
+    let rest = optional_ber_field(rest, 0x8b)?;
+    if !rest.is_empty() || !optional_ber_field(controls, 0xa0)?.is_empty() {
+        return Err(malformed_ldap());
+    }
     if code.is_empty() || code.len() > 4 {
         return Err(malformed_ldap());
     }
@@ -413,7 +422,7 @@ type Element<'a> = (u8, &'a [u8], &'a [u8]);
 ///
 /// # Errors
 /// Fails on multi-byte tags, the indefinite length form, lengths over
-/// four bytes, and values longer than `MAX_REPLY`.
+/// four bytes, and elements longer than `MAX_REPLY` with tag and length.
 fn ber_split(data: &[u8]) -> Result<Option<Element<'_>>, ProbeError> {
     let (Some(&tag), Some(&first)) = (data.first(), data.get(1)) else {
         return Ok(None);
@@ -435,7 +444,7 @@ fn ber_split(data: &[u8]) -> Result<Option<Element<'_>>, ProbeError> {
         let len = bytes.iter().fold(0usize, |l, &b| l << 8 | usize::from(b));
         (len, 2 + n)
     };
-    if len > MAX_REPLY {
+    if len > MAX_REPLY - head {
         return Err(error(format!("server reply exceeds {MAX_REPLY} bytes")));
     }
     Ok(data
@@ -449,6 +458,16 @@ fn ber_field(data: &[u8], tag: u8) -> Result<(&[u8], &[u8]), ProbeError> {
     match ber_split(data)? {
         Some((t, value, rest)) if t == tag => Ok((value, rest)),
         _ => Err(malformed_ldap()),
+    }
+}
+
+/// Skips an optional BER element with tag `tag` at the start of `data`;
+/// returns the bytes after it.
+fn optional_ber_field(data: &[u8], tag: u8) -> Result<&[u8], ProbeError> {
+    if data.first() == Some(&tag) {
+        Ok(ber_field(data, tag)?.1)
+    } else {
+        Ok(data)
     }
 }
 
@@ -1135,12 +1154,14 @@ mod tests {
     /// success response, also with long-form lengths and trailing fields.
     #[tokio::test]
     async fn ldap_upgrade() {
-        let replies: [&'static [u8]; 2] = [
+        let replies: [&'static [u8]; 3] = [
             // slapd 2.6: success, empty matched DN and diagnostic.
             b"\x30\x0c\x02\x01\x01\x78\x07\x0a\x01\x00\x04\x00\x04\x00",
             // Long-form lengths, diagnostic text and the response OID.
             b"\x30\x81\x28\x02\x01\x01\x78\x82\x00\x21\x0a\x01\x00\x04\x00\x04\x02ok\
               \x8a\x161.3.6.1.4.1.1466.20037",
+            // Empty controls after the response.
+            b"\x30\x0e\x02\x01\x01\x78\x07\x0a\x01\x00\x04\x00\x04\x00\xa0\x00",
         ];
         for reply in replies {
             let script = Box::leak(Box::new([(LDAP_OID, reply)]));
@@ -1151,8 +1172,8 @@ mod tests {
         }
     }
 
-    /// Refusals, notices of disconnection, broken BER and injected bytes
-    /// are connect errors.
+    /// Refusals, notices of disconnection, broken BER, unexpected fields,
+    /// oversized replies and injected bytes are connect errors.
     #[tokio::test]
     async fn ldap_errors() {
         let cases: &[(&'static [u8], &str)] = &[
@@ -1173,7 +1194,16 @@ mod tests {
                 "malformed",
             ),
             (b"\x30\x80\x02\x01\x01\x00\x00", "malformed"),
+            (
+                b"\x30\x0f\x02\x01\x01\x78\x0a\x0a\x01\x00\x04\x00\x04\x00\x04\x01x",
+                "malformed",
+            ),
+            (
+                b"\x30\x0e\x02\x01\x01\x78\x07\x0a\x01\x00\x04\x00\x04\x00\x04\x00",
+                "malformed",
+            ),
             (b"\x30\x84\x7f\xff\xff\xff", "exceeds"),
+            (b"\x30\x83\x01\x00\x00", "exceeds"),
             (b"220 mail.example ESMTP\r\n", "malformed"),
             (b"\x30\x0c\x02\x01\x01\x78", "closed the connection"),
             (
