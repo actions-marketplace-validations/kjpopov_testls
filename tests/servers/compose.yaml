@@ -35,3 +35,11 @@ services:
       dockerfile: Dockerfile.dovecot
     image: localhost/testls-dovecot
     ports: ["127.0.0.1:14143:143", "127.0.0.1:14110:110"]
+
+  # vsftpd with AUTH TLS on FTP, TLS 1.2+.
+  ftp:
+    build:
+      context: .
+      dockerfile: Dockerfile.vsftpd
+    image: localhost/testls-vsftpd
+    ports: ["127.0.0.1:14021:21"]

@@ -587,11 +587,16 @@ fn smtp_without_starttls() {
     assert_eq!(s.code, 1);
 }
 
-/// IMAP and POP3 STARTTLS on Dovecot: TLS 1.2+ with a trusted certificate.
+/// IMAP and POP3 STARTTLS on Dovecot and FTP `AUTH TLS` on vsftpd: TLS
+/// 1.2+ with a trusted certificate.
 #[test]
 #[ignore = "needs tests/servers running"]
-fn imap_pop3_starttls() {
-    for (addr, protocol) in [("127.0.0.1:14143", "imap"), ("127.0.0.1:14110", "pop3")] {
+fn mail_ftp_starttls() {
+    for (addr, protocol) in [
+        ("127.0.0.1:14143", "imap"),
+        ("127.0.0.1:14110", "pop3"),
+        ("127.0.0.1:14021", "ftp"),
+    ] {
         let s = scan(
             addr,
             &[

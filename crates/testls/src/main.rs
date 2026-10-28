@@ -141,8 +141,8 @@ struct Cli {
 
     /// Upgrade each connection with this protocol's STARTTLS command before
     /// the TLS handshake. Targets without a port use the protocol's
-    /// standard port (25 for `smtp`, 143 for `imap`, 110 for `pop3`), and
-    /// HTTP headers are not checked.
+    /// standard port (25 for `smtp`, 143 for `imap`, 110 for `pop3`, 21 for
+    /// `ftp`), and HTTP headers are not checked.
     #[arg(long, value_name = "PROTOCOL",
           value_parser = clap::builder::PossibleValuesParser::new(Starttls::ALL.map(Starttls::as_str))
               .map(|s| s.parse::<Starttls>().expect("listed value")))]
