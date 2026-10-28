@@ -1,0 +1,14 @@
+FROM docker.io/library/debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends postgresql \
+ && rm -rf /var/lib/apt/lists/*
+COPY --chown=postgres:postgres --chmod=0400 server.pem server.key /etc/postgresql-tls/
+USER postgres
+# Throwaway cluster that rejects every login.
+RUN /usr/lib/postgresql/*/bin/initdb -D /tmp/pgdata --auth=reject \
+ && ln -s /usr/lib/postgresql/*/bin/postgres /tmp/postgres
+ENTRYPOINT ["/tmp/postgres", "-D", "/tmp/pgdata", "-c", "listen_addresses=*", \
+  "-c", "unix_socket_directories=/tmp", "-c", "ssl=on", \
+  "-c", "ssl_cert_file=/etc/postgresql-tls/server.pem", \
+  "-c", "ssl_key_file=/etc/postgresql-tls/server.key", \
+  "-c", "ssl_min_protocol_version=TLSv1.2"]

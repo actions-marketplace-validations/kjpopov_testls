@@ -62,3 +62,11 @@ services:
       dockerfile: Dockerfile.slapd
     image: localhost/testls-slapd
     ports: ["127.0.0.1:14389:389"]
+
+  # PostgreSQL with SSLRequest, TLS 1.2+.
+  postgres:
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
+    image: localhost/testls-postgres
+    ports: ["127.0.0.1:15432:5432"]
