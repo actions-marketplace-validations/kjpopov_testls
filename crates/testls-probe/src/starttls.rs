@@ -311,13 +311,18 @@ async fn mysql(stream: &mut TcpStream, mut reader: Replies) -> Result<(), ProbeE
         v => return Err(error(format!("unsupported MySQL protocol version {v}"))),
     }
     // Server version (NUL-terminated), connection id (4), auth data (8),
-    // filler (1), then the lower two capability bytes.
+    // filler (1), then the lower two capability bytes, character set (1),
+    // status (2), upper capability bytes (2), auth data length (1) and 10
+    // reserved bytes, all of which must be present.
     let version_end = payload[1..]
         .iter()
         .position(|&b| b == 0)
         .ok_or_else(malformed_mysql)?;
     let at = 1 + version_end + 1 + 4 + 8 + 1;
-    let caps = payload.get(at..at + 2).ok_or_else(malformed_mysql)?;
+    if payload.len() < at + 18 {
+        return Err(malformed_mysql());
+    }
+    let caps = &payload[at..at + 2];
     if u32::from(u16::from_le_bytes([caps[0], caps[1]])) & MYSQL_CLIENT_SSL == 0 {
         return Err(error("MySQL server does not offer TLS".into()));
     }
@@ -1476,6 +1481,14 @@ mod tests {
             ),
             (mysql_packet(0, b"\x09old\0"), "protocol version 9"),
             (mysql_packet(0, b"\x0a11.8"), "malformed MySQL handshake"),
+            (
+                mysql_packet(0, &mysql_greeting(0xfffe)[..41]),
+                "malformed MySQL handshake",
+            ),
+            (
+                mysql_packet(0, &mysql_greeting(0xfffe)[..56]),
+                "malformed MySQL handshake",
+            ),
             (
                 mysql_packet(0, b"\x0a11.8\0\x03\0\0\0"),
                 "malformed MySQL handshake",
