@@ -586,3 +586,29 @@ fn smtp_without_starttls() {
     assert!(s.has("[protocol.no_modern]"), "{}", s.stdout);
     assert_eq!(s.code, 1);
 }
+
+/// IMAP and POP3 STARTTLS on Dovecot: TLS 1.2+ with a trusted certificate.
+#[test]
+#[ignore = "needs tests/servers running"]
+fn imap_pop3_starttls() {
+    for (addr, protocol) in [("127.0.0.1:14143", "imap"), ("127.0.0.1:14110", "pop3")] {
+        let s = scan(
+            addr,
+            &[
+                "--starttls",
+                protocol,
+                "--sni",
+                "localhost",
+                "--ca-file",
+                CA_FILE,
+                "--profile",
+                "quick",
+            ],
+        );
+        assert_eq!(s.line("TLSv1.1 "), "TLSv1.1  not offered", "{protocol}");
+        assert_eq!(s.line("TLSv1.2 "), "TLSv1.2  offered", "{protocol}");
+        assert_eq!(s.line("TLSv1.3 "), "TLSv1.3  offered", "{protocol}");
+        assert_eq!(s.line("#0"), "#0 CN=localhost", "{protocol}");
+        assert!(!s.has("cert.untrusted"), "{}", s.stdout);
+    }
+}

@@ -32,6 +32,8 @@ testls --all-addresses example.com
 # A mail server with SMTP STARTTLS (port 25 by default)
 testls --starttls smtp mail.example.com
 testls --starttls smtp mail.example.com:587
+# IMAP (port 143) and POP3 (port 110) work the same way
+testls --starttls imap mail.example.com
 ```
 
 ## Connection control
