@@ -54,3 +54,11 @@ services:
       dockerfile: Dockerfile.prosody
     image: localhost/testls-prosody
     ports: ["127.0.0.1:15222:5222"]
+
+  # OpenLDAP with the StartTLS extended operation, TLS 1.2+.
+  ldap:
+    build:
+      context: .
+      dockerfile: Dockerfile.slapd
+    image: localhost/testls-slapd
+    ports: ["127.0.0.1:14389:389"]

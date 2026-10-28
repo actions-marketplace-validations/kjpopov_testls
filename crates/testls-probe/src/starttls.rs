@@ -26,11 +26,20 @@ pub enum Starttls {
     Ftp,
     /// XMPP client-to-server `starttls` (RFC 6120 §5).
     Xmpp,
+    /// LDAP `StartTLS` extended operation (RFC 4511 §4.14).
+    Ldap,
 }
 
 impl Starttls {
     /// All protocols, in the order they are listed on the command line.
-    pub const ALL: [Self; 5] = [Self::Smtp, Self::Imap, Self::Pop3, Self::Ftp, Self::Xmpp];
+    pub const ALL: [Self; 6] = [
+        Self::Smtp,
+        Self::Imap,
+        Self::Pop3,
+        Self::Ftp,
+        Self::Xmpp,
+        Self::Ldap,
+    ];
 
     /// Name used on the command line.
     #[must_use]
@@ -41,6 +50,7 @@ impl Starttls {
             Self::Pop3 => "pop3",
             Self::Ftp => "ftp",
             Self::Xmpp => "xmpp",
+            Self::Ldap => "ldap",
         }
     }
 
@@ -53,6 +63,7 @@ impl Starttls {
             Self::Pop3 => 110,
             Self::Ftp => 21,
             Self::Xmpp => 5222,
+            Self::Ldap => 389,
         }
     }
 
@@ -79,6 +90,7 @@ impl Starttls {
             Self::Pop3 => pop3(stream, reader).await,
             Self::Ftp => ftp(stream, reader).await,
             Self::Xmpp => xmpp(stream, reader, host).await,
+            Self::Ldap => ldap(stream, reader).await,
         }
     }
 }
@@ -348,6 +360,98 @@ fn element_end(data: &str, name: &str) -> Option<usize> {
         .map(|j| tag_end + j + close.len())
 }
 
+/// LDAP `StartTLS` request (RFC 4511 §4.14.1): an `LDAPMessage` with
+/// message ID 1 and an `ExtendedRequest` naming `1.3.6.1.4.1.1466.20037`.
+const LDAP_STARTTLS: &[u8] = b"\x30\x1d\x02\x01\x01\x77\x18\x80\x161.3.6.1.4.1.1466.20037";
+
+/// LDAP dialogue (RFC 4511 §4.14): no greeting; send the `StartTLS`
+/// extended request and expect an `ExtendedResponse` with result
+/// `success` (0) for message ID 1.
+async fn ldap(stream: &mut TcpStream, mut reader: Replies) -> Result<(), ProbeError> {
+    send(stream, LDAP_STARTTLS).await?;
+    let message = reader.ber(stream).await?;
+    let (id, rest) = ber_field(&message, 0x02)?;
+    let (response, _controls) = ber_field(rest, 0x78)?;
+    let (code, rest) = ber_field(response, 0x0a)?;
+    let (_matched_dn, rest) = ber_field(rest, 0x04)?;
+    let (diagnostic, _) = ber_field(rest, 0x04)?;
+    if code.is_empty() || code.len() > 4 {
+        return Err(malformed_ldap());
+    }
+    let code = code.iter().fold(0u32, |n, &b| n << 8 | u32::from(b));
+    let diagnostic = String::from_utf8_lossy(diagnostic);
+    // Message ID 0 is an unsolicited notification, such as the notice of
+    // disconnection (RFC 4511 §4.4.1).
+    if id == [0] {
+        return Err(error(format!(
+            "server sent unsolicited notification with result {code} {diagnostic:?}"
+        )));
+    }
+    if id != [1] {
+        return Err(malformed_ldap());
+    }
+    if code != 0 {
+        return Err(error(format!(
+            "server answered StartTLS with result {code} {diagnostic:?}"
+        )));
+    }
+    reader.finish()
+}
+
+/// Error for an LDAP reply that is not valid BER or not the expected
+/// `ExtendedResponse`.
+fn malformed_ldap() -> ProbeError {
+    error("malformed LDAP reply".into())
+}
+
+/// One BER element: tag, value, and the bytes after it.
+type Element<'a> = (u8, &'a [u8], &'a [u8]);
+
+/// Splits one BER element off `data` (RFC 4511 §5.1: single-byte tags,
+/// definite lengths): returns its tag, value and the bytes after it, or
+/// `None` while `data` is incomplete.
+///
+/// # Errors
+/// Fails on multi-byte tags, the indefinite length form, lengths over
+/// four bytes, and values longer than `MAX_REPLY`.
+fn ber_split(data: &[u8]) -> Result<Option<Element<'_>>, ProbeError> {
+    let (Some(&tag), Some(&first)) = (data.first(), data.get(1)) else {
+        return Ok(None);
+    };
+    if tag & 0x1f == 0x1f {
+        return Err(malformed_ldap());
+    }
+    let (len, head) = if first < 0x80 {
+        (usize::from(first), 2)
+    } else {
+        // 0x80 alone is the indefinite form, which LDAP forbids.
+        let n = usize::from(first & 0x7f);
+        if n == 0 || n > 4 {
+            return Err(malformed_ldap());
+        }
+        let Some(bytes) = data.get(2..2 + n) else {
+            return Ok(None);
+        };
+        let len = bytes.iter().fold(0usize, |l, &b| l << 8 | usize::from(b));
+        (len, 2 + n)
+    };
+    if len > MAX_REPLY {
+        return Err(error(format!("server reply exceeds {MAX_REPLY} bytes")));
+    }
+    Ok(data
+        .get(head..head + len)
+        .map(|value| (tag, value, &data[head + len..])))
+}
+
+/// Splits a complete BER element with tag `tag` off `data`; returns its
+/// value and the bytes after it.
+fn ber_field(data: &[u8], tag: u8) -> Result<(&[u8], &[u8]), ProbeError> {
+    match ber_split(data)? {
+        Some((t, value, rest)) if t == tag => Ok((value, rest)),
+        _ => Err(malformed_ldap()),
+    }
+}
+
 /// Reports whether the first space-separated word of `s` is the status
 /// `token` (ASCII case-insensitive), so `OKAY` does not pass as `OK`.
 fn status_is(s: &str, token: &str) -> bool {
@@ -533,6 +637,22 @@ impl Replies {
         }
     }
 
+    /// Reads one BER `SEQUENCE` (an LDAP message) and returns its value.
+    async fn ber(&mut self, stream: &mut TcpStream) -> Result<Vec<u8>, ProbeError> {
+        loop {
+            if self.data.first().is_some_and(|&tag| tag != 0x30) {
+                return Err(malformed_ldap());
+            }
+            if let Some((_, value, rest)) = ber_split(&self.data)? {
+                let value = value.to_vec();
+                let used = self.data.len() - rest.len();
+                self.data.drain(..used);
+                return Ok(value);
+            }
+            self.fill(stream).await?;
+        }
+    }
+
     /// Fails when the server sent bytes past its last reply.
     fn finish(self) -> Result<(), ProbeError> {
         if self.data.is_empty() {
@@ -590,9 +710,9 @@ mod tests {
             .await
     }
 
-    /// Fake XMPP server: for each entry, reads until the client data ends
-    /// with the expected suffix, then answers. Returns its address and
-    /// everything the client sent.
+    /// Fake XMPP or LDAP server: for each entry, reads until the client
+    /// data ends with the expected suffix, then answers. Returns its address
+    /// and everything the client sent (lossily decoded as UTF-8).
     async fn xmpp_server(script: XmppScript) -> (SocketAddr, tokio::task::JoinHandle<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -608,7 +728,7 @@ mod tests {
                 }
                 s.write_all(reply).await.unwrap();
             }
-            String::from_utf8(got).unwrap()
+            String::from_utf8_lossy(&got).into_owned()
         });
         (addr, task)
     }
@@ -1008,6 +1128,69 @@ mod tests {
         assert_errors(Starttls::Ftp, &cases).await;
     }
 
+    /// End of the client's LDAP `StartTLS` request.
+    const LDAP_OID: &str = "1.3.6.1.4.1.1466.20037";
+
+    /// The LDAP dialogue sends the `StartTLS` request and accepts a
+    /// success response, also with long-form lengths and trailing fields.
+    #[tokio::test]
+    async fn ldap_upgrade() {
+        let replies: [&'static [u8]; 2] = [
+            // slapd 2.6: success, empty matched DN and diagnostic.
+            b"\x30\x0c\x02\x01\x01\x78\x07\x0a\x01\x00\x04\x00\x04\x00",
+            // Long-form lengths, diagnostic text and the response OID.
+            b"\x30\x81\x28\x02\x01\x01\x78\x82\x00\x21\x0a\x01\x00\x04\x00\x04\x02ok\
+              \x8a\x161.3.6.1.4.1.1466.20037",
+        ];
+        for reply in replies {
+            let script = Box::leak(Box::new([(LDAP_OID, reply)]));
+            let (addr, got) = xmpp_server(script).await;
+            upgrade_with(Starttls::Ldap, addr).await.unwrap();
+            let got = got.await.unwrap();
+            assert_eq!(got, String::from_utf8_lossy(LDAP_STARTTLS));
+        }
+    }
+
+    /// Refusals, notices of disconnection, broken BER and injected bytes
+    /// are connect errors.
+    #[tokio::test]
+    async fn ldap_errors() {
+        let cases: &[(&'static [u8], &str)] = &[
+            (
+                b"\x30\x19\x02\x01\x01\x78\x14\x0a\x01\x34\x04\x00\x04\x0dnot available",
+                "result 52 \"not available\"",
+            ),
+            (
+                b"\x30\x0c\x02\x01\x00\x78\x07\x0a\x01\x02\x04\x00\x04\x00",
+                "unsolicited notification with result 2",
+            ),
+            (
+                b"\x30\x0c\x02\x01\x02\x78\x07\x0a\x01\x00\x04\x00\x04\x00",
+                "malformed",
+            ),
+            (
+                b"\x30\x0a\x02\x01\x01\x65\x05\x0a\x01\x00\x04\x00",
+                "malformed",
+            ),
+            (b"\x30\x80\x02\x01\x01\x00\x00", "malformed"),
+            (b"\x30\x84\x7f\xff\xff\xff", "exceeds"),
+            (b"220 mail.example ESMTP\r\n", "malformed"),
+            (b"\x30\x0c\x02\x01\x01\x78", "closed the connection"),
+            (
+                b"\x30\x0c\x02\x01\x01\x78\x07\x0a\x01\x00\x04\x00\x04\x00\x16\x03\x01",
+                "data after its STARTTLS reply",
+            ),
+        ];
+        for &(reply, expected) in cases {
+            let script = Box::leak(Box::new([(LDAP_OID, reply)]));
+            let (addr, _got) = xmpp_server(script).await;
+            let Err(ProbeError::Connect(e)) = upgrade_with(Starttls::Ldap, addr).await else {
+                panic!("LDAP upgrade accepted {reply:?}");
+            };
+            assert!(e.to_string().contains(expected), "{e}");
+        }
+    }
+
     /// Names round-trip through `FromStr`, case-insensitively.
     #[test]
     fn names() {
@@ -1020,5 +1203,6 @@ mod tests {
         assert_eq!(Starttls::Pop3.default_port(), 110);
         assert_eq!(Starttls::Ftp.default_port(), 21);
         assert_eq!(Starttls::Xmpp.default_port(), 5222);
+        assert_eq!(Starttls::Ldap.default_port(), 389);
     }
 }
