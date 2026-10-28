@@ -22,11 +22,13 @@ pub enum Starttls {
     Imap,
     /// POP3 `STLS` (RFC 2595 §4).
     Pop3,
+    /// FTP `AUTH TLS` (RFC 4217 §4).
+    Ftp,
 }
 
 impl Starttls {
     /// All protocols, in the order they are listed on the command line.
-    pub const ALL: [Self; 3] = [Self::Smtp, Self::Imap, Self::Pop3];
+    pub const ALL: [Self; 4] = [Self::Smtp, Self::Imap, Self::Pop3, Self::Ftp];
 
     /// Name used on the command line.
     #[must_use]
@@ -35,6 +37,7 @@ impl Starttls {
             Self::Smtp => "smtp",
             Self::Imap => "imap",
             Self::Pop3 => "pop3",
+            Self::Ftp => "ftp",
         }
     }
 
@@ -45,6 +48,7 @@ impl Starttls {
             Self::Smtp => 25,
             Self::Imap => 143,
             Self::Pop3 => 110,
+            Self::Ftp => 21,
         }
     }
 
@@ -67,6 +71,7 @@ impl Starttls {
             Self::Smtp => smtp(stream, reader).await,
             Self::Imap => imap(stream, reader).await,
             Self::Pop3 => pop3(stream, reader).await,
+            Self::Ftp => ftp(stream, reader).await,
         }
     }
 }
@@ -176,10 +181,7 @@ async fn pop3(stream: &mut TcpStream, mut reader: Replies) -> Result<(), ProbeEr
         if line == "." {
             break;
         }
-        total += line.len();
-        if total > MAX_REPLY {
-            return Err(error(format!("server reply exceeds {MAX_REPLY} bytes")));
-        }
+        count(&mut total, &line)?;
         offered |= line
             .split_ascii_whitespace()
             .next()
@@ -202,6 +204,17 @@ fn expect_pop3(line: &str, step: &str) -> Result<(), ProbeError> {
     } else {
         Err(error(format!("server answered {step} with {line:?}")))
     }
+}
+
+/// FTP dialogue (RFC 959 §4.2, RFC 4217 §4): 220 greeting, `AUTH TLS`,
+/// expect 234. A server without TLS refuses `AUTH`, so `FEAT` is not needed.
+async fn ftp(stream: &mut TcpStream, mut reader: Replies) -> Result<(), ProbeError> {
+    let greeting = reader.ftp(stream).await?;
+    expect(&greeting, 220, "greeting")?;
+    send(stream, b"AUTH TLS\r\n").await?;
+    let ready = reader.ftp(stream).await?;
+    expect(&ready, 234, "AUTH TLS")?;
+    reader.finish()
 }
 
 /// Reports whether the first space-separated word of `s` is the status
@@ -227,6 +240,16 @@ fn expect(reply: &Reply, code: u16, step: &str) -> Result<(), ProbeError> {
         "server answered {step} with {} {text}",
         reply.code
     )))
+}
+
+/// Adds `line` and its CRLF to `total`, failing once a reply passes
+/// `MAX_REPLY`; counting the CRLF bounds replies made of empty lines.
+fn count(total: &mut usize, line: &str) -> Result<(), ProbeError> {
+    *total += line.len() + 2;
+    if *total > MAX_REPLY {
+        return Err(error(format!("server reply exceeds {MAX_REPLY} bytes")));
+    }
+    Ok(())
 }
 
 /// One multi-line reply: status code and the text of each line.
@@ -274,10 +297,7 @@ impl Replies {
         let mut total = 0;
         loop {
             let line = self.line(stream).await?;
-            total += line.len();
-            if total > MAX_REPLY {
-                return Err(error(format!("server reply exceeds {MAX_REPLY} bytes")));
-            }
+            count(&mut total, &line)?;
             let bytes = line.as_bytes();
             let malformed = || error(format!("malformed server reply {line:?}"));
             if bytes.len() < 3 || !bytes[..3].iter().all(u8::is_ascii_digit) {
@@ -299,6 +319,37 @@ impl Replies {
         }
     }
 
+    /// Reads an FTP reply (RFC 959 §4.2): one `NNN text` line, or
+    /// `NNN-text`, any lines, and a closing `NNN text` with the same code.
+    async fn ftp(&mut self, stream: &mut TcpStream) -> Result<Reply, ProbeError> {
+        let first = self.line(stream).await?;
+        let bytes = first.as_bytes();
+        let malformed = || error(format!("malformed server reply {first:?}"));
+        if bytes.len() < 3 || !bytes[..3].iter().all(u8::is_ascii_digit) {
+            return Err(malformed());
+        }
+        let code: u16 = first[..3].parse().map_err(|_| malformed())?;
+        let mut lines = vec![first.get(4..).unwrap_or("").to_owned()];
+        match bytes.get(3) {
+            Some(b' ') => return Ok(Reply { code, lines }),
+            Some(b'-') => {}
+            _ => return Err(malformed()),
+        }
+        let prefix = first[..3].to_owned();
+        let mut total = first.len() + 2;
+        loop {
+            let line = self.line(stream).await?;
+            count(&mut total, &line)?;
+            let last = line
+                .strip_prefix(&prefix)
+                .is_some_and(|rest| rest.starts_with(' '));
+            lines.push(line);
+            if last {
+                return Ok(Reply { code, lines });
+            }
+        }
+    }
+
     /// Reads IMAP response lines up to and including the one tagged
     /// `tag` (RFC 9051 §2.2.2); untagged lines come first.
     async fn imap(&mut self, stream: &mut TcpStream, tag: &str) -> Result<Vec<String>, ProbeError> {
@@ -306,10 +357,7 @@ impl Replies {
         let mut total = 0;
         loop {
             let line = self.line(stream).await?;
-            total += line.len();
-            if total > MAX_REPLY {
-                return Err(error(format!("server reply exceeds {MAX_REPLY} bytes")));
-            }
+            count(&mut total, &line)?;
             let tagged = line.split_once(' ').is_some_and(|(t, _)| t == tag);
             if !tagged && !line.starts_with("* ") {
                 return Err(error(format!("malformed server reply {line:?}")));
@@ -374,6 +422,27 @@ mod tests {
     async fn upgrade_with(protocol: Starttls, addr: SocketAddr) -> Result<(), ProbeError> {
         let mut stream = TcpStream::connect(addr).await.unwrap();
         protocol.upgrade(&mut stream, Vec::new()).await
+    }
+
+    /// Replies made of empty lines still hit the size limit, since line
+    /// endings count towards it.
+    #[tokio::test]
+    async fn empty_line_flood() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let flood = "\r\n".repeat(MAX_REPLY);
+        for (protocol, head) in [
+            (Starttls::Ftp, "220-hi\r\n"),
+            (Starttls::Pop3, "+OK hi\r\n+OK\r\n"),
+        ] {
+            let mut stream = TcpStream::connect(listener.local_addr().unwrap())
+                .await
+                .unwrap();
+            let early = format!("{head}{flood}").into_bytes();
+            let Err(ProbeError::Connect(e)) = protocol.upgrade(&mut stream, early).await else {
+                panic!("{protocol} accepted an endless reply");
+            };
+            assert!(e.to_string().contains("exceeds"), "{e}");
+        }
     }
 
     /// Runs `protocol` against each script and checks the error mentions
@@ -572,6 +641,51 @@ mod tests {
         assert_errors(Starttls::Pop3, &cases).await;
     }
 
+    /// The FTP dialogue accepts a multi-line greeting and sends `AUTH TLS`.
+    #[tokio::test]
+    async fn ftp_upgrade() {
+        let (addr, got) = server(&[
+            (
+                None,
+                b"220-Welcome\r\n  220 is not the end\r\n220 ready\r\n",
+            ),
+            (Some("AUTH TLS"), b"234 Proceed with negotiation.\r\n"),
+        ])
+        .await;
+        upgrade_with(Starttls::Ftp, addr).await.unwrap();
+        assert_eq!(got.await.unwrap(), ["AUTH TLS"]);
+    }
+
+    /// FTP refusals, garbage and injected bytes are connect errors.
+    #[tokio::test]
+    async fn ftp_errors() {
+        let cases: [(Script, &str); 7] = [
+            (&[(None, b"421 busy\r\n")], "greeting with 421 busy"),
+            (&[(None, b"SSH-2.0-x\r\n")], "malformed server reply"),
+            (&[(None, b"220\r\n")], "malformed server reply"),
+            (&[(None, b"220-hi\r\n221 bye\r\n")], "closed the connection"),
+            (&[(None, b"220-hi\r\n220\r\n")], "closed the connection"),
+            (
+                &[
+                    (None, b"220 hi\r\n"),
+                    (
+                        Some("AUTH TLS"),
+                        b"530 Please login with USER and PASS.\r\n",
+                    ),
+                ],
+                "AUTH TLS with 530",
+            ),
+            (
+                &[
+                    (None, b"220 hi\r\n"),
+                    (Some("AUTH TLS"), b"234 go\r\n200 injected\r\n"),
+                ],
+                "data after its STARTTLS reply",
+            ),
+        ];
+        assert_errors(Starttls::Ftp, &cases).await;
+    }
+
     /// Names round-trip through `FromStr`, case-insensitively.
     #[test]
     fn names() {
@@ -582,5 +696,6 @@ mod tests {
         assert_eq!(Starttls::Smtp.default_port(), 25);
         assert_eq!(Starttls::Imap.default_port(), 143);
         assert_eq!(Starttls::Pop3.default_port(), 110);
+        assert_eq!(Starttls::Ftp.default_port(), 21);
     }
 }

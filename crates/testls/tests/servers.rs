@@ -3,6 +3,7 @@
 //! Ignored by default; start the servers first (see
 //! `tests/servers/compose.yaml`), then run with `--ignored`.
 
+use std::io::ErrorKind;
 use std::net::TcpStream;
 use std::process::Command;
 use std::thread::sleep;
@@ -36,9 +37,25 @@ const CA_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/servers/
 /// Blocks until `addr` accepts TCP connections; fails after 30 seconds.
 fn wait_for(addr: &str) {
     let deadline = Instant::now() + Duration::from_secs(30);
-    while TcpStream::connect(addr).is_err() {
+    while !ready(addr) {
         assert!(Instant::now() < deadline, "server {addr} did not come up");
         sleep(Duration::from_millis(200));
+    }
+}
+
+/// Reports whether `addr` accepts a connection and keeps it open. Docker's
+/// port proxy accepts connections before the container listens, then closes
+/// them, so an immediate EOF means the server is not up yet.
+fn ready(addr: &str) -> bool {
+    let Ok(stream) = TcpStream::connect(addr) else {
+        return false;
+    };
+    stream
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .expect("set read timeout");
+    match stream.peek(&mut [0; 1]) {
+        Ok(n) => n > 0,
+        Err(e) => matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut),
     }
 }
 
@@ -587,11 +604,16 @@ fn smtp_without_starttls() {
     assert_eq!(s.code, 1);
 }
 
-/// IMAP and POP3 STARTTLS on Dovecot: TLS 1.2+ with a trusted certificate.
+/// IMAP and POP3 STARTTLS on Dovecot and FTP `AUTH TLS` on vsftpd: TLS
+/// 1.2+ with a trusted certificate.
 #[test]
 #[ignore = "needs tests/servers running"]
-fn imap_pop3_starttls() {
-    for (addr, protocol) in [("127.0.0.1:14143", "imap"), ("127.0.0.1:14110", "pop3")] {
+fn mail_ftp_starttls() {
+    for (addr, protocol) in [
+        ("127.0.0.1:14143", "imap"),
+        ("127.0.0.1:14110", "pop3"),
+        ("127.0.0.1:14021", "ftp"),
+    ] {
         let s = scan(
             addr,
             &[
