@@ -8,12 +8,12 @@ All notable changes to `testls` are listed here. The format follows
 
 ### Added
 
-- `--starttls smtp|imap|pop3|ftp|xmpp|ldap|postgres` upgrades each connection
-  with the protocol's STARTTLS command (`AUTH TLS` for FTP, the `StartTLS`
-  extended operation for LDAP, `SSLRequest` for PostgreSQL) before the TLS
-  handshake, so mail, FTP, XMPP, directory and database servers can be
-  scanned. Targets without a port use the protocol's standard port (25,
-  143, 110, 21, 5222, 389, 5432); HTTP
+- `--starttls smtp|imap|pop3|ftp|xmpp|ldap|postgres|mysql` upgrades each
+  connection with the protocol's STARTTLS command (`AUTH TLS` for FTP, the
+  `StartTLS` extended operation for LDAP, `SSLRequest` for PostgreSQL and
+  MySQL/MariaDB) before the TLS handshake, so mail, FTP, XMPP, directory and
+  database servers can be scanned. Targets without a port use the
+  protocol's standard port (25, 143, 110, 21, 5222, 389, 5432, 3306); HTTP
   headers are not checked. XMPP addresses the stream to the SNI name.
 
 ## [0.4.3] - 2026-10-27
