@@ -181,10 +181,7 @@ async fn pop3(stream: &mut TcpStream, mut reader: Replies) -> Result<(), ProbeEr
         if line == "." {
             break;
         }
-        total += line.len();
-        if total > MAX_REPLY {
-            return Err(error(format!("server reply exceeds {MAX_REPLY} bytes")));
-        }
+        count(&mut total, &line)?;
         offered |= line
             .split_ascii_whitespace()
             .next()
@@ -245,6 +242,16 @@ fn expect(reply: &Reply, code: u16, step: &str) -> Result<(), ProbeError> {
     )))
 }
 
+/// Adds `line` and its CRLF to `total`, failing once a reply passes
+/// `MAX_REPLY`; counting the CRLF bounds replies made of empty lines.
+fn count(total: &mut usize, line: &str) -> Result<(), ProbeError> {
+    *total += line.len() + 2;
+    if *total > MAX_REPLY {
+        return Err(error(format!("server reply exceeds {MAX_REPLY} bytes")));
+    }
+    Ok(())
+}
+
 /// One multi-line reply: status code and the text of each line.
 #[derive(Debug, PartialEq, Eq)]
 struct Reply {
@@ -290,10 +297,7 @@ impl Replies {
         let mut total = 0;
         loop {
             let line = self.line(stream).await?;
-            total += line.len();
-            if total > MAX_REPLY {
-                return Err(error(format!("server reply exceeds {MAX_REPLY} bytes")));
-            }
+            count(&mut total, &line)?;
             let bytes = line.as_bytes();
             let malformed = || error(format!("malformed server reply {line:?}"));
             if bytes.len() < 3 || !bytes[..3].iter().all(u8::is_ascii_digit) {
@@ -332,13 +336,10 @@ impl Replies {
             _ => return Err(malformed()),
         }
         let prefix = first[..3].to_owned();
-        let mut total = first.len();
+        let mut total = first.len() + 2;
         loop {
             let line = self.line(stream).await?;
-            total += line.len();
-            if total > MAX_REPLY {
-                return Err(error(format!("server reply exceeds {MAX_REPLY} bytes")));
-            }
+            count(&mut total, &line)?;
             let last = line
                 .strip_prefix(&prefix)
                 .is_some_and(|rest| rest.starts_with(' '));
@@ -356,10 +357,7 @@ impl Replies {
         let mut total = 0;
         loop {
             let line = self.line(stream).await?;
-            total += line.len();
-            if total > MAX_REPLY {
-                return Err(error(format!("server reply exceeds {MAX_REPLY} bytes")));
-            }
+            count(&mut total, &line)?;
             let tagged = line.split_once(' ').is_some_and(|(t, _)| t == tag);
             if !tagged && !line.starts_with("* ") {
                 return Err(error(format!("malformed server reply {line:?}")));
@@ -424,6 +422,27 @@ mod tests {
     async fn upgrade_with(protocol: Starttls, addr: SocketAddr) -> Result<(), ProbeError> {
         let mut stream = TcpStream::connect(addr).await.unwrap();
         protocol.upgrade(&mut stream, Vec::new()).await
+    }
+
+    /// Replies made of empty lines still hit the size limit, since line
+    /// endings count towards it.
+    #[tokio::test]
+    async fn empty_line_flood() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let flood = "\r\n".repeat(MAX_REPLY);
+        for (protocol, head) in [
+            (Starttls::Ftp, "220-hi\r\n"),
+            (Starttls::Pop3, "+OK hi\r\n+OK\r\n"),
+        ] {
+            let mut stream = TcpStream::connect(listener.local_addr().unwrap())
+                .await
+                .unwrap();
+            let early = format!("{head}{flood}").into_bytes();
+            let Err(ProbeError::Connect(e)) = protocol.upgrade(&mut stream, early).await else {
+                panic!("{protocol} accepted an endless reply");
+            };
+            assert!(e.to_string().contains("exceeds"), "{e}");
+        }
     }
 
     /// Runs `protocol` against each script and checks the error mentions
