@@ -1,7 +1,9 @@
 FROM docker.io/library/debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends postgresql \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ && install -d -o postgres -g postgres -m 0700 /etc/postgresql-tls
+# Docker's COPY --chmod would give a missing target directory mode 0400 too.
 COPY --chown=postgres:postgres --chmod=0400 server.pem server.key /etc/postgresql-tls/
 USER postgres
 # Throwaway cluster that rejects every login.
