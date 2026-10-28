@@ -327,9 +327,9 @@ impl Replies {
         let code: u16 = first[..3].parse().map_err(|_| malformed())?;
         let mut lines = vec![first.get(4..).unwrap_or("").to_owned()];
         match bytes.get(3) {
-            None | Some(b' ') => return Ok(Reply { code, lines }),
+            Some(b' ') => return Ok(Reply { code, lines }),
             Some(b'-') => {}
-            Some(_) => return Err(malformed()),
+            _ => return Err(malformed()),
         }
         let prefix = first[..3].to_owned();
         let mut total = first.len();
@@ -341,7 +341,7 @@ impl Replies {
             }
             let last = line
                 .strip_prefix(&prefix)
-                .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '));
+                .is_some_and(|rest| rest.starts_with(' '));
             lines.push(line);
             if last {
                 return Ok(Reply { code, lines });
@@ -640,10 +640,12 @@ mod tests {
     /// FTP refusals, garbage and injected bytes are connect errors.
     #[tokio::test]
     async fn ftp_errors() {
-        let cases: [(Script, &str); 5] = [
+        let cases: [(Script, &str); 7] = [
             (&[(None, b"421 busy\r\n")], "greeting with 421 busy"),
             (&[(None, b"SSH-2.0-x\r\n")], "malformed server reply"),
+            (&[(None, b"220\r\n")], "malformed server reply"),
             (&[(None, b"220-hi\r\n221 bye\r\n")], "closed the connection"),
+            (&[(None, b"220-hi\r\n220\r\n")], "closed the connection"),
             (
                 &[
                     (None, b"220 hi\r\n"),
