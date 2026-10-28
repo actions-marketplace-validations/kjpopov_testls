@@ -158,7 +158,14 @@ fn expect_imap(lines: &[String], step: &str) -> Result<(), ProbeError> {
 /// greeting, `CAPA` must list `STLS`, then `STLS` must be answered `+OK`.
 async fn pop3(stream: &mut TcpStream, mut reader: Replies) -> Result<(), ProbeError> {
     let greeting = reader.line(stream).await?;
-    expect_pop3(&greeting, "greeting")?;
+    // RFC 2449 §3: `greeting = "+OK" [resp-code] *gchar`, so text such as an
+    // APOP timestamp may follow `+OK` without a space.
+    if !greeting
+        .get(..3)
+        .is_some_and(|s| s.eq_ignore_ascii_case("+OK"))
+    {
+        return Err(error(format!("server answered greeting with {greeting:?}")));
+    }
     send(stream, b"CAPA\r\n").await?;
     let status = reader.line(stream).await?;
     expect_pop3(&status, "CAPA")?;
@@ -187,7 +194,8 @@ async fn pop3(stream: &mut TcpStream, mut reader: Replies) -> Result<(), ProbeEr
     reader.finish()
 }
 
-/// Fails unless a POP3 status line is positive (`+OK`).
+/// Fails unless a POP3 command status line is exactly `+OK` or starts
+/// with `+OK ` (RFC 2449 §3 `single-line`).
 fn expect_pop3(line: &str, step: &str) -> Result<(), ProbeError> {
     if status_is(line, "+OK") {
         Ok(())
@@ -510,7 +518,7 @@ mod tests {
     #[tokio::test]
     async fn pop3_upgrade() {
         let (addr, got) = server(&[
-            (None, b"+OK ready\r\n"),
+            (None, b"+OK<1896.697170952@dbc.mtview.ca.us>\r\n"),
             (Some("CAPA"), b"+OK\r\nTOP\r\nstls\r\nSASL PLAIN\r\n.\r\n"),
             (Some("STLS"), b"+OK Begin TLS negotiation now\r\n"),
         ])
@@ -522,8 +530,9 @@ mod tests {
     /// POP3 refusals, missing STLS and injected bytes are connect errors.
     #[tokio::test]
     async fn pop3_errors() {
-        let cases: [(Script, &str); 6] = [
+        let cases: [(Script, &str); 7] = [
             (&[(None, b"-ERR busy\r\n")], "greeting with \"-ERR busy\""),
+            (&[(None, b"+O\r\n")], "greeting with \"+O\""),
             (
                 &[(None, b"+OK hi\r\n"), (Some("CAPA"), b"-ERR unknown\r\n")],
                 "CAPA with \"-ERR unknown\"",
