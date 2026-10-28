@@ -393,10 +393,14 @@ async fn ldap(stream: &mut TcpStream, mut reader: Replies) -> Result<(), ProbeEr
     if id != [1] {
         return Err(malformed_ldap());
     }
-    // Only referral [3] and responseName [10] with the StartTLS OID may
-    // follow, no responseValue, and only controls [0] after the response
-    // (RFC 4511 §4.1.1, §4.1.9, §4.14.2).
-    let mut rest = optional_ber_field(rest, 0xa3)?;
+    // Only referral [3] (with result referral, 10) and responseName [10]
+    // with the StartTLS OID may follow, no responseValue, and only controls
+    // [0] after the response (RFC 4511 §4.1.1, §4.1.9, §4.1.10, §4.14.2).
+    let mut rest = if code == 10 {
+        optional_ber_field(rest, 0xa3)?
+    } else {
+        rest
+    };
     if rest.first() == Some(&0x8a) {
         let (name, after) = ber_field(rest, 0x8a)?;
         if name != LDAP_STARTTLS_OID {
@@ -1222,6 +1226,14 @@ mod tests {
             (
                 b"\x30\x10\x02\x01\x01\x78\x0b\x0a\x01\x00\x04\x00\x04\x00\x8b\x02hi",
                 "malformed",
+            ),
+            (
+                b"\x30\x0e\x02\x01\x01\x78\x09\x0a\x01\x00\x04\x00\x04\x00\xa3\x00",
+                "malformed",
+            ),
+            (
+                b"\x30\x0e\x02\x01\x01\x78\x09\x0a\x01\x0a\x04\x00\x04\x00\xa3\x00",
+                "result 10",
             ),
             (b"\x30\x84\x7f\xff\xff\xff", "exceeds"),
             (b"\x30\x83\x01\x00\x00", "exceeds"),
