@@ -31,11 +31,14 @@ pub enum Starttls {
     /// PostgreSQL `SSLRequest` (PostgreSQL docs, "Frontend/Backend Protocol",
     /// "SSL Session Encryption").
     Postgres,
+    /// MySQL and MariaDB `SSLRequest` (MySQL docs, "Client/Server Protocol",
+    /// `Protocol::HandshakeV10` and `Protocol::SSLRequest`).
+    Mysql,
 }
 
 impl Starttls {
     /// All protocols, in the order they are listed on the command line.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Smtp,
         Self::Imap,
         Self::Pop3,
@@ -43,6 +46,7 @@ impl Starttls {
         Self::Xmpp,
         Self::Ldap,
         Self::Postgres,
+        Self::Mysql,
     ];
 
     /// Name used on the command line.
@@ -56,6 +60,7 @@ impl Starttls {
             Self::Xmpp => "xmpp",
             Self::Ldap => "ldap",
             Self::Postgres => "postgres",
+            Self::Mysql => "mysql",
         }
     }
 
@@ -70,6 +75,7 @@ impl Starttls {
             Self::Xmpp => 5222,
             Self::Ldap => 389,
             Self::Postgres => 5432,
+            Self::Mysql => 3306,
         }
     }
 
@@ -98,6 +104,7 @@ impl Starttls {
             Self::Xmpp => xmpp(stream, reader, host).await,
             Self::Ldap => ldap(stream, reader).await,
             Self::Postgres => postgres(stream, reader).await,
+            Self::Mysql => mysql(stream, reader).await,
         }
     }
 }
@@ -260,6 +267,67 @@ async fn postgres(stream: &mut TcpStream, mut reader: Replies) -> Result<(), Pro
             "malformed server reply: unexpected byte {b:#04x}"
         ))),
     }
+}
+
+/// MySQL `CLIENT_SSL` capability flag (MySQL docs, "Capabilities Flags").
+const MYSQL_CLIENT_SSL: u32 = 0x0800;
+
+/// MySQL `SSLRequest` packet (MySQL docs, `Protocol::SSLRequest`): header
+/// with payload length 32 and sequence id 1, then capabilities
+/// `CLIENT_LONG_PASSWORD | CLIENT_PROTOCOL_41 | CLIENT_SSL |
+/// CLIENT_SECURE_CONNECTION`, maximum packet size 16 MiB, character set
+/// 45 (`utf8mb4_general_ci`) and 23 reserved zero bytes.
+const MYSQL_SSL_REQUEST: &[u8] = &[
+    32, 0, 0, 1, // header
+    0x01, 0x8a, 0, 0, // capabilities
+    0, 0, 0, 1,  // max packet size
+    45, // character set
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+];
+
+/// MySQL dialogue: read the server's initial handshake packet, which must
+/// be protocol version 10 with `CLIENT_SSL`, then send `SSLRequest`. The
+/// server answers with its TLS handshake; there is no plain-text reply.
+async fn mysql(stream: &mut TcpStream, mut reader: Replies) -> Result<(), ProbeError> {
+    let header = reader.take(stream, 4).await?;
+    let len = usize::from(header[0]) | usize::from(header[1]) << 8 | usize::from(header[2]) << 16;
+    if header[3] != 0 || len == 0 {
+        return Err(malformed_mysql());
+    }
+    if len > MAX_REPLY {
+        return Err(error(format!("server reply exceeds {MAX_REPLY} bytes")));
+    }
+    let payload = reader.take(stream, len).await?;
+    match payload[0] {
+        // ERR packet: 0xff, error code, then (in a greeting) the message.
+        0xff => {
+            let code = payload
+                .get(1..3)
+                .map_or(0, |c| u16::from_le_bytes([c[0], c[1]]));
+            let text = String::from_utf8_lossy(payload.get(3..).unwrap_or_default());
+            return Err(error(format!("MySQL server sent error {code} {text:?}")));
+        }
+        10 => {}
+        v => return Err(error(format!("unsupported MySQL protocol version {v}"))),
+    }
+    // Server version (NUL-terminated), connection id (4), auth data (8),
+    // filler (1), then the lower two capability bytes.
+    let version_end = payload[1..]
+        .iter()
+        .position(|&b| b == 0)
+        .ok_or_else(malformed_mysql)?;
+    let at = 1 + version_end + 1 + 4 + 8 + 1;
+    let caps = payload.get(at..at + 2).ok_or_else(malformed_mysql)?;
+    if u32::from(u16::from_le_bytes([caps[0], caps[1]])) & MYSQL_CLIENT_SSL == 0 {
+        return Err(error("MySQL server does not offer TLS".into()));
+    }
+    reader.finish()?;
+    send(stream, MYSQL_SSL_REQUEST).await
+}
+
+/// Builds the error for a malformed MySQL packet.
+fn malformed_mysql() -> ProbeError {
+    error("malformed MySQL handshake".into())
 }
 
 /// TLS namespace of the XMPP `starttls`, `proceed` and `failure` elements
@@ -716,6 +784,14 @@ impl Replies {
             self.fill(stream).await?;
         }
         Ok(self.data.remove(0))
+    }
+
+    /// Reads exactly `n` bytes.
+    async fn take(&mut self, stream: &mut TcpStream, n: usize) -> Result<Vec<u8>, ProbeError> {
+        while self.data.len() < n {
+            self.fill(stream).await?;
+        }
+        Ok(self.data.drain(..n).collect())
     }
 
     /// Fails when the server sent bytes past its last reply.
@@ -1333,6 +1409,99 @@ mod tests {
         }
     }
 
+    /// Builds a MySQL packet with sequence id `seq` around `payload`.
+    fn mysql_packet(seq: u8, payload: &[u8]) -> Vec<u8> {
+        let len = u32::try_from(payload.len()).unwrap().to_le_bytes();
+        let mut packet = vec![len[0], len[1], len[2], seq];
+        packet.extend_from_slice(payload);
+        packet
+    }
+
+    /// Builds a protocol 10 handshake payload with the lower capability
+    /// bytes `caps`, shaped like MariaDB 11.8's greeting.
+    fn mysql_greeting(caps: u16) -> Vec<u8> {
+        let mut p = vec![10];
+        p.extend_from_slice(b"11.8.3-MariaDB-0+deb13u1\0");
+        p.extend_from_slice(&[3, 0, 0, 0]); // connection id
+        p.extend_from_slice(b"abcdefgh\0"); // auth data and filler
+        p.extend_from_slice(&caps.to_le_bytes());
+        p.extend_from_slice(&[45, 2, 0, 0xff, 0x81, 21]); // charset, status, caps, auth len
+        p.extend_from_slice(&[0; 10]);
+        p.extend_from_slice(b"ijklmnopqrst\0mysql_native_password\0");
+        p
+    }
+
+    /// Fake MySQL server: sends `greeting` and closes its sending side, then
+    /// returns up to 36 bytes the client sends.
+    async fn mysql_server(greeting: Vec<u8>) -> (SocketAddr, tokio::task::JoinHandle<Vec<u8>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            s.write_all(&greeting).await.unwrap();
+            s.shutdown().await.unwrap();
+            let mut got = Vec::new();
+            let _ = s.take(36).read_to_end(&mut got).await;
+            got
+        });
+        (addr, task)
+    }
+
+    /// The client reads a split greeting, then sends `SSLRequest`.
+    #[tokio::test]
+    async fn mysql_upgrade() {
+        assert_eq!(MYSQL_SSL_REQUEST.len(), 36);
+        let (addr, got) = mysql_server(mysql_packet(0, &mysql_greeting(0xfffe))).await;
+        upgrade_with(Starttls::Mysql, addr).await.unwrap();
+        assert_eq!(got.await.unwrap(), MYSQL_SSL_REQUEST);
+    }
+
+    /// Missing TLS, errors, other versions, short or oversized packets,
+    /// closed connections and extra bytes are connect errors, and the
+    /// client sends nothing.
+    #[tokio::test]
+    async fn mysql_errors() {
+        let mut extra = mysql_packet(0, &mysql_greeting(0xfffe));
+        extra.push(0);
+        let mut error_packet = vec![0xff, 0x6a, 0x04];
+        error_packet.extend_from_slice(b"Host '10.0.0.1' is not allowed");
+        let cases: Vec<(Vec<u8>, &str)> = vec![
+            (
+                mysql_packet(0, &mysql_greeting(0xfffe & !0x0800)),
+                "does not offer TLS",
+            ),
+            (
+                mysql_packet(0, &error_packet),
+                "error 1130 \"Host '10.0.0.1'",
+            ),
+            (mysql_packet(0, b"\x09old\0"), "protocol version 9"),
+            (mysql_packet(0, b"\x0a11.8"), "malformed MySQL handshake"),
+            (
+                mysql_packet(0, b"\x0a11.8\0\x03\0\0\0"),
+                "malformed MySQL handshake",
+            ),
+            (
+                mysql_packet(1, &mysql_greeting(0xfffe)),
+                "malformed MySQL handshake",
+            ),
+            (vec![0, 0, 0, 0], "malformed MySQL handshake"),
+            (vec![0xff, 0xff, 0xff, 0], "exceeds"),
+            (
+                mysql_packet(0, &mysql_greeting(0xfffe))[..20].to_vec(),
+                "closed the connection",
+            ),
+            (extra, "data after its STARTTLS reply"),
+        ];
+        for (greeting, expected) in cases {
+            let (addr, got) = mysql_server(greeting).await;
+            let Err(ProbeError::Connect(e)) = upgrade_with(Starttls::Mysql, addr).await else {
+                panic!("MySQL upgrade accepted greeting for {expected}");
+            };
+            assert!(e.to_string().contains(expected), "{e}");
+            assert!(got.await.unwrap().is_empty(), "{expected}");
+        }
+    }
+
     /// Names round-trip through `FromStr`, case-insensitively.
     #[test]
     fn names() {
@@ -1347,5 +1516,6 @@ mod tests {
         assert_eq!(Starttls::Xmpp.default_port(), 5222);
         assert_eq!(Starttls::Ldap.default_port(), 389);
         assert_eq!(Starttls::Postgres.default_port(), 5432);
+        assert_eq!(Starttls::Mysql.default_port(), 3306);
     }
 }

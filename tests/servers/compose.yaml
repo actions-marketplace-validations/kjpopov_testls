@@ -70,3 +70,11 @@ services:
       dockerfile: Dockerfile.postgres
     image: localhost/testls-postgres
     ports: ["127.0.0.1:15432:5432"]
+
+  # MariaDB with SSLRequest, TLS 1.2+.
+  mysql:
+    build:
+      context: .
+      dockerfile: Dockerfile.mariadb
+    image: localhost/testls-mariadb
+    ports: ["127.0.0.1:13306:3306"]
