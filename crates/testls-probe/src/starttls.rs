@@ -378,6 +378,21 @@ async fn ldap(stream: &mut TcpStream, mut reader: Replies) -> Result<(), ProbeEr
     let (code, rest) = ber_field(response, 0x0a)?;
     let (_matched_dn, rest) = ber_field(rest, 0x04)?;
     let (diagnostic, rest) = ber_field(rest, 0x04)?;
+    if code.is_empty() || code.len() > 4 {
+        return Err(malformed_ldap());
+    }
+    let code = code.iter().fold(0u32, |n, &b| n << 8 | u32::from(b));
+    let diagnostic = String::from_utf8_lossy(diagnostic);
+    // Message ID 0 is an unsolicited notification, such as the notice of
+    // disconnection (RFC 4511 §4.4.1), with its own response name.
+    if id == [0] {
+        return Err(error(format!(
+            "server sent unsolicited notification with result {code} {diagnostic:?}"
+        )));
+    }
+    if id != [1] {
+        return Err(malformed_ldap());
+    }
     // Only referral [3] and responseName [10] with the StartTLS OID may
     // follow, no responseValue, and only controls [0] after the response
     // (RFC 4511 §4.1.1, §4.1.9, §4.14.2).
@@ -390,21 +405,6 @@ async fn ldap(stream: &mut TcpStream, mut reader: Replies) -> Result<(), ProbeEr
         rest = after;
     }
     if !rest.is_empty() || !optional_ber_field(controls, 0xa0)?.is_empty() {
-        return Err(malformed_ldap());
-    }
-    if code.is_empty() || code.len() > 4 {
-        return Err(malformed_ldap());
-    }
-    let code = code.iter().fold(0u32, |n, &b| n << 8 | u32::from(b));
-    let diagnostic = String::from_utf8_lossy(diagnostic);
-    // Message ID 0 is an unsolicited notification, such as the notice of
-    // disconnection (RFC 4511 §4.4.1).
-    if id == [0] {
-        return Err(error(format!(
-            "server sent unsolicited notification with result {code} {diagnostic:?}"
-        )));
-    }
-    if id != [1] {
         return Err(malformed_ldap());
     }
     if code != 0 {
@@ -1192,6 +1192,11 @@ mod tests {
             (
                 b"\x30\x0c\x02\x01\x00\x78\x07\x0a\x01\x02\x04\x00\x04\x00",
                 "unsolicited notification with result 2",
+            ),
+            (
+                b"\x30\x2a\x02\x01\x00\x78\x25\x0a\x01\x34\x04\x00\x04\x06closed\
+                  \x8a\x161.3.6.1.4.1.1466.20036",
+                "unsolicited notification with result 52 \"closed\"",
             ),
             (
                 b"\x30\x0c\x02\x01\x02\x78\x07\x0a\x01\x00\x04\x00\x04\x00",
