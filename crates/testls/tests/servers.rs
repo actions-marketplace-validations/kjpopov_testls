@@ -606,7 +606,8 @@ fn smtp_without_starttls() {
 
 /// IMAP and POP3 STARTTLS on Dovecot, FTP `AUTH TLS` on vsftpd, XMPP
 /// STARTTLS on Prosody (stream addressed to the SNI name) and LDAP
-/// `StartTLS` on `OpenLDAP` and `SSLRequest` on PostgreSQL: TLS 1.2+ with a trusted certificate.
+/// `StartTLS` on `OpenLDAP` and `SSLRequest` on PostgreSQL: TLS 1.2+ with a
+/// trusted certificate matching the SNI name.
 #[test]
 #[ignore = "needs tests/servers running"]
 fn other_starttls() {
@@ -635,6 +636,12 @@ fn other_starttls() {
         assert_eq!(s.line("TLSv1.2 "), "TLSv1.2  offered", "{protocol}");
         assert_eq!(s.line("TLSv1.3 "), "TLSv1.3  offered", "{protocol}");
         assert_eq!(s.line("#0"), "#0 CN=localhost", "{protocol}");
+        assert_eq!(
+            s.line("names"),
+            "names   localhost, 127.0.0.1",
+            "{protocol}"
+        );
+        assert!(!s.has("cert.hostname_mismatch"), "{}", s.stdout);
         assert!(!s.has("cert.untrusted"), "{}", s.stdout);
     }
 }
