@@ -118,8 +118,8 @@ Two connection paths:
 - [x] Released as v0.4.3 (two-column `--help`, short README; v0.4.2 was a web UI mistake)
 
 ### v0.5 — STARTTLS, intrusive probes, grading
-- STARTTLS: SMTP, IMAP, POP3, FTP done (`--starttls smtp|imap|pop3|ftp`);
-  XMPP, LDAP, PostgreSQL, MySQL to follow
+- STARTTLS: SMTP, IMAP, POP3, FTP, XMPP done
+  (`--starttls smtp|imap|pop3|ftp|xmpp`); LDAP, PostgreSQL, MySQL to follow
 - `--mx`: scan a domain's mail exchangers (needs SMTP STARTTLS)
 - Intrusive checks behind `--intrusive`: Heartbleed, CCS injection,
   Ticketbleed, ROBOT
@@ -239,3 +239,4 @@ Not scheduled; pulled into a milestone when someone picks it up.
 | 69 | `--starttls PROTOCOL` sets the transport's STARTTLS protocol for every target; targets without a port or scheme (CIDR ranges included) use the protocol's standard port (25 for SMTP). The HTTP headers section is skipped (reported as not checked, so policies with an HSTS rule add `policy.incomplete`). Through `--proxy`, bytes after the `CONNECT` reply feed the STARTTLS dialogue (the server greets first); immediate-TLS tunnels still reject them. The Postfix test server allows TLS 1.2+ with optional STARTTLS | Ports differ per protocol, so defaulting to 443 would almost always be wrong; mail and other STARTTLS services do not speak HTTP after the handshake, so asking for headers would only produce an `http.error` finding |
 | 70 | IMAP and POP3 STARTTLS ask for capabilities first (`CAPABILITY`, `CAPA`) and stop with a connect error unless `STARTTLS`/`STLS` is listed, like SMTP's `EHLO` check. The Dovecot test server offers both on TLS 1.2+ and has a password database that rejects every login | Sending the upgrade command blindly would turn "not offered" into a confusing protocol error; Dovecot refuses to start without a password database |
 | 71 | FTP uses `AUTH TLS` (RFC 4217 §4) right after the 220 greeting and needs a 234 reply; it skips `FEAT` because a server without TLS refuses `AUTH` anyway. Multi-line FTP replies end at the first line starting with the opening code and a space (RFC 959 §4.2), so indented lines inside may hold anything. The vsftpd test server has local logins on (it will not start otherwise) but no accounts with passwords | One round trip fewer than SMTP/IMAP/POP3; `AUTH` refusal is as clear a signal as a missing capability, and vsftpd requires a login type |
+| 72 | XMPP (RFC 6120) opens a client stream addressed to the SNI name (target host or `--sni`, the IP address otherwise) and needs `starttls` in the stream features and a `proceed` answer; a `stream:error` reports its condition. `Transport` gains `host: Option<String>` and is no longer `Copy`. Replies are scanned for the expected element without an XML parser, capped at 64 KiB and required to be UTF-8. The Prosody test server requires STARTTLS, TLS 1.2+, no accounts | XMPP servers route by the `to` domain and refuse unknown hosts, so the IP address alone fails on most servers. A string field is the only way to carry the domain; no caller relied on `Copy`. A few fixed elements do not justify an XML parser dependency |

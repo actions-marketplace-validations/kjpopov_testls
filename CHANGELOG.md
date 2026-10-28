@@ -8,11 +8,11 @@ All notable changes to `testls` are listed here. The format follows
 
 ### Added
 
-- `--starttls smtp|imap|pop3|ftp` upgrades each connection with the
+- `--starttls smtp|imap|pop3|ftp|xmpp` upgrades each connection with the
   protocol's STARTTLS command (`AUTH TLS` for FTP) before the TLS
-  handshake, so mail and FTP servers can be scanned. Targets without a port
-  use the protocol's standard port (25, 143, 110, 21); HTTP headers are not
-  checked.
+  handshake, so mail, FTP and XMPP servers can be scanned. Targets without a
+  port use the protocol's standard port (25, 143, 110, 21, 5222); HTTP
+  headers are not checked. XMPP addresses the stream to the SNI name.
 
 ## [0.4.3] - 2026-10-27
 
