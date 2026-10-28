@@ -32,10 +32,13 @@ testls --all-addresses example.com
 # A mail server with SMTP STARTTLS (port 25 by default)
 testls --starttls smtp mail.example.com
 testls --starttls smtp mail.example.com:587
-# IMAP (port 143), POP3 (port 110) and FTP AUTH TLS (port 21) work the
-# same way
+# IMAP (port 143), POP3 (port 110), FTP AUTH TLS (port 21) and XMPP
+# (port 5222) work the same way
 testls --starttls imap mail.example.com
 testls --starttls ftp ftp.example.com
+# XMPP addresses the stream to the SNI name; set --sni when the XMPP
+# domain differs from the host name
+testls --starttls xmpp --sni example.com xmpp.example.com
 ```
 
 ## Connection control

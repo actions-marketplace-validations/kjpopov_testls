@@ -24,11 +24,13 @@ pub enum Starttls {
     Pop3,
     /// FTP `AUTH TLS` (RFC 4217 §4).
     Ftp,
+    /// XMPP client-to-server `starttls` (RFC 6120 §5).
+    Xmpp,
 }
 
 impl Starttls {
     /// All protocols, in the order they are listed on the command line.
-    pub const ALL: [Self; 4] = [Self::Smtp, Self::Imap, Self::Pop3, Self::Ftp];
+    pub const ALL: [Self; 5] = [Self::Smtp, Self::Imap, Self::Pop3, Self::Ftp, Self::Xmpp];
 
     /// Name used on the command line.
     #[must_use]
@@ -38,6 +40,7 @@ impl Starttls {
             Self::Imap => "imap",
             Self::Pop3 => "pop3",
             Self::Ftp => "ftp",
+            Self::Xmpp => "xmpp",
         }
     }
 
@@ -49,12 +52,14 @@ impl Starttls {
             Self::Imap => 143,
             Self::Pop3 => 110,
             Self::Ftp => 21,
+            Self::Xmpp => 5222,
         }
     }
 
     /// Runs the protocol's dialogue on `stream` until the server is ready
     /// for a `ClientHello`. `early` holds server bytes already read from
-    /// `stream` (by a proxy tunnel) and is consumed first.
+    /// `stream` (by a proxy tunnel) and is consumed first. `host` names the
+    /// server where the protocol needs it (the XMPP `to` address).
     ///
     /// # Errors
     /// Returns [`ProbeError::Connect`] when the server refuses, does not
@@ -65,6 +70,7 @@ impl Starttls {
         self,
         stream: &mut TcpStream,
         early: Vec<u8>,
+        host: &str,
     ) -> Result<(), ProbeError> {
         let reader = Replies { data: early };
         match self {
@@ -72,6 +78,7 @@ impl Starttls {
             Self::Imap => imap(stream, reader).await,
             Self::Pop3 => pop3(stream, reader).await,
             Self::Ftp => ftp(stream, reader).await,
+            Self::Xmpp => xmpp(stream, reader, host).await,
         }
     }
 }
@@ -217,6 +224,130 @@ async fn ftp(stream: &mut TcpStream, mut reader: Replies) -> Result<(), ProbeErr
     reader.finish()
 }
 
+/// TLS namespace of the XMPP `starttls`, `proceed` and `failure` elements
+/// (RFC 6120 §5.4.2).
+const XMPP_TLS: &str = "urn:ietf:params:xml:ns:xmpp-tls";
+
+/// XMPP client dialogue (RFC 6120 §4.2, §5.4.2): open a stream to `host`,
+/// the features must offer `starttls`, send it, expect `proceed`.
+async fn xmpp(stream: &mut TcpStream, mut reader: Replies, host: &str) -> Result<(), ProbeError> {
+    let header = format!(
+        "<?xml version='1.0'?><stream:stream to='{}' version='1.0' \
+         xmlns='jabber:client' xmlns:stream='http://etherx.jabber.org/streams'>",
+        xml_escape(host)
+    );
+    send(stream, header.as_bytes()).await?;
+    let features = reader.xml(stream, &["stream:features"]).await?;
+    if !features.contains("<stream:features") {
+        if let Some(condition) = stream_error(&features) {
+            return Err(error(format!("XMPP server sent stream error {condition}")));
+        }
+        return Err(error(format!(
+            "XMPP server sent no stream features: {}",
+            excerpt(&features)
+        )));
+    }
+    if !has_tls_element(&features, "starttls") {
+        return Err(error("XMPP server does not offer STARTTLS".into()));
+    }
+    send(stream, format!("<starttls xmlns='{XMPP_TLS}'/>").as_bytes()).await?;
+    let answer = reader.xml(stream, &["proceed", "failure"]).await?;
+    // Whitespace keepalives may come first (RFC 6120 §4.6.1).
+    let answer = answer.trim_start();
+    let proceed = start_tag(answer, "proceed").is_some_and(|(start, _)| start == 0)
+        && element_end(answer, "proceed") == Some(answer.len())
+        && has_tls_element(answer, "proceed");
+    if !proceed {
+        return Err(error(format!(
+            "server answered starttls with {}",
+            excerpt(answer)
+        )));
+    }
+    reader.finish()
+}
+
+/// Escapes `s` for a single-quoted XML attribute value.
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('\'', "&apos;")
+        .replace('"', "&quot;")
+}
+
+/// Name of the first child of a `stream:error` element in `s`, the error
+/// condition (RFC 6120 §4.9.2), such as `host-unknown`.
+fn stream_error(s: &str) -> Option<&str> {
+    let start = s.find("<stream:error")?;
+    let rest = &s[start + 1..];
+    let child = &rest[rest.find('<')? + 1..];
+    let end = child.find(|c: char| c == '/' || c == '>' || c.is_ascii_whitespace())?;
+    Some(&child[..end]).filter(|name| !name.is_empty())
+}
+
+/// First 200 characters of `s`, for error messages.
+fn excerpt(s: &str) -> String {
+    format!("{:?}", s.chars().take(200).collect::<String>())
+}
+
+/// Byte offset just past the first complete element named one of `names`
+/// in `data`, or past a `stream:error` element or the stream's closing tag.
+/// `None` until one of them is complete.
+fn xml_end(data: &str, names: &[&str]) -> Option<usize> {
+    let mut best: Option<usize> = None;
+    let mut keep = |end: Option<usize>| {
+        if let Some(end) = end {
+            best = Some(best.map_or(end, |b| b.min(end)));
+        }
+    };
+    for name in names.iter().copied().chain(["stream:error"]) {
+        keep(element_end(data, name));
+    }
+    keep(
+        data.find("</stream:stream>")
+            .map(|i| i + "</stream:stream>".len()),
+    );
+    best
+}
+
+/// Byte range of the first complete `<name ...>` start tag in `data`,
+/// from `<` to just past `>`.
+fn start_tag(data: &str, name: &str) -> Option<(usize, usize)> {
+    let open = format!("<{name}");
+    let mut from = 0;
+    while let Some(i) = data[from..].find(&open).map(|i| from + i) {
+        let after = i + open.len();
+        // Skip longer names that share the prefix, such as `<proceeding`.
+        match data[after..].chars().next() {
+            Some(c) if c == '>' || c == '/' || c.is_ascii_whitespace() => {
+                return Some((i, after + data[after..].find('>')? + 1));
+            }
+            Some(_) => from = after,
+            None => return None,
+        }
+    }
+    None
+}
+
+/// Reports whether `data` has a `<name>` start tag declaring the XMPP TLS
+/// namespace.
+fn has_tls_element(data: &str, name: &str) -> bool {
+    start_tag(data, name).is_some_and(|(start, end)| data[start..end].contains(XMPP_TLS))
+}
+
+/// Byte offset just past the first complete `<name ...>` element in
+/// `data`, whether empty (`<name/>`) or with content and `</name>`.
+fn element_end(data: &str, name: &str) -> Option<usize> {
+    let (_, tag_end) = start_tag(data, name)?;
+    if data[..tag_end].ends_with("/>") {
+        return Some(tag_end);
+    }
+    let close = format!("</{name}>");
+    data[tag_end..]
+        .find(&close)
+        .map(|j| tag_end + j + close.len())
+}
+
 /// Reports whether the first space-separated word of `s` is the status
 /// `token` (ASCII case-insensitive), so `OKAY` does not pass as `OK`.
 fn status_is(s: &str, token: &str) -> bool {
@@ -280,13 +411,20 @@ impl Replies {
             if self.data.len() > MAX_REPLY {
                 return Err(error(format!("server reply exceeds {MAX_REPLY} bytes")));
             }
-            let mut buf = [0; 4096];
-            let n = stream.read(&mut buf).await.map_err(ProbeError::Connect)?;
-            if n == 0 {
-                return Err(error("server closed the connection during STARTTLS".into()));
-            }
-            self.data.extend_from_slice(&buf[..n]);
+            self.fill(stream).await?;
         }
+    }
+
+    /// Appends the next chunk read from `stream`; the server closing the
+    /// connection is an error.
+    async fn fill(&mut self, stream: &mut TcpStream) -> Result<(), ProbeError> {
+        let mut buf = [0; 4096];
+        let n = stream.read(&mut buf).await.map_err(ProbeError::Connect)?;
+        if n == 0 {
+            return Err(error("server closed the connection during STARTTLS".into()));
+        }
+        self.data.extend_from_slice(&buf[..n]);
+        Ok(())
     }
 
     /// Reads an SMTP-style reply: lines of `NNN-text` ending with one
@@ -369,6 +507,32 @@ impl Replies {
         }
     }
 
+    /// Reads XML until an element named one of `names`, a stream error or
+    /// the end of the stream is complete (see [`xml_end`]); returns
+    /// everything up to it.
+    async fn xml(&mut self, stream: &mut TcpStream, names: &[&str]) -> Result<String, ProbeError> {
+        loop {
+            // XMPP is UTF-8 (RFC 6120 §11.6); a split character at the end
+            // waits for more data, any other invalid byte is malformed.
+            let valid = match std::str::from_utf8(&self.data) {
+                Ok(text) => text,
+                Err(e) if e.error_len().is_none() => {
+                    std::str::from_utf8(&self.data[..e.valid_up_to()]).unwrap_or_default()
+                }
+                Err(_) => return Err(error("malformed server reply: invalid UTF-8".into())),
+            };
+            if let Some(end) = xml_end(valid, names) {
+                let reply = valid[..end].to_owned();
+                self.data.drain(..end);
+                return Ok(reply);
+            }
+            if self.data.len() > MAX_REPLY {
+                return Err(error(format!("server reply exceeds {MAX_REPLY} bytes")));
+            }
+            self.fill(stream).await?;
+        }
+    }
+
     /// Fails when the server sent bytes past its last reply.
     fn finish(self) -> Result<(), ProbeError> {
         if self.data.is_empty() {
@@ -421,7 +585,165 @@ mod tests {
     /// Connects to `addr` and runs the `protocol` upgrade.
     async fn upgrade_with(protocol: Starttls, addr: SocketAddr) -> Result<(), ProbeError> {
         let mut stream = TcpStream::connect(addr).await.unwrap();
-        protocol.upgrade(&mut stream, Vec::new()).await
+        protocol
+            .upgrade(&mut stream, Vec::new(), "example.org")
+            .await
+    }
+
+    /// Fake XMPP server: for each entry, reads until the client data ends
+    /// with the expected suffix, then answers. Returns its address and
+    /// everything the client sent.
+    async fn xmpp_server(script: XmppScript) -> (SocketAddr, tokio::task::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut got = Vec::new();
+            for (suffix, reply) in script {
+                while !got.ends_with(suffix.as_bytes()) {
+                    let mut buf = [0; 1024];
+                    let n = s.read(&mut buf).await.unwrap();
+                    assert!(n > 0, "client closed early");
+                    got.extend_from_slice(&buf[..n]);
+                }
+                s.write_all(reply).await.unwrap();
+            }
+            String::from_utf8(got).unwrap()
+        });
+        (addr, task)
+    }
+
+    /// Script of a fake XMPP server; see [`xmpp_server`].
+    type XmppScript = &'static [(&'static str, &'static [u8])];
+
+    /// Stream header ending the client's first XMPP message.
+    const XMPP_OPEN: &str = "xmlns:stream='http://etherx.jabber.org/streams'>";
+    /// The client's `starttls` request.
+    const XMPP_STARTTLS: &str = "<starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>";
+    /// Server stream header and features offering STARTTLS.
+    const XMPP_FEATURES: &[u8] = b"<?xml version='1.0'?><stream:stream from='example.org' \
+        version='1.0' xmlns='jabber:client' xmlns:stream='http://etherx.jabber.org/streams'>\
+        <stream:features><starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'><required/>\
+        </starttls></stream:features>";
+
+    /// The XMPP dialogue opens a stream to the host, sends `starttls` and
+    /// accepts `proceed`, even when the features arrive in pieces.
+    #[tokio::test]
+    async fn xmpp_upgrade() {
+        let (addr, got) = xmpp_server(&[
+            (XMPP_OPEN, XMPP_FEATURES),
+            (
+                XMPP_STARTTLS,
+                b" <proceed xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>",
+            ),
+        ])
+        .await;
+        upgrade_with(Starttls::Xmpp, addr).await.unwrap();
+        let got = got.await.unwrap();
+        assert!(got.contains("to='example.org'"), "{got}");
+    }
+
+    /// The `to` address is escaped, and features split across reads are
+    /// reassembled.
+    #[tokio::test]
+    async fn xmpp_split_features() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let (head, tail) = XMPP_FEATURES.split_at(150);
+            s.write_all(head).await.unwrap();
+            s.flush().await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            s.write_all(tail).await.unwrap();
+            let mut got = Vec::new();
+            while !got.ends_with(XMPP_STARTTLS.as_bytes()) {
+                let mut buf = [0; 1024];
+                let n = s.read(&mut buf).await.unwrap();
+                assert!(n > 0);
+                got.extend_from_slice(&buf[..n]);
+            }
+            s.write_all(b"<proceed xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"></proceed>")
+                .await
+                .unwrap();
+            String::from_utf8(got).unwrap()
+        });
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        Starttls::Xmpp
+            .upgrade(&mut stream, Vec::new(), "a'b<c")
+            .await
+            .unwrap();
+        let got = server.await.unwrap();
+        assert!(got.contains("to='a&apos;b&lt;c'"), "{got}");
+    }
+
+    /// XMPP refusals, stream errors, garbage and injected bytes are connect
+    /// errors.
+    #[tokio::test]
+    async fn xmpp_errors() {
+        let cases: [(XmppScript, &str); 9] = [
+            (
+                &[(
+                    XMPP_OPEN,
+                    b"<stream:stream><stream:features><bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'/></stream:features>",
+                )],
+                "does not offer STARTTLS",
+            ),
+            (
+                &[(
+                    XMPP_OPEN,
+                    b"<stream:stream><stream:features><starttls xmlns='urn:example'/><mechanisms xmlns='urn:ietf:params:xml:ns:xmpp-tls'/></stream:features>",
+                )],
+                "does not offer STARTTLS",
+            ),
+            (
+                &[
+                    (XMPP_OPEN, XMPP_FEATURES),
+                    (XMPP_STARTTLS, b"<proceed/>"),
+                ],
+                "starttls with \"<proceed/>\"",
+            ),
+            (
+                &[(
+                    XMPP_OPEN,
+                    b"<stream:stream><stream:error><host-unknown xmlns='urn:ietf:params:xml:ns:xmpp-streams'/></stream:error></stream:stream>",
+                )],
+                "stream error host-unknown",
+            ),
+            (
+                &[(XMPP_OPEN, b"<stream:stream></stream:stream>")],
+                "no stream features",
+            ),
+            (&[(XMPP_OPEN, b"SSH-2.0-x\r\n")], "closed the connection"),
+            (&[(XMPP_OPEN, b"\xff\xfe<stream:features/>")], "invalid UTF-8"),
+            (
+                &[
+                    (XMPP_OPEN, XMPP_FEATURES),
+                    (
+                        XMPP_STARTTLS,
+                        b"<failure xmlns='urn:ietf:params:xml:ns:xmpp-tls'/></stream:stream>",
+                    ),
+                ],
+                "starttls with \"<failure",
+            ),
+            (
+                &[
+                    (XMPP_OPEN, XMPP_FEATURES),
+                    (
+                        XMPP_STARTTLS,
+                        b"<proceed xmlns='urn:ietf:params:xml:ns:xmpp-tls'/><message/>",
+                    ),
+                ],
+                "data after its STARTTLS reply",
+            ),
+        ];
+        for (script, expected) in cases {
+            let (addr, _got) = xmpp_server(script).await;
+            let Err(ProbeError::Connect(e)) = upgrade_with(Starttls::Xmpp, addr).await else {
+                panic!("XMPP upgrade accepted {script:?}");
+            };
+            assert!(e.to_string().contains(expected), "{e}");
+        }
     }
 
     /// Replies made of empty lines still hit the size limit, since line
@@ -438,7 +760,7 @@ mod tests {
                 .await
                 .unwrap();
             let early = format!("{head}{flood}").into_bytes();
-            let Err(ProbeError::Connect(e)) = protocol.upgrade(&mut stream, early).await else {
+            let Err(ProbeError::Connect(e)) = protocol.upgrade(&mut stream, early, "").await else {
                 panic!("{protocol} accepted an endless reply");
             };
             assert!(e.to_string().contains("exceeds"), "{e}");
@@ -697,5 +1019,6 @@ mod tests {
         assert_eq!(Starttls::Imap.default_port(), 143);
         assert_eq!(Starttls::Pop3.default_port(), 110);
         assert_eq!(Starttls::Ftp.default_port(), 21);
+        assert_eq!(Starttls::Xmpp.default_port(), 5222);
     }
 }

@@ -46,3 +46,11 @@ services:
     # init process in front of it avoids that.
     init: true
     ports: ["127.0.0.1:14021:21"]
+
+  # Prosody with required STARTTLS on XMPP client connections, TLS 1.2+.
+  xmpp:
+    build:
+      context: .
+      dockerfile: Dockerfile.prosody
+    image: localhost/testls-prosody
+    ports: ["127.0.0.1:15222:5222"]
