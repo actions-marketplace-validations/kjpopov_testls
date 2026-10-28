@@ -604,9 +604,9 @@ fn smtp_without_starttls() {
     assert_eq!(s.code, 1);
 }
 
-/// IMAP and POP3 STARTTLS on Dovecot, FTP `AUTH TLS` on vsftpd and XMPP
-/// STARTTLS on Prosody (stream addressed to the SNI name): TLS 1.2+ with a
-/// trusted certificate.
+/// IMAP and POP3 STARTTLS on Dovecot, FTP `AUTH TLS` on vsftpd, XMPP
+/// STARTTLS on Prosody (stream addressed to the SNI name) and LDAP
+/// `StartTLS` on `OpenLDAP`: TLS 1.2+ with a trusted certificate.
 #[test]
 #[ignore = "needs tests/servers running"]
 fn other_starttls() {
@@ -615,6 +615,7 @@ fn other_starttls() {
         ("127.0.0.1:14110", "pop3"),
         ("127.0.0.1:14021", "ftp"),
         ("127.0.0.1:15222", "xmpp"),
+        ("127.0.0.1:14389", "ldap"),
     ] {
         let s = scan(
             addr,
