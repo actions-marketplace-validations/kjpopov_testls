@@ -364,6 +364,9 @@ fn element_end(data: &str, name: &str) -> Option<usize> {
 /// message ID 1 and an `ExtendedRequest` naming `1.3.6.1.4.1.1466.20037`.
 const LDAP_STARTTLS: &[u8] = b"\x30\x1d\x02\x01\x01\x77\x18\x80\x161.3.6.1.4.1.1466.20037";
 
+/// `StartTLS` extended operation OID (RFC 4511 §4.14.1).
+const LDAP_STARTTLS_OID: &[u8] = b"1.3.6.1.4.1.1466.20037";
+
 /// LDAP dialogue (RFC 4511 §4.14): no greeting; send the `StartTLS`
 /// extended request and expect an `ExtendedResponse` with result
 /// `success` (0) for message ID 1.
@@ -375,12 +378,17 @@ async fn ldap(stream: &mut TcpStream, mut reader: Replies) -> Result<(), ProbeEr
     let (code, rest) = ber_field(response, 0x0a)?;
     let (_matched_dn, rest) = ber_field(rest, 0x04)?;
     let (diagnostic, rest) = ber_field(rest, 0x04)?;
-    // Only referral [3], responseName [10] and responseValue [11] may
-    // follow, and only controls [0] after the response (RFC 4511 §4.1.1,
-    // §4.1.9, §4.12).
-    let rest = optional_ber_field(rest, 0xa3)?;
-    let rest = optional_ber_field(rest, 0x8a)?;
-    let rest = optional_ber_field(rest, 0x8b)?;
+    // Only referral [3] and responseName [10] with the StartTLS OID may
+    // follow, no responseValue, and only controls [0] after the response
+    // (RFC 4511 §4.1.1, §4.1.9, §4.14.2).
+    let mut rest = optional_ber_field(rest, 0xa3)?;
+    if rest.first() == Some(&0x8a) {
+        let (name, after) = ber_field(rest, 0x8a)?;
+        if name != LDAP_STARTTLS_OID {
+            return Err(malformed_ldap());
+        }
+        rest = after;
+    }
     if !rest.is_empty() || !optional_ber_field(controls, 0xa0)?.is_empty() {
         return Err(malformed_ldap());
     }
@@ -1200,6 +1208,14 @@ mod tests {
             ),
             (
                 b"\x30\x0e\x02\x01\x01\x78\x07\x0a\x01\x00\x04\x00\x04\x00\x04\x00",
+                "malformed",
+            ),
+            (
+                b"\x30\x11\x02\x01\x01\x78\x0c\x0a\x01\x00\x04\x00\x04\x00\x8a\x031.2",
+                "malformed",
+            ),
+            (
+                b"\x30\x10\x02\x01\x01\x78\x0b\x0a\x01\x00\x04\x00\x04\x00\x8b\x02hi",
                 "malformed",
             ),
             (b"\x30\x84\x7f\xff\xff\xff", "exceeds"),
