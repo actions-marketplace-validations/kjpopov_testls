@@ -42,4 +42,7 @@ services:
       context: .
       dockerfile: Dockerfile.vsftpd
     image: localhost/testls-vsftpd
+    # As PID 1 under Docker, vsftpd segfaults after about ten sessions; an
+    # init process in front of it avoids that.
+    init: true
     ports: ["127.0.0.1:14021:21"]
