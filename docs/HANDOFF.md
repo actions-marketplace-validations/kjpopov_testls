@@ -11,7 +11,13 @@ if `gh` is allowed); update it when a session ends.
   v0.4.2 was deleted (web UI mistake); skip it in compare links.
 - `main` has unreleased v0.5 work: `--starttls
   smtp|imap|pop3|ftp|xmpp|ldap|postgres|mysql` (PRs #108–#115, decisions
-  #68–#75). Next decision log number: **#76**.
+  #68–#75) and `--mx` (probe PR #119 `MxResolver` in `testls-probe/src/mx.rs`,
+  CLI PR #120 `mail_hosts` in `main.rs`, decisions #76–#77). Next decision
+  log number: **#78**.
+- `--mx` has unit tests only (fake UDP DNS server in `mx.rs`, CLI parsing
+  in `main.rs`); no integration test (would need a DNS server in
+  `tests/servers`). Outbound port 25 is blocked on the dev machine, so live
+  `--mx` scans hang until the connect timeout.
 - PLAN v0.5 has a new item (PR #116): upload coverage to Codecov; needs
   the maintainer to enable the Codecov app first.
 - STARTTLS lives in `testls-probe/src/starttls.rs`; `Transport::connect`
@@ -36,26 +42,10 @@ if `gh` is allowed); update it when a session ends.
 
 v0.5 in PLAN.md, suggested order:
 
-1. `--mx`, probe PR #119 (`feat/mx`, `MxResolver`). Maintainer chose
-   `hickory-resolver` 0.26 (workspace dep, `default-features = false`,
-   features `tokio`, `system-config`; ~100 new lockfile crates, `cargo deny`
-   passes). Plan: `testls-probe/src/mx.rs` with a resolver built from system
-   config (`TokioResolver::builder_tokio()`, timeout from
-   `--connect-timeout`) plus a test constructor pointing at a fake UDP DNS
-   server (`NameServerConfig::udp(ip)`, then set `port` on each of its
-   `connections`, passed to `ResolverConfig::from_name_servers`; answers built with `hickory_resolver::proto::op::Message`).
-   Look up the FQDN (trailing dot, no search domains); sort by preference
-   then name, lowercase, dedupe; null MX (`.`, RFC 7505) = error "accepts no
-   mail"; no MX records = fall back to the domain itself (RFC 5321 §5.1);
-   NXDOMAIN = error. CLI: `--mx` implies `--starttls smtp` (reject other
-   `--starttls`), turns each name target into its MX hosts on port 25 (keep
-   an explicit port), rejects IP/CIDR targets; lookup failures are
-   per-target `Outcome::failed` (exit 2), hook in `scan_all`'s target loop.
-   Decision #76 and docs go in the CLI PR, once the design is final.
-2. Codecov upload (once the maintainer enabled the app).
-3. Intrusive checks behind `--intrusive` (Heartbleed, CCS injection,
+1. Codecov upload (once the maintainer enabled the app).
+2. Intrusive checks behind `--intrusive` (Heartbleed, CCS injection,
    Ticketbleed, ROBOT), one PR each.
-4. Application-layer checks (BREACH, ALPACA, Opossum), then grading.
+3. Application-layer checks (BREACH, ALPACA, Opossum), then grading.
 
 Open questions in PLAN.md (default profile runtime, politeness/rate limits)
 still need a decision before grading.
