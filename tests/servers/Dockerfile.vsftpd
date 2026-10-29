@@ -1,0 +1,9 @@
+FROM docker.io/library/debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends vsftpd \
+ && rm -rf /var/lib/apt/lists/* \
+ && mkdir -p /var/run/vsftpd/empty
+# vsftpd reads the key as root before dropping privileges.
+COPY --chmod=0400 server.pem server.key /etc/vsftpd/
+COPY vsftpd.conf /etc/vsftpd.conf
+ENTRYPOINT ["vsftpd", "/etc/vsftpd.conf"]

@@ -141,7 +141,9 @@ struct Cli {
 
     /// Upgrade each connection with this protocol's STARTTLS command before
     /// the TLS handshake. Targets without a port use the protocol's
-    /// standard port (25 for `smtp`), and HTTP headers are not checked.
+    /// standard port (25 for `smtp`, 143 for `imap`, 110 for `pop3`, 21 for
+    /// `ftp`, 5222 for `xmpp`, 389 for `ldap`, 5432 for `postgres`, 3306 for
+    /// `mysql`), and HTTP headers are not checked. XMPP addresses the stream to the SNI name.
     #[arg(long, value_name = "PROTOCOL",
           value_parser = clap::builder::PossibleValuesParser::new(Starttls::ALL.map(Starttls::as_str))
               .map(|s| s.parse::<Starttls>().expect("listed value")))]
@@ -619,10 +621,11 @@ async fn scan(
     store: &TrustStore,
     rules: (&Config, &Baseline),
     scan_target: &Target,
-    transport: Transport,
+    mut transport: Transport,
 ) -> Outcome {
     let paint = painter(cli);
     let sni = cli.sni.as_deref().or(scan_target.default_sni());
+    transport.host = sni.map(str::to_owned);
     let addr = transport.addr;
 
     let started_at = unix_now();
@@ -1290,6 +1293,8 @@ mod tests {
             .map(ToString::to_string)
             .collect();
         assert_eq!(names, ["192.0.2.0:25", "192.0.2.1:25"]);
+        let cli = Cli::try_parse_from(["testls", "--starttls", "imap", "a.example"]).expect("imap");
+        assert_eq!(targets(&cli).expect("targets")[0].port, 143);
         assert_eq!(
             parse_target_list("a.example\n", 25).expect("list")[0].port,
             25

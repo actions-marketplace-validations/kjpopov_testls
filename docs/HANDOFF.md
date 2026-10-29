@@ -4,13 +4,17 @@ State left by the last agent session for the next one. Read this right
 after [AGENTS.md](../AGENTS.md) (then [agent-workflow.md](agent-workflow.md)
 if `gh` is allowed); update it when a session ends.
 
-## State (2026-10-27)
+## State (2026-10-28)
 
-- `main` is clean; latest release **v0.4.3** (GitHub release, container image
+- Latest release **v0.4.3** (GitHub release, container image
   `ghcr.io/kjpopov/testls:0.4.3`, Homebrew/Scoop in-repo, Marketplace action).
   v0.4.2 was deleted (web UI mistake); skip it in compare links.
-- Every v0.4 roadmap item in [PLAN.md](PLAN.md) is done. Next decision log
-  number: **#68**.
+- `main` has unreleased v0.5 work: `--starttls
+  smtp|imap|pop3|ftp|xmpp|ldap|postgres|mysql` (PRs #108–#115, decisions
+  #68–#75). Next decision log number: **#76**.
+- STARTTLS lives in `testls-probe/src/starttls.rs`; `Transport::connect`
+  runs it after TCP/proxy connect, failures are `ProbeError::Connect`.
+  `Transport` is no longer `Copy` (has `host` for XMPP).
 - CodeRabbit runs the `assertive` profile with auto-approval up to `low`
   merge risk (PLAN #46, #55, #61).
 
@@ -30,17 +34,11 @@ if `gh` is allowed); update it when a session ends.
 
 v0.5 in PLAN.md, suggested order:
 
-1. STARTTLS framework in `testls-probe` (`--starttls PROTO`), SMTP first,
-   then IMAP, POP3, FTP, XMPP, LDAP, PostgreSQL, MySQL. Transport is `Copy`
-   and connects via `Transport::connect` (proxy/source-ip aware), so the
-   STARTTLS upgrade belongs right after connect, before the ClientHello.
-   Needs test servers in `tests/servers` (e.g. Postfix or `openssl s_server
-   -starttls smtp`).
-2. `--mx` (needs SMTP STARTTLS and an MX lookup without new heavy deps; check
+1. `--mx` (needs SMTP STARTTLS and an MX lookup without new heavy deps; check
    `cargo deny` before adding a resolver crate).
-3. Intrusive checks behind `--intrusive` (Heartbleed, CCS injection,
+2. Intrusive checks behind `--intrusive` (Heartbleed, CCS injection,
    Ticketbleed, ROBOT), one PR each.
-4. Application-layer checks (BREACH, ALPACA, Opossum), then grading.
+3. Application-layer checks (BREACH, ALPACA, Opossum), then grading.
 
 Open questions in PLAN.md (default profile runtime, politeness/rate limits)
 still need a decision before grading.
@@ -55,3 +53,12 @@ still need a decision before grading.
 - Stay inside the repository directory (use `target/` or
   `CARGO_TARGET_TMPDIR` for scratch files); the maintainer declines access
   elsewhere.
+- Test servers: one Debian trixie image per service (pinned digest) in
+  `tests/servers`; ports 14425 smtp, 14143/14110 imap/pop3, 14021 ftp,
+  15222 xmpp, 14389 ldap, 15432 postgres, 13306 mysql. Gotchas: Docker
+  `COPY --chmod` gives a missing target dir that mode too (create it first);
+  the Docker port proxy accepts before the service listens (`wait_for` peeks);
+  vsftpd needs `init: true` under Docker. CI container logs:
+  `gh run view RUN --log --job JOB | grep "<svc>-1"`.
+- CodeRabbit sometimes answers in issue comments or posts empty COMMENTED
+  reviews; check both before assuming nothing changed.

@@ -1,0 +1,8 @@
+FROM docker.io/library/debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends prosody \
+ && rm -rf /var/lib/apt/lists/*
+COPY --chown=prosody:prosody --chmod=0400 server.pem server.key /etc/prosody/certs/
+COPY prosody.cfg.lua /etc/prosody/prosody.cfg.lua
+USER prosody
+ENTRYPOINT ["prosody", "-F"]

@@ -78,7 +78,7 @@ impl std::error::Error for ProbeError {
 }
 
 /// Connection settings shared by all probes against one target.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Transport {
     /// Address to connect to.
     pub addr: SocketAddr,
@@ -93,6 +93,9 @@ pub struct Transport {
     /// Plain-text protocol to upgrade with STARTTLS before each hello;
     /// TLS from the first byte when `None`.
     pub starttls: Option<Starttls>,
+    /// Server name for STARTTLS dialogues that need one (the XMPP `to`
+    /// address); the IP address of [`Transport::addr`] when `None`.
+    pub host: Option<String>,
 }
 
 impl Transport {
@@ -107,6 +110,7 @@ impl Transport {
             source: None,
             proxy: None,
             starttls: None,
+            host: None,
         }
     }
 
@@ -122,9 +126,14 @@ impl Transport {
         let (mut stream, early) = self.open().await?;
         match (self.starttls, self.proxy) {
             (Some(starttls), _) => {
-                timeout(self.read_timeout, starttls.upgrade(&mut stream, early))
-                    .await
-                    .map_err(|_| ProbeError::Connect(io::ErrorKind::TimedOut.into()))??;
+                let ip = self.addr.ip().to_string();
+                let host = self.host.as_deref().unwrap_or(&ip);
+                timeout(
+                    self.read_timeout,
+                    starttls.upgrade(&mut stream, early, host),
+                )
+                .await
+                .map_err(|_| ProbeError::Connect(io::ErrorKind::TimedOut.into()))??;
             }
             (None, Some(proxy)) => reject_early(proxy, &early)?,
             (None, None) => {}
@@ -441,6 +450,37 @@ mod tests {
         let r = t.exchange(b"hello").await.unwrap();
         assert!(matches!(r, HelloResponse::Alert(a) if a.description == 70));
         assert_eq!(task.await.unwrap(), b"hello");
+    }
+
+    /// XMPP addresses the stream to [`Transport::host`], or to the IP
+    /// address without one.
+    #[tokio::test]
+    async fn starttls_xmpp_host() {
+        for (host, expected) in [
+            (Some("example.org"), "to='example.org'"),
+            (None, "to='127.0.0.1'"),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let task = tokio::spawn(async move {
+                let (mut s, _) = listener.accept().await.unwrap();
+                let mut buf = [0; 512];
+                let n = s.read(&mut buf).await.unwrap();
+                s.write_all(b"<stream:error><host-unknown/></stream:error>")
+                    .await
+                    .unwrap();
+                String::from_utf8_lossy(&buf[..n]).into_owned()
+            });
+            let mut t = Transport::new(addr);
+            t.starttls = Some(Starttls::Xmpp);
+            t.host = host.map(str::to_owned);
+            let Err(ProbeError::Connect(e)) = t.exchange(b"hello").await else {
+                panic!("unknown host accepted");
+            };
+            assert!(e.to_string().contains("host-unknown"), "{e}");
+            let sent = task.await.unwrap();
+            assert!(sent.contains(expected), "{sent}");
+        }
     }
 
     /// Through a proxy, a greeting that arrives with the `CONNECT` reply

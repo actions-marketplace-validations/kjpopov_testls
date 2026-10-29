@@ -1,0 +1,8 @@
+FROM docker.io/library/debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends slapd \
+ && rm -rf /var/lib/apt/lists/*
+COPY --chown=openldap:openldap --chmod=0400 server.pem server.key /etc/ldap/
+COPY slapd.conf /etc/ldap/slapd.conf
+# slapd binds port 389 as root, then drops to openldap.
+ENTRYPOINT ["slapd", "-d", "256", "-u", "openldap", "-g", "openldap", "-h", "ldap:///", "-f", "/etc/ldap/slapd.conf"]

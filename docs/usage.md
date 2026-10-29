@@ -32,6 +32,17 @@ testls --all-addresses example.com
 # A mail server with SMTP STARTTLS (port 25 by default)
 testls --starttls smtp mail.example.com
 testls --starttls smtp mail.example.com:587
+# IMAP (port 143), POP3 (port 110), FTP AUTH TLS (port 21), XMPP
+# (port 5222), LDAP StartTLS (port 389), PostgreSQL (port 5432) and
+# MySQL/MariaDB (port 3306) work the same way
+testls --starttls imap mail.example.com
+testls --starttls ftp ftp.example.com
+testls --starttls ldap ldap.example.com
+testls --starttls postgres db.example.com
+testls --starttls mysql db.example.com
+# XMPP addresses the stream to the SNI name; set --sni when the XMPP
+# domain differs from the host name
+testls --starttls xmpp --sni example.com xmpp.example.com
 ```
 
 ## Connection control

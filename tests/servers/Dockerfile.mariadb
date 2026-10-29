@@ -1,0 +1,19 @@
+FROM docker.io/library/debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends mariadb-server \
+ && rm -rf /var/lib/apt/lists/* \
+ && install -d -o mysql -g mysql -m 0700 /etc/mysql-tls
+# Docker's COPY --chmod would give a missing target directory mode 0400 too.
+COPY --chown=mysql:mysql --chmod=0400 server.pem server.key /etc/mysql-tls/
+USER mysql
+# Throwaway data directory. Without an account for remote hosts MariaDB
+# greets with error 1130 instead of a handshake; the one added is locked.
+RUN mariadb-install-db --datadir=/tmp/mysql --auth-root-authentication-method=socket \
+  --skip-test-db > /dev/null \
+ && printf '%s\n' 'FLUSH PRIVILEGES;' "CREATE USER 'testls'@'%' ACCOUNT LOCK;" \
+  | mariadbd --no-defaults --datadir=/tmp/mysql --bootstrap --log-warnings=0
+ENTRYPOINT ["mariadbd", "--no-defaults", "--datadir=/tmp/mysql", \
+  "--socket=/tmp/mysql.sock", "--pid-file=/tmp/mysql.pid", \
+  "--bind-address=0.0.0.0", "--skip-name-resolve", \
+  "--ssl-cert=/etc/mysql-tls/server.pem", "--ssl-key=/etc/mysql-tls/server.key", \
+  "--tls-version=TLSv1.2,TLSv1.3"]

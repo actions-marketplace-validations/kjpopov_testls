@@ -3,6 +3,7 @@
 //! Ignored by default; start the servers first (see
 //! `tests/servers/compose.yaml`), then run with `--ignored`.
 
+use std::io::ErrorKind;
 use std::net::TcpStream;
 use std::process::Command;
 use std::thread::sleep;
@@ -36,9 +37,25 @@ const CA_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/servers/
 /// Blocks until `addr` accepts TCP connections; fails after 30 seconds.
 fn wait_for(addr: &str) {
     let deadline = Instant::now() + Duration::from_secs(30);
-    while TcpStream::connect(addr).is_err() {
+    while !ready(addr) {
         assert!(Instant::now() < deadline, "server {addr} did not come up");
         sleep(Duration::from_millis(200));
+    }
+}
+
+/// Reports whether `addr` accepts a connection and keeps it open. Docker's
+/// port proxy accepts connections before the container listens, then closes
+/// them, so an immediate EOF means the server is not up yet.
+fn ready(addr: &str) -> bool {
+    let Ok(stream) = TcpStream::connect(addr) else {
+        return false;
+    };
+    stream
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .expect("set read timeout");
+    match stream.peek(&mut [0; 1]) {
+        Ok(n) => n > 0,
+        Err(e) => matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut),
     }
 }
 
@@ -585,4 +602,47 @@ fn smtp_without_starttls() {
     assert_eq!(s.line("TLSv1.3 "), "TLSv1.3  not offered");
     assert!(s.has("[protocol.no_modern]"), "{}", s.stdout);
     assert_eq!(s.code, 1);
+}
+
+/// IMAP and POP3 STARTTLS on Dovecot, FTP `AUTH TLS` on vsftpd, XMPP
+/// STARTTLS on Prosody (stream addressed to the SNI name) and LDAP
+/// `StartTLS` on `OpenLDAP` and `SSLRequest` on PostgreSQL and `MariaDB`:
+/// TLS 1.2+ with a trusted certificate matching the SNI name.
+#[test]
+#[ignore = "needs tests/servers running"]
+fn other_starttls() {
+    for (addr, protocol) in [
+        ("127.0.0.1:14143", "imap"),
+        ("127.0.0.1:14110", "pop3"),
+        ("127.0.0.1:14021", "ftp"),
+        ("127.0.0.1:15222", "xmpp"),
+        ("127.0.0.1:14389", "ldap"),
+        ("127.0.0.1:15432", "postgres"),
+        ("127.0.0.1:13306", "mysql"),
+    ] {
+        let s = scan(
+            addr,
+            &[
+                "--starttls",
+                protocol,
+                "--sni",
+                "localhost",
+                "--ca-file",
+                CA_FILE,
+                "--profile",
+                "quick",
+            ],
+        );
+        assert_eq!(s.line("TLSv1.1 "), "TLSv1.1  not offered", "{protocol}");
+        assert_eq!(s.line("TLSv1.2 "), "TLSv1.2  offered", "{protocol}");
+        assert_eq!(s.line("TLSv1.3 "), "TLSv1.3  offered", "{protocol}");
+        assert_eq!(s.line("#0"), "#0 CN=localhost", "{protocol}");
+        assert_eq!(
+            s.line("names"),
+            "names   localhost, 127.0.0.1",
+            "{protocol}"
+        );
+        assert!(!s.has("cert.hostname_mismatch"), "{}", s.stdout);
+        assert!(!s.has("cert.untrusted"), "{}", s.stdout);
+    }
 }
