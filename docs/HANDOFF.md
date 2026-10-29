@@ -36,14 +36,14 @@ if `gh` is allowed); update it when a session ends.
 
 v0.5 in PLAN.md, suggested order:
 
-1. `--mx`, started on pushed branch `feat/mx` (no PR yet). Maintainer chose
+1. `--mx`, probe PR #119 (`feat/mx`, `MxResolver`). Maintainer chose
    `hickory-resolver` 0.26 (workspace dep, `default-features = false`,
    features `tokio`, `system-config`; ~100 new lockfile crates, `cargo deny`
    passes). Plan: `testls-probe/src/mx.rs` with a resolver built from system
    config (`TokioResolver::builder_tokio()`, timeout from
    `--connect-timeout`) plus a test constructor pointing at a fake UDP DNS
-   server (`ResolverConfig::from_name_servers(vec![NameServerConfig::udp(ip)])`
-   with custom port, answers built with `hickory_resolver::proto::op::Message`).
+   server (`NameServerConfig::udp(ip)`, then set `port` on each of its
+   `connections`, passed to `ResolverConfig::from_name_servers`; answers built with `hickory_resolver::proto::op::Message`).
    Look up the FQDN (trailing dot, no search domains); sort by preference
    then name, lowercase, dedupe; null MX (`.`, RFC 7505) = error "accepts no
    mail"; no MX records = fall back to the domain itself (RFC 5321 §5.1);
@@ -51,7 +51,7 @@ v0.5 in PLAN.md, suggested order:
    `--starttls`), turns each name target into its MX hosts on port 25 (keep
    an explicit port), rejects IP/CIDR targets; lookup failures are
    per-target `Outcome::failed` (exit 2), hook in `scan_all`'s target loop.
-   Needs a decision log entry (#76) and docs.
+   Decision #76 and docs go in the CLI PR, once the design is final.
 2. Codecov upload (once the maintainer enabled the app).
 3. Intrusive checks behind `--intrusive` (Heartbleed, CCS injection,
    Ticketbleed, ROBOT), one PR each.
