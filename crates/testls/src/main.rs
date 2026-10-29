@@ -25,9 +25,9 @@ use testls_checks::{
 };
 use testls_probe::{
     CipherResult, Fetcher, HandshakeDetails, HttpResponse, Intolerance, KeyExchangeResult,
-    ProtocolResult, ProtocolSupport, Starttls, Transport, detect_protocols, enumerate_ciphers,
-    fetch_certificates, fetch_http_headers, probe_details, probe_features, probe_intolerance,
-    probe_key_exchange,
+    MxResolver, ProtocolResult, ProtocolSupport, Starttls, Transport, detect_protocols,
+    enumerate_ciphers, fetch_certificates, fetch_http_headers, probe_details, probe_features,
+    probe_intolerance, probe_key_exchange,
 };
 use testls_report::text::{self, CertificateSection, CipherSection, KeyExchangeSection};
 use testls_report::{ColorChoice, Format, Painter, csv, html, json, junit, markdown, sarif};
@@ -48,6 +48,8 @@ use testls_report::json::Suppressed;
     args_conflicts_with_subcommands = true,
     subcommand_negates_reqs = true
 )]
+// Each bool is an independent command-line flag, which clap models as a bool.
+#[allow(clippy::struct_excessive_bools)]
 struct Cli {
     /// Extra commands; without one, `testls` scans the target.
     #[command(subcommand)]
@@ -148,6 +150,13 @@ struct Cli {
           value_parser = clap::builder::PossibleValuesParser::new(Starttls::ALL.map(Starttls::as_str))
               .map(|s| s.parse::<Starttls>().expect("listed value")))]
     starttls: Option<Starttls>,
+
+    /// Scan the mail servers of each target domain instead of the domain
+    /// itself: every MX host is scanned with `--starttls smtp` on the
+    /// target's port (25 by default). A domain without MX records is
+    /// scanned itself; IP and CIDR targets are rejected.
+    #[arg(long)]
+    mx: bool,
 
     /// Read suppressions from this TOML file instead of `.testls.toml` in
     /// the working directory (which is optional).
@@ -357,6 +366,9 @@ async fn main() -> ExitCode {
 /// Collects the targets from the command line and `--file`, in that order,
 /// with CIDR ranges expanded.
 fn targets(cli: &Cli) -> Result<Vec<Target>, String> {
+    if cli.mx && cli.starttls.is_some_and(|s| s != Starttls::Smtp) {
+        return Err("--mx scans mail servers and needs --starttls smtp".to_owned());
+    }
     let port = default_port(cli);
     let mut targets = Vec::new();
     for arg in &cli.targets {
@@ -372,6 +384,11 @@ fn targets(cli: &Cli) -> Result<Vec<Target>, String> {
     if targets.is_empty() {
         return Err("no targets given".to_owned());
     }
+    if cli.mx
+        && let Some(t) = targets.iter().find(|t| matches!(t.host, Host::Ip(_)))
+    {
+        return Err(format!("{t}: --mx needs a domain name, not an IP address"));
+    }
     Ok(targets)
 }
 
@@ -384,8 +401,43 @@ fn target_arg(s: &str) -> Result<String, target::ParseTargetError> {
 /// Port for targets that name none: the `--starttls` protocol's standard
 /// port, else 443.
 fn default_port(cli: &Cli) -> u16 {
-    cli.starttls
-        .map_or(target::DEFAULT_PORT, Starttls::default_port)
+    starttls(cli).map_or(target::DEFAULT_PORT, Starttls::default_port)
+}
+
+/// STARTTLS protocol to use: `--starttls`, or `smtp` with `--mx`.
+fn starttls(cli: &Cli) -> Option<Starttls> {
+    cli.starttls.or(cli.mx.then_some(Starttls::Smtp))
+}
+
+/// Hosts to scan: `targets` unchanged, or with `--mx` the mail servers
+/// of each target domain on the target's port, with a failed outcome for
+/// each domain whose lookup fails. Errs when the system resolver
+/// configuration cannot be read.
+async fn mail_hosts(
+    cli: &Cli,
+    targets: Vec<Target>,
+) -> Result<(Vec<Target>, Vec<Outcome>), String> {
+    if !cli.mx {
+        return Ok((targets, Vec::new()));
+    }
+    let resolver =
+        MxResolver::system(Duration::from_secs(cli.connect_timeout)).map_err(|e| e.to_string())?;
+    let mut hosts = Vec::new();
+    let mut failed = Vec::new();
+    for target in &targets {
+        let Host::Name(domain) = &target.host else {
+            hosts.push(target.clone());
+            continue;
+        };
+        match resolver.lookup(domain).await {
+            Ok(found) => hosts.extend(found.into_iter().map(|host| Target {
+                host: Host::Name(host),
+                port: target.port,
+            })),
+            Err(e) => failed.push(Outcome::failed(target, &e.to_string())),
+        }
+    }
+    Ok((hosts, failed))
 }
 
 /// Parses a target list: one target per line, skipping blank lines and
@@ -448,7 +500,21 @@ async fn scan_all(cli: &Cli) -> ExitCode {
     let mut documents = Vec::new();
     let mut finding_scans = Vec::new();
     let mut failures = Vec::new();
-    for target in &targets {
+    let hosts = match mail_hosts(cli, targets).await {
+        Ok((hosts, failed)) => {
+            for outcome in failed {
+                scans += 1;
+                code = code.max(outcome.code);
+                failures.extend(outcome.failure);
+            }
+            hosts
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    for target in &hosts {
         let addrs = match addresses(target, &cli.resolve, family).await {
             Ok(addrs) => selected(cli, addrs),
             Err(e) => {
@@ -483,28 +549,39 @@ async fn scan_all(cli: &Cli) -> ExitCode {
             eprintln!("warning: {target}: {warning}");
         }
     }
+    print_report(cli, scans, &documents, &finding_scans, &failures, code);
+    ExitCode::from(code)
+}
+
+/// Prints the reports that `--format` renders once at the end of the
+/// run, from the `scans` count, JSON `documents`, `finding_scans`,
+/// `failures` and the run's exit `code`.
+fn print_report(
+    cli: &Cli,
+    scans: usize,
+    documents: &[String],
+    finding_scans: &[sarif::Scan],
+    failures: &[junit::Failure],
+    code: u8,
+) {
     if cli.format == Format::Json {
-        print!("{}", json_output(scans, &documents));
+        print!("{}", json_output(scans, documents));
     }
     if cli.format == Format::Sarif {
-        print!("{}", sarif::render(&finding_scans, code < 2));
+        print!("{}", sarif::render(finding_scans, code < 2));
     }
     if cli.format == Format::Junit {
-        print!("{}", junit::render(&finding_scans, &failures, cli.fail_on));
+        print!("{}", junit::render(finding_scans, failures, cli.fail_on));
     }
     if cli.format == Format::Markdown {
-        print!(
-            "{}",
-            markdown::render(&finding_scans, &failures, cli.fail_on)
-        );
+        print!("{}", markdown::render(finding_scans, failures, cli.fail_on));
     }
     if cli.format == Format::Csv {
-        print!("{}", csv::render(&finding_scans, &failures, cli.fail_on));
+        print!("{}", csv::render(finding_scans, failures, cli.fail_on));
     }
     if cli.format == Format::Html {
-        print!("{}", html::render(&finding_scans, &failures, cli.fail_on));
+        print!("{}", html::render(finding_scans, failures, cli.fail_on));
     }
-    ExitCode::from(code)
 }
 
 /// What must match across the addresses of one host: offered protocols,
@@ -609,7 +686,7 @@ fn transport(cli: &Cli, addr: SocketAddr, proxy: Option<SocketAddr>) -> Transpor
     transport.read_timeout = Duration::from_secs(cli.read_timeout);
     transport.source = cli.source_ip;
     transport.proxy = proxy;
-    transport.starttls = cli.starttls;
+    transport.starttls = starttls(cli);
     transport
 }
 
@@ -1300,6 +1377,45 @@ mod tests {
             25
         );
         assert!(Cli::try_parse_from(["testls", "--starttls", "gopher", "a.example"]).is_err());
+    }
+
+    /// `--mx` implies `--starttls smtp` and port 25, keeps explicit ports,
+    /// and rejects other protocols and IP targets.
+    #[test]
+    fn mx_targets() {
+        let cli =
+            Cli::try_parse_from(["testls", "--mx", "a.example", "b.example:587"]).expect("mx");
+        assert_eq!(starttls(&cli), Some(Starttls::Smtp));
+        let names: Vec<String> = targets(&cli)
+            .expect("targets")
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(names, ["a.example:25", "b.example:587"]);
+        let cli = Cli::try_parse_from(["testls", "--mx", "--starttls", "smtp", "a.example"])
+            .expect("mx smtp");
+        assert!(targets(&cli).is_ok());
+        let cli = Cli::try_parse_from(["testls", "--mx", "--starttls", "imap", "a.example"])
+            .expect("mx imap");
+        assert!(targets(&cli).expect_err("imap").contains("--starttls smtp"));
+        for ip in ["192.0.2.1", "192.0.2.0/31", "[2001:db8::1]:25"] {
+            let cli = Cli::try_parse_from(["testls", "--mx", "a.example", ip]).expect("mx ip");
+            assert!(targets(&cli).expect_err(ip).contains("needs a domain name"));
+        }
+        let cli = Cli::try_parse_from(["testls", "a.example"]).expect("plain");
+        assert_eq!(starttls(&cli), None);
+    }
+
+    /// Without `--mx`, the targets are scanned unchanged.
+    #[tokio::test]
+    async fn mail_hosts_without_mx() {
+        let cli = Cli::try_parse_from(["testls", "a.example"]).expect("plain");
+        let (hosts, failed) = mail_hosts(&cli, targets(&cli).expect("targets"))
+            .await
+            .expect("hosts");
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].to_string(), "a.example:443");
+        assert!(failed.is_empty());
     }
 
     /// Target lists skip blanks and comments and name the bad line.

@@ -43,6 +43,9 @@ testls --starttls mysql db.example.com
 # XMPP addresses the stream to the SNI name; set --sni when the XMPP
 # domain differs from the host name
 testls --starttls xmpp --sni example.com xmpp.example.com
+
+# Every mail server (MX host) of a domain, with SMTP STARTTLS on port 25
+testls --mx example.com
 ```
 
 ## Connection control
