@@ -4,7 +4,7 @@ State left by the last agent session for the next one. Read this right
 after [AGENTS.md](../AGENTS.md) (then [agent-workflow.md](agent-workflow.md)
 if `gh` is allowed); update it when a session ends.
 
-## State (2026-10-28)
+## State (2026-10-29)
 
 - Latest release **v0.4.3** (GitHub release, container image
   `ghcr.io/kjpopov/testls:0.4.3`, Homebrew/Scoop in-repo, Marketplace action).
@@ -12,6 +12,8 @@ if `gh` is allowed); update it when a session ends.
 - `main` has unreleased v0.5 work: `--starttls
   smtp|imap|pop3|ftp|xmpp|ldap|postgres|mysql` (PRs #108–#115, decisions
   #68–#75). Next decision log number: **#76**.
+- PLAN v0.5 has a new item (PR #116): upload coverage to Codecov; needs
+  the maintainer to enable the Codecov app first.
 - STARTTLS lives in `testls-probe/src/starttls.rs`; `Transport::connect`
   runs it after TCP/proxy connect, failures are `ProbeError::Connect`.
   `Transport` is no longer `Copy` (has `host` for XMPP).
@@ -34,11 +36,26 @@ if `gh` is allowed); update it when a session ends.
 
 v0.5 in PLAN.md, suggested order:
 
-1. `--mx` (needs SMTP STARTTLS and an MX lookup without new heavy deps; check
-   `cargo deny` before adding a resolver crate).
-2. Intrusive checks behind `--intrusive` (Heartbleed, CCS injection,
+1. `--mx`, probe PR #119 (`feat/mx`, `MxResolver`). Maintainer chose
+   `hickory-resolver` 0.26 (workspace dep, `default-features = false`,
+   features `tokio`, `system-config`; ~100 new lockfile crates, `cargo deny`
+   passes). Plan: `testls-probe/src/mx.rs` with a resolver built from system
+   config (`TokioResolver::builder_tokio()`, timeout from
+   `--connect-timeout`) plus a test constructor pointing at a fake UDP DNS
+   server (`NameServerConfig::udp(ip)`, then set `port` on each of its
+   `connections`, passed to `ResolverConfig::from_name_servers`; answers built with `hickory_resolver::proto::op::Message`).
+   Look up the FQDN (trailing dot, no search domains); sort by preference
+   then name, lowercase, dedupe; null MX (`.`, RFC 7505) = error "accepts no
+   mail"; no MX records = fall back to the domain itself (RFC 5321 §5.1);
+   NXDOMAIN = error. CLI: `--mx` implies `--starttls smtp` (reject other
+   `--starttls`), turns each name target into its MX hosts on port 25 (keep
+   an explicit port), rejects IP/CIDR targets; lookup failures are
+   per-target `Outcome::failed` (exit 2), hook in `scan_all`'s target loop.
+   Decision #76 and docs go in the CLI PR, once the design is final.
+2. Codecov upload (once the maintainer enabled the app).
+3. Intrusive checks behind `--intrusive` (Heartbleed, CCS injection,
    Ticketbleed, ROBOT), one PR each.
-3. Application-layer checks (BREACH, ALPACA, Opossum), then grading.
+4. Application-layer checks (BREACH, ALPACA, Opossum), then grading.
 
 Open questions in PLAN.md (default profile runtime, politeness/rate limits)
 still need a decision before grading.
@@ -61,4 +78,7 @@ still need a decision before grading.
   vsftpd needs `init: true` under Docker. CI container logs:
   `gh run view RUN --log --job JOB | grep "<svc>-1"`.
 - CodeRabbit sometimes answers in issue comments or posts empty COMMENTED
-  reviews; check both before assuming nothing changed.
+  reviews; check both before assuming nothing changed. If it never reviews
+  a PR (seen on docs-only #116), comment `@coderabbitai review`.
+- hickory 0.26 sources are in `~/.cargo/registry/src/*/hickory-*-0.26.3`;
+  grep them for API details (docs.rs lags).
