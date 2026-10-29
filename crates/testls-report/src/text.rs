@@ -264,7 +264,7 @@ pub fn revocation(section: &Result<Vec<RevocationCheck>, String>, paint: Painter
 }
 
 /// Escapes control characters (e.g. terminal escape sequences) in text
-/// taken from the scanned server's certificate so it is safe to print.
+/// taken from the scanned server so it is safe to print.
 fn printable(text: &str) -> String {
     text.chars()
         .map(|c| {
@@ -303,7 +303,7 @@ pub fn http(section: &Result<HttpResponse, String>, paint: Painter) -> String {
     );
     for name in SECURITY_HEADERS {
         let line = match response.header(name) {
-            Some(value) => format!("{name:<26} {value}"),
+            Some(value) => format!("{name:<26} {}", printable(value)),
             None if name == "Strict-Transport-Security" => {
                 paint.severity(Severity::Low, &format!("{name:<26} not set"))
             }
@@ -325,7 +325,14 @@ fn http_extras(response: &HttpResponse) -> String {
         Ok(list) if list.is_empty() => "clear".to_owned(),
         Ok(list) => list
             .iter()
-            .map(|a| format!("{} {} (ma {})", a.protocol, a.authority, a.max_age))
+            .map(|a| {
+                format!(
+                    "{} {} (ma {})",
+                    printable(&a.protocol),
+                    printable(&a.authority),
+                    a.max_age
+                )
+            })
             .collect::<Vec<_>>()
             .join(", "),
         Err(_) => "invalid".to_owned(),
@@ -342,14 +349,14 @@ fn http_extras(response: &HttpResponse) -> String {
             attrs.push("HttpOnly".to_owned());
         }
         if let Some(s) = &cookie.same_site {
-            attrs.push(format!("SameSite={s}"));
+            attrs.push(format!("SameSite={}", printable(s)));
         }
         let attrs = if attrs.is_empty() {
             "no attributes".to_owned()
         } else {
             attrs.join(" ")
         };
-        let label = format!("Set-Cookie {}", cookie.name);
+        let label = format!("Set-Cookie {}", printable(&cookie.name));
         let _ = writeln!(out, "  {label:<26} {attrs}");
     }
     out
@@ -535,7 +542,7 @@ pub fn suppressed(suppressed: &[Suppressed], paint: Painter) -> String {
             "  {:<8} {} [{}] ({})",
             f.severity.as_str(),
             printable(&f.message),
-            f.id,
+            printable(&f.id),
             printable(&s.reason)
         );
     }
@@ -894,6 +901,17 @@ mod tests {
             headers: vec![header("alt-svc", "clear")],
         };
         assert_eq!(http_extras(&clear), "  Alt-Svc                    clear\n");
+        let hostile = HttpResponse {
+            status: 200,
+            headers: vec![
+                header("x-frame-options", "\u{9b}2J"),
+                header("alt-svc", "h3=\"\u{9b}2J:443\""),
+                header("set-cookie", "\u{9b}2J=1; SameSite=\u{9b}2J"),
+            ],
+        };
+        let out = http(&Ok(hostile), PLAIN);
+        assert!(!out.contains('\u{9b}'), "{out}");
+        assert_eq!(out.matches("\\u{9b}2J").count(), 2, "{out}");
     }
 
     /// Tolerance lines show each verdict, the tested version, and errors.
@@ -1057,5 +1075,10 @@ mod tests {
             suppressed(&list, PLAIN),
             "\nSuppressed\n  medium   TLS 1.0 is offered [protocol.tls10] (legacy clients)\n"
         );
+        let hostile = [Suppressed {
+            finding: Finding::new("\x1b[2J", Severity::Low, "m"),
+            reason: "r".to_owned(),
+        }];
+        assert!(suppressed(&hostile, PLAIN).contains("[\\u{1b}[2J]"));
     }
 }
