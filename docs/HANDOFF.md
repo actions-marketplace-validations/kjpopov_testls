@@ -42,10 +42,21 @@ if `gh` is allowed); update it when a session ends.
 
 v0.5 in PLAN.md, suggested order:
 
-1. Codecov upload (once the maintainer enabled the app).
-2. Intrusive checks behind `--intrusive` (Heartbleed, CCS injection,
+1. Security hardening from PR #117 (external audit by r4d1um). The
+   maintainer keeps #117 open as reference until the next release, then
+   closes it. Redo each accepted finding as its own PR with
+   `Co-authored-by: Stephan <dertoradium@googlemail.com>` and a CHANGELOG
+   "Security" entry. Review summary: PR #117 comment 6508947202. Decided:
+   revocation fetches block non-public endpoints by default plus an opt-in
+   flag, proxy keeps host names (#48); exit-code contract unchanged (only
+   errors can't be baselined); ML-DSA-only servers keep the chain result,
+   marked "signature not verified". Escaping is done (this PR); then
+   baseline severity, handshake signature, CRL partition scope, revocation
+   endpoint guard. The PR branch is fetched locally as `pr-117`.
+2. Codecov upload (once the maintainer enabled the app).
+3. Intrusive checks behind `--intrusive` (Heartbleed, CCS injection,
    Ticketbleed, ROBOT), one PR each.
-3. Application-layer checks (BREACH, ALPACA, Opossum), then grading.
+4. Application-layer checks (BREACH, ALPACA, Opossum), then grading.
 
 Open questions in PLAN.md (default profile runtime, politeness/rate limits)
 still need a decision before grading.

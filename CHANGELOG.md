@@ -22,6 +22,14 @@ All notable changes to `testls` are listed here. The format follows
   scan error for that target (exit code 2). IP and CIDR targets are
   rejected.
 
+### Security
+
+- Text reports and CSV escape control characters in server-supplied text
+  (error messages, findings, suppression reasons, targets, SNI,
+  vulnerability details, STARTTLS replies and XMPP stream errors), so a
+  malicious server cannot send terminal escape sequences. Reported by
+  @r4d1um in #117.
+
 ## [0.4.3] - 2026-10-27
 
 Patch release with a readable `--help` and the shorter README on the
