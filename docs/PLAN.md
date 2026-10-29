@@ -121,6 +121,17 @@ Two connection paths:
 - [x] STARTTLS: SMTP, IMAP, POP3, FTP, XMPP, LDAP, PostgreSQL, MySQL
   (`--starttls smtp|imap|pop3|ftp|xmpp|ldap|postgres|mysql`)
 - [x] `--mx`: scan a domain's mail exchangers (needs SMTP STARTTLS)
+- Security hardening from the external audit in PR #117 (r4d1um), highest
+  priority, one PR each, credited with `Co-authored-by`:
+  - [x] Escape control characters in all output (text, XMPP stream errors, CSV)
+  - Baselines respect severity; never baseline `*.error`, `*.incomplete`
+    or `cert.unparsable`
+  - Verify the server's handshake signature against its certificate;
+    ML-DSA-only servers keep their chain result, marked as not verified
+  - Partitioned CRLs: match the IDP distribution point against the
+    certificate's CRL DP (RFC 5280 §6.3.3)
+  - Revocation fetches: block non-public endpoints by default, opt-in flag
+    for internal CAs, proxy keeps host names (#48)
 - Intrusive checks behind `--intrusive`: Heartbleed, CCS injection,
   Ticketbleed, ROBOT
 - Application-layer checks: BREACH, ALPACA, Opossum

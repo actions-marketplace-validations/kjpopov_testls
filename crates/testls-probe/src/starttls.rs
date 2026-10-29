@@ -351,7 +351,10 @@ async fn xmpp(stream: &mut TcpStream, mut reader: Replies, host: &str) -> Result
     let features = reader.xml(stream, &["stream:features"]).await?;
     if !features.contains("<stream:features") {
         if let Some(condition) = stream_error(&features) {
-            return Err(error(format!("XMPP server sent stream error {condition}")));
+            return Err(error(format!(
+                "XMPP server sent stream error {}",
+                condition.escape_debug()
+            )));
         }
         return Err(error(format!(
             "XMPP server sent no stream features: {}",
@@ -601,6 +604,7 @@ fn expect(reply: &Reply, code: u16, step: &str) -> Result<(), ProbeError> {
         return Ok(());
     }
     let text = reply.lines.first().map_or("", String::as_str);
+    let text = text.escape_debug();
     Err(error(format!(
         "server answered {step} with {} {text}",
         reply.code
@@ -947,7 +951,7 @@ mod tests {
     /// errors.
     #[tokio::test]
     async fn xmpp_errors() {
-        let cases: [(XmppScript, &str); 9] = [
+        let cases: [(XmppScript, &str); 10] = [
             (
                 &[(
                     XMPP_OPEN,
@@ -975,6 +979,13 @@ mod tests {
                     b"<stream:stream><stream:error><host-unknown xmlns='urn:ietf:params:xml:ns:xmpp-streams'/></stream:error></stream:stream>",
                 )],
                 "stream error host-unknown",
+            ),
+            (
+                &[(
+                    XMPP_OPEN,
+                    b"<stream:stream><stream:error><bad\x1b[2J/></stream:error></stream:stream>",
+                )],
+                "stream error bad\\u{1b}[2J",
             ),
             (
                 &[(XMPP_OPEN, b"<stream:stream></stream:stream>")],
@@ -1031,6 +1042,19 @@ mod tests {
             };
             assert!(e.to_string().contains("exceeds"), "{e}");
         }
+    }
+
+    /// SMTP and FTP refusal diagnostics escape terminal control characters.
+    #[test]
+    fn refusal_controls_are_escaped() {
+        let reply = Reply {
+            code: 500,
+            lines: vec!["bad \x1b[2J\rhidden".into()],
+        };
+        let error = expect(&reply, 220, "greeting").unwrap_err().to_string();
+        assert!(!error.contains('\x1b'));
+        assert!(!error.contains('\r'));
+        assert!(error.contains("\\u{1b}"));
     }
 
     /// Runs `protocol` against each script and checks the error mentions
