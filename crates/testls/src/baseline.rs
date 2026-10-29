@@ -39,6 +39,16 @@ struct Document {
     target: DocumentTarget,
     /// Reported findings.
     findings: Vec<DocumentFinding>,
+    /// Suppressed findings; only their severities are validated.
+    #[serde(default)]
+    suppressed: Vec<DocumentSuppressed>,
+}
+
+/// One entry of `suppressed` in a report document.
+#[derive(Debug, Deserialize)]
+struct DocumentSuppressed {
+    /// Severity name.
+    severity: String,
 }
 
 /// `tool` of a report document.
@@ -68,6 +78,12 @@ struct DocumentFinding {
     severity: String,
     /// Finding message.
     message: String,
+}
+
+/// Parses a severity name from the baseline.
+fn severity(name: &str) -> Result<Severity, String> {
+    name.parse()
+        .map_err(|e| format!("invalid baseline severity: {e}"))
 }
 
 impl Baseline {
@@ -101,11 +117,11 @@ impl Baseline {
                     d.schema_version
                 ));
             }
+            for s in &d.suppressed {
+                severity(&s.severity)?;
+            }
             for f in d.findings {
-                let severity: Severity = f
-                    .severity
-                    .parse()
-                    .map_err(|e| format!("invalid baseline severity: {e}"))?;
+                let severity = severity(&f.severity)?;
                 known
                     .entry((d.target.input.clone(), f.id))
                     .and_modify(|old| *old = std::cmp::max(*old, severity))
@@ -227,6 +243,9 @@ mod tests {
             "highest wins"
         );
         assert!(Baseline::parse(&document("a", &["x"]).replace("low", "nonsense")).is_err());
+        let err = Baseline::parse(&document("a", &[]).replace("low", "nonsense"))
+            .expect_err("suppressed severity");
+        assert!(err.contains("invalid baseline severity"), "{err}");
     }
 
     /// Findings for failed or incomplete scans are never known.
