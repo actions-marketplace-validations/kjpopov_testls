@@ -29,6 +29,10 @@ All notable changes to `testls` are listed here. The format follows
   vulnerability details, STARTTLS replies and XMPP stream errors), so a
   malicious server cannot send terminal escape sequences. Reported by
   @r4d1um in #117.
+- `--baseline` treats a finding as known only if its severity has not risen
+  since the baseline, and never treats failed or incomplete measurements
+  (`*.error`, `*.incomplete`, `cert.unparsable`) as known. An invalid
+  severity in the baseline is a scan error. Reported by @r4d1um in #117.
 
 ## [0.4.3] - 2026-10-27
 

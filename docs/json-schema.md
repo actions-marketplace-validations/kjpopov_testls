@@ -213,7 +213,9 @@ reported.
 ### Suppressed finding
 
 A [finding](#finding) silenced by an active `.testls.toml` (or `--config`)
-entry, or listed for the same `target.input` in the `--baseline` report.
+entry, or listed for the same `target.input` in the `--baseline` report
+with the same or a higher severity (failed or incomplete measurements are
+never taken from the baseline).
 It does not count towards `--fail-on`.
 
 | Field | Type | Description |
