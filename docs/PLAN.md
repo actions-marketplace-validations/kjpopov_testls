@@ -125,6 +125,8 @@ Two connection paths:
   Ticketbleed, ROBOT
 - Application-layer checks: BREACH, ALPACA, Opossum
 - Own grading model (documented, not SSL Labs-compatible)
+- Upload coverage to Codecov (PR comments and history, like hickory-dns);
+  revisits #22, needs the maintainer to enable the Codecov app
 
 ### v0.6 — Web service
 - `testls serve`: axum, binds 127.0.0.1 by default
