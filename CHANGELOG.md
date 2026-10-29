@@ -15,6 +15,12 @@ All notable changes to `testls` are listed here. The format follows
   database servers can be scanned. Targets without a port use the
   protocol's standard port (25, 143, 110, 21, 5222, 389, 5432, 3306); HTTP
   headers are not checked. XMPP addresses the stream to the SNI name.
+- `--mx` scans the mail servers of each target domain instead of the
+  domain: its MX hosts, sorted by preference, each with `--starttls smtp`
+  on port 25 (or the target's port). A domain without MX records is
+  scanned itself; a null MX, an unknown domain or a failed lookup is a
+  scan error for that target (exit code 2). IP and CIDR targets are
+  rejected.
 
 ## [0.4.3] - 2026-10-27
 
