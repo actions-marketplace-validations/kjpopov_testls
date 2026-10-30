@@ -136,8 +136,8 @@ Two connection paths:
   Ticketbleed, ROBOT
 - Application-layer checks: BREACH, ALPACA, Opossum
 - Own grading model (documented, not SSL Labs-compatible)
-- Upload coverage to Codecov (PR comments and history, like hickory-dns);
-  revisits #22, needs the maintainer to enable the Codecov app
+- [x] Upload coverage to Codecov (PR comments and history, like hickory-dns);
+  revisits #22
 
 ### v0.6 — Web service
 - `testls serve`: axum, binds 127.0.0.1 by default
@@ -156,7 +156,8 @@ Two connection paths:
   containers with specific protocol/cipher sets (podman or docker);
   `crates/testls/tests/servers.rs` scans them (`--ignored`, own CI job).
 - Coverage: `cargo llvm-cov --workspace -- --include-ignored` with the
-  test servers running; reported in the job summary, no threshold.
+  test servers running; reported in the job summary and on Codecov
+  (PR comment, history), no threshold.
   The JSON renderer is checked field by field against expected documents
 - Opt-in live tests against badssl.com (not in default CI)
 
@@ -262,3 +263,4 @@ Not scheduled; pulled into a milestone when someone picks it up.
 | 79 | The certificate fetch checks the handshake signature (TLS 1.2 ServerKeyExchange, TLS 1.3 CertificateVerify) against the leaf key with the ring provider's algorithms. A signature that is wrong for the key fails the fetch (`cert.error`). Only a leaf key ring cannot check (ML-DSA, RSA under 2048 bits, P-521, Ed448) signed with a scheme that fits that key is accepted, reported as `cert.signature_unverified` (info); any other failure, including a key/scheme mismatch, fails the fetch. The fetch advertises the P-521, Ed448 and ML-DSA schemes next to the provider's, so weak and post-quantum servers keep their chain result. In TLS 1.2 an ECDSA scheme names only the hash, so P-521 with any ECDSA scheme and any curve with SHA-512 count as fitting; rustls only lets a TLS 1.2 suite use its own signature algorithm, so Ed448 still fails the TLS 1.2 fetch. The same verifier serves the HTTP and session-ticket probes. Amends #60; from the PR #117 audit | Without the check, a man-in-the-middle relaying a real server's certificate is reported as that server. Rejecting every unverifiable signature would hide exactly the legacy and ML-DSA servers testls must report on |
 | 80 | A CRL with an Issuing Distribution Point naming a distribution point covers only that partition: one of its names must match a name in a distribution point of the leaf's CRL Distribution Points (full names share a name, relative names are equal; points with a `cRLIssuer` are ignored), otherwise the CRL is rejected as covering another partition (RFC 5280 §6.3.3 (b)(2)). An `onlyContainsUserCerts` CRL is rejected for a CA leaf. From the PR #117 audit | Partitioned CRLs are common at public CAs; ignoring the distribution point let a correctly signed CRL for another partition report a revoked certificate as good, while rejecting every partitioned CRL would break revocation checks for those CAs |
 | 81 | Revocation lookups refuse non-public endpoints by default: addresses in the IANA special-purpose registries that are not globally reachable (loopback, private, link-local, shared, documentation, benchmarking, multicast, reserved; RFC 6890), IPv4-mapped and NAT64 addresses judged by the embedded IPv4 address, and `localhost` names (RFC 6761 §6.3). A direct lookup skips such resolved addresses; through `--proxy` the host name still goes to the proxy (#48), so only IP literals and `localhost` names are checked there, and every other numeric host form (`127.1`, `0x7f000001`, scoped `%` addresses) is refused, even a public one. `--revocation-allow-private` lifts the check for internal CAs. Any port stays allowed. From the PR #117 audit | The scanned server's certificate chooses the OCSP and CRL URLs, so without the check a hostile server could make the scanner reach cloud metadata or internal services. Resolving names locally for proxied lookups would break corporate proxies (#48), and port limits would break CAs that serve OCSP on other ports |
+| 82 | The coverage workflow also uploads `lcov.info` to Codecov from a separate `upload` job in the GitHub environment `codecov`, which holds `CODECOV_TOKEN`; the test job never sees the token. `codecov.yml` makes the project and patch statuses informational and enables the PR comment. A failed upload does not fail CI. The job summary and lcov artifact stay. Amends #22 | PR comments and history show coverage trends without opening artefacts; keeping the token out of the job that runs PR code and the test servers limits what a malicious change could steal, and informational statuses keep #22's "no threshold" rule |
