@@ -6,17 +6,20 @@ otherwise push branches and stop (see [AGENTS.md](../AGENTS.md)).
 
 ## Loop per roadmap item
 
-1. Branch from an up-to-date `main` (`git checkout main && git pull --ff-only`).
-2. Split the item into small PRs, usually **wire/data → probe → checks →
+1. If the roadmap item leaves design choices open, ask the maintainer
+   before coding and record the answers in the PLAN decision log.
+2. Branch from an up-to-date `main` (`git checkout main && git pull --ff-only`).
+3. Split the item into small PRs, usually **wire/data → probe → checks →
    report/CLI** (docs, `docs/json-schema.md`, `CHANGELOG.md`, PLAN checkbox and
    decision log go into the last PR).
-3. Before pushing: everything in AGENTS.md "Before you push", plus
-   integration tests for scanner changes.
-4. `git push -u origin BRANCH`, then
+4. Before pushing: everything in AGENTS.md "Before you push", plus
+   integration tests for scanner changes. Rebase on fresh `main` and recheck
+   the last PLAN decision number; parallel PRs can claim the same one.
+5. `git push -u origin BRANCH`, then
    `gh pr create --base main --title "area: subject" --body "..."`.
-5. Wait for CI and CodeRabbit (5-10 min), fix comments, repeat. One review
+6. Wait for CI and CodeRabbit (5-10 min), fix comments, repeat. One review
    round = one fix commit (see "Answering comments").
-6. Merge when green and CodeRabbit is happy (see below):
+7. Merge when green and CodeRabbit is happy (see below):
    `gh pr merge N --merge --delete-branch`, then pull `main`.
 
 Stacked branches: open the PR for the next layer only after the lower one is
