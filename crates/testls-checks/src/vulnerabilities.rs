@@ -552,11 +552,12 @@ pub fn assess_vulnerabilities(
         raccoon(&inputs),
         breach(&inputs),
         // Strict ALPN is one of the ALPACA countermeasures (Brinkmann et
-        // al., USENIX Security 2021; RFC 7301 section 3.2).
+        // al., USENIX Security 2021; RFC 7301 section 3.2). The probe uses
+        // one enumerated version, so gaps in other versions don't matter.
         feature_vuln(
             &inputs,
             ("alpaca", "ALPACA", "vuln.alpaca"),
-            all,
+            |_| false,
             |f| (true, f.strict_alpn),
             false,
             [
@@ -874,7 +875,7 @@ mod tests {
             secure_renegotiation: Some(true),
             fallback_version: None,
             fallback_scsv: None,
-            strict_alpn: None,
+            strict_alpn: Some(true),
         };
         let c = [ciphers(ProtocolVersion::TLS12, &[ECDHE_GCM])];
         let list = assess_vulnerabilities(&p, &c, &[], Some(&features), None);
@@ -882,6 +883,8 @@ mod tests {
         for id in ["renegotiation", "fallback_scsv"] {
             assert_eq!(status(&list, id), VulnStatus::NotTested, "{id}");
         }
+        // ALPACA only needs the version it probed.
+        assert_eq!(status(&list, "alpaca"), VulnStatus::NotVulnerable);
     }
 
     /// Vulnerable verdicts point to the cipher finding that is emitted.
