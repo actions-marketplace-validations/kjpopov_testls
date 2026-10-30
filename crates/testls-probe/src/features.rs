@@ -286,7 +286,12 @@ mod tests {
             behaviour.deflate && methods.contains(&COMPRESSION_DEFLATE),
         ));
         let mut exts = Vec::new();
-        if let Some(info) = behaviour.renegotiation {
+        // An SSLv3 hello has no extensions; only the SCSV earns a reply.
+        let ssl3 = version == 0x0300;
+        if let Some(info) = behaviour
+            .renegotiation
+            .filter(|_| !ssl3 || suites.contains(&EMPTY_RENEGOTIATION_INFO_SCSV))
+        {
             exts.extend([0xff, 0x01]);
             exts.extend(u16::try_from(info.len()).unwrap().to_be_bytes());
             exts.extend(info);
@@ -483,7 +488,8 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
-            while let Ok((mut stream, _)) = listener.accept().await {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
                 let mut buf = [0u8; 512];
                 let _ = stream.read(&mut buf).await;
             }
@@ -530,7 +536,8 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
-            while let Ok((mut s, _)) = listener.accept().await {
+            loop {
+                let (mut s, _) = listener.accept().await.unwrap();
                 let mut first = [0; 1];
                 let _ = s.read_exact(&mut first).await;
                 // Closing with unread data makes the kernel send a reset.

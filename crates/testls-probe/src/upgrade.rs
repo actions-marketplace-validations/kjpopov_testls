@@ -245,7 +245,9 @@ mod tests {
             // Read until the probe gives up and closes.
             while s.read(&mut [0; 1024]).await.is_ok_and(|n| n > 0) {}
         });
-        let r = upgrade_on(&transport, None).await;
+        let r = tokio::time::timeout(Duration::from_secs(5), upgrade_on(&transport, None))
+            .await
+            .expect("probe must enforce read_timeout");
         assert_eq!(r.accepted, None);
 
         for reply in [&b"HTTP/1.1 101 Switching"[..], b"HTT"] {
