@@ -30,14 +30,17 @@ jobs:
           components: llvm-tools-preview
       - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
-          tool: cargo-llvm-cov@0.9.1
+          tool: cargo-llvm-cov@0.9.1,cargo-nextest@0.9.150
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Generate OCSP test fixtures
         shell: bash
         run: scripts/gen-ocsp-fixtures.sh
       - run: docker compose -f tests/servers/compose.yaml up -d --build
+      # nextest runs every test, ignored ones included, and writes a JUnit
+      # report for Codecov Test Analytics (.config/nextest.toml, profile ci).
+      # The workspace has no doctests, so nothing is lost by skipping them.
       - name: Run unit and integration tests with coverage
-        run: cargo llvm-cov --workspace --locked --lcov --output-path lcov.info -- --include-ignored
+        run: cargo llvm-cov nextest --workspace --locked --profile ci --run-ignored all --lcov --output-path lcov.info
       - name: Write the summary
         run: |
           {
@@ -52,6 +55,15 @@ jobs:
           name: lcov
           path: lcov.info
           if-no-files-found: error
+      # Failed runs matter most to Test Analytics, so the report is kept
+      # whenever the job was not cancelled. An explicit path (no wildcard)
+      # puts junit.xml at the artifact root.
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: junit
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: warn
       - if: always()
         run: docker compose -f tests/servers/compose.yaml down
 
@@ -59,25 +71,43 @@ jobs:
   # `codecov`) is never present while the tests run code from the pull
   # request. Fork pull requests get no secrets and upload tokenless.
   # Dependabot gets no environment secrets either, so its runs skip the
-  # upload.
+  # upload. Test results are uploaded even when the tests failed; coverage
+  # only after a successful run.
   upload:
     needs: coverage
-    if: github.actor != 'dependabot[bot]'
+    if: ${{ !cancelled() && github.actor != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     environment: codecov
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - if: needs.coverage.result == 'success'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: lcov
+      # The JUnit report is missing when the job failed before the tests ran.
+      - id: junit
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        continue-on-error: true
+        with:
+          name: junit
       # fail_ci_if_error makes the action stop if the CLI signature check
       # fails; continue-on-error keeps a Codecov outage from failing CI.
-      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+      - if: needs.coverage.result == 'success'
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         continue-on-error: true
         with:
           files: lcov.info
+          disable_search: true
+          fail_ci_if_error: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+      - if: steps.junit.outcome == 'success'
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        continue-on-error: true
+        with:
+          report_type: test_results
+          files: junit.xml
           disable_search: true
           fail_ci_if_error: true
           token: ${{ secrets.CODECOV_TOKEN }}

@@ -16,7 +16,8 @@ if `gh` is allowed); update it when a session ends.
   PR #117 security hardening (PRs #122–#126, decisions #78–#81, CHANGELOG
   "Security" section), Codecov upload (PR #128, decision #82) and the
   application-layer checks: BREACH (#129, decision #83), ALPACA (#130,
-  #84), Opossum (#131, #85). Next decision log number: **#86**.
+  #84), Opossum (#131, #85), Codecov Test Analytics (branch
+  `ci/test-analytics`, decision #86). Next decision log number: **#87**.
 - Application-layer code map: BREACH reads `Content-Encoding` from the
   existing GET (`testls-probe/src/http.rs` sends `Accept-Encoding`); ALPACA
   is `HandshakeFeatures::strict_alpn` in `testls-probe/src/features.rs`

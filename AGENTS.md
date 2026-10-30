@@ -41,7 +41,8 @@ podman compose -f tests/servers/compose.yaml down
 ```
 
 To see coverage locally, run `cargo llvm-cov --workspace -- --include-ignored`
-while the servers are up (CI publishes the same report in the job summary and on Codecov).
+while the servers are up (CI publishes the same report in the job summary and on Codecov;
+it runs `cargo llvm-cov nextest` so Codecov Test Analytics gets a JUnit report).
 Parser changes in `testls-wire` should also survive a short fuzz run; see
 [fuzz/README.md](fuzz/README.md).
 
