@@ -56,12 +56,13 @@ jobs:
           path: lcov.info
           if-no-files-found: error
       # Failed runs matter most to Test Analytics, so the report is kept
-      # whenever the job was not cancelled.
+      # whenever the job was not cancelled. An explicit path (no wildcard)
+      # puts junit.xml at the artifact root.
       - if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: junit
-          path: target/**/nextest/ci/junit.xml
+          path: target/llvm-cov-target/nextest/ci/junit.xml
           if-no-files-found: warn
       - if: always()
         run: docker compose -f tests/servers/compose.yaml down
