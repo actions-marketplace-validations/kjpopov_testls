@@ -120,6 +120,7 @@ mod tests {
             max_body: 0,
             source: None,
             proxy: None,
+            allow_private: true,
         }
     }
 
@@ -223,6 +224,28 @@ mod tests {
             checks[0].outcome.as_ref().unwrap_err(),
             "issuer certificate missing from chain"
         );
+    }
+
+    /// By default, URLs on non-public addresses are refused and reported as
+    /// failed attempts.
+    #[tokio::test]
+    async fn private_endpoints_refused() {
+        let urls = RevocationUrls {
+            ocsp: vec!["http://169.254.169.254/".into()],
+            crl: vec!["http://localhost/ca.crl".into()],
+        };
+        let guarded = Fetcher {
+            allow_private: false,
+            ..fetcher()
+        };
+        let checks = check_revocation(guarded, &[LEAF.to_vec(), CA.to_vec()], &urls, now()).await;
+        assert_eq!(checks.len(), 2);
+        for check in &checks {
+            assert_eq!(
+                check.outcome.as_ref().unwrap_err(),
+                "non-public address refused"
+            );
+        }
     }
 
     /// At most [`MAX_URLS`] URLs are tried per method.

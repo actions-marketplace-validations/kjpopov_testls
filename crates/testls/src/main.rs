@@ -101,6 +101,13 @@ struct Cli {
     #[arg(long)]
     revocation: bool,
 
+    /// Let revocation lookups reach loopback, private, link-local and other
+    /// non-public addresses, e.g. for an internal CA. The scanned server's
+    /// certificate chooses these URLs, so they are refused by default, as are
+    /// numeric host forms like `127.1` that cannot be checked via `--proxy`.
+    #[arg(long)]
+    revocation_allow_private: bool,
+
     /// How much to scan: `quick` checks protocols, cipher suites and the
     /// certificate only; `default` runs every probe of the target; `full`
     /// adds `--revocation` and `--all-addresses`.
@@ -748,7 +755,8 @@ async fn scan(
     findings.extend(cert_findings);
 
     let revocation = if cli.revocation || cli.profile.full() {
-        let (section, more) = revocation_section(&transport, chain.as_deref()).await;
+        let (section, more) =
+            revocation_section(&transport, chain.as_deref(), cli.revocation_allow_private).await;
         show(format!("\n{}", text::revocation(&section, paint)));
         findings.extend(more);
         Some(section)
@@ -1140,10 +1148,12 @@ async fn certificate_section(
 /// CRLs. Without a chain or with unreadable URLs the check cannot run,
 /// which is informational.
 ///
-/// Requests use the connect and read timeouts of `transport`.
+/// Requests use the connect and read timeouts of `transport`; non-public
+/// endpoints are refused unless `allow_private` is set.
 async fn revocation_section(
     transport: &Transport,
     chain: Option<&[Vec<u8>]>,
+    allow_private: bool,
 ) -> (Result<Vec<RevocationCheck>, String>, Vec<Finding>) {
     let fetcher = Fetcher {
         connect_timeout: transport.connect_timeout,
@@ -1151,6 +1161,7 @@ async fn revocation_section(
         max_body: 0,
         source: transport.source,
         proxy: transport.proxy,
+        allow_private,
     };
     let urls = chain
         .ok_or_else(|| "certificate chain could not be retrieved".to_owned())
@@ -1611,13 +1622,13 @@ mod tests {
     #[tokio::test]
     async fn revocation_without_chain() {
         let transport = Transport::new(SocketAddr::from(([127, 0, 0, 1], 9)));
-        let (section, findings) = revocation_section(&transport, None).await;
+        let (section, findings) = revocation_section(&transport, None, false).await;
         assert_eq!(
             section.unwrap_err(),
             "certificate chain could not be retrieved"
         );
         assert_eq!(findings[0].id, "revocation.error");
-        let (section, findings) = revocation_section(&transport, Some(&[])).await;
+        let (section, findings) = revocation_section(&transport, Some(&[]), false).await;
         assert_eq!(section.unwrap_err(), "empty certificate chain");
         assert_eq!(findings[0].severity, Severity::Info);
     }

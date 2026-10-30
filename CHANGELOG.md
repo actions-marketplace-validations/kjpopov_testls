@@ -41,6 +41,10 @@ All notable changes to `testls` are listed here. The format follows
 - A partitioned CRL is used only if its distribution point matches one in the
   certificate, so a CRL for another partition can no longer report a revoked
   certificate as good. Reported by @r4d1um in #117.
+- Revocation lookups refuse loopback, private, link-local and other
+  non-public addresses, so a certificate cannot point the scanner at internal
+  services. `--revocation-allow-private` allows them for internal CAs.
+  Reported by @r4d1um in #117.
 
 ## [0.4.3] - 2026-10-27
 
