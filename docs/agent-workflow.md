@@ -6,17 +6,21 @@ otherwise push branches and stop (see [AGENTS.md](../AGENTS.md)).
 
 ## Loop per roadmap item
 
-1. Branch from an up-to-date `main` (`git checkout main && git pull --ff-only`).
-2. Split the item into small PRs, usually **wire/data → probe → checks →
+1. If the roadmap item leaves design choices open, ask the maintainer
+   before coding and record the answers in the PLAN decision log.
+2. Branch from an up-to-date `main` (`git checkout main && git pull --ff-only`).
+3. Split the item into small PRs, usually **wire/data → probe → checks →
    report/CLI** (docs, `docs/json-schema.md`, `CHANGELOG.md`, PLAN checkbox and
    decision log go into the last PR).
-3. Before pushing: everything in AGENTS.md "Before you push", plus
-   integration tests for scanner changes.
-4. `git push -u origin BRANCH`, then
+4. Before pushing: rebase on fresh `main`, then run everything in AGENTS.md
+   "Before you push", plus integration tests for scanner changes. Recheck the
+   last PLAN decision number; if another PR took yours, renumber to the next
+   free one (and fix references) before merging.
+5. `git push -u origin BRANCH`, then
    `gh pr create --base main --title "area: subject" --body "..."`.
-5. Wait for CI and CodeRabbit (5-10 min), fix comments, repeat. One review
+6. Wait for CI and CodeRabbit (5-10 min), fix comments, repeat. One review
    round = one fix commit (see "Answering comments").
-6. Merge when green and CodeRabbit is happy (see below):
+7. Merge when green and CodeRabbit is happy (see below):
    `gh pr merge N --merge --delete-branch`, then pull `main`.
 
 Stacked branches: open the PR for the next layer only after the lower one is
@@ -119,8 +123,9 @@ timeout. Work on the next branch while a review runs.
    (`cargo publish --workspace`), add trusted publishing for
    `kjpopov/testls`, workflow `release.yml`, environment `crates-io` to
    every `testls*` crate on crates.io, create that GitHub environment, and
-   set the repository variable `CRATES_IO_TRUSTED_PUBLISHING=true`. Until
-   then the job is skipped. If it fails halfway, rerun it: crates already
+   set the repository variable `CRATES_IO_TRUSTED_PUBLISHING=true` (not an
+   environment variable: the job's `if:` runs before the environment
+   applies). Until then the job is skipped. If it fails halfway, rerun it: crates already
    published at that version are skipped. Agents never publish to crates.io.
 5. Packages PR `chore/packages-X.Y.Z` once the release exists:
    `gh release download vX.Y.Z -p SHA256SUMS -O target/SHA256SUMS` and

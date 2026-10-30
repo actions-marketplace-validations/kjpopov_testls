@@ -21,7 +21,7 @@ PCI DSS, CNSA 2.0).
 ## GitHub Action
 
 ```yaml
-- uses: kjpopov/testls@v0.4.3
+- uses: kjpopov/testls@v0.5.0
   with:
     args: --fail-on medium example.com
 ```
@@ -64,8 +64,7 @@ at least one, `2` the scan failed.
 - [JSON report format](docs/json-schema.md)
 - [Roadmap and decisions](docs/PLAN.md), [changelog](CHANGELOG.md)
 
-Next: STARTTLS, intrusive checks and grading (v0.5), then a local web
-service with a REST API and browser UI (v0.6).
+Next: a local web service with a REST API and browser UI (v0.6).
 
 ## Responsible use
 
