@@ -8,10 +8,13 @@
 //! the server's best version offers only an unknown ALPN protocol, which a
 //! strict server refuses with `no_application_protocol` (RFC 7301,
 //! section 3.2); the ALPACA paper names strict ALPN as a countermeasure to
-//! cross-protocol attacks.
+//! cross-protocol attacks. At TLS 1.3 the answer is encrypted, so that
+//! probe is a full rustls handshake instead.
 
+use rustls::AlertDescription;
 use testls_wire::{Alert, ClientHello, Extension, ProtocolVersion, ServerHello, ext};
 
+use crate::certificates::{client_config, connect_tls};
 use crate::hello::{EMPTY_RENEGOTIATION_INFO_SCSV, FALLBACK_SCSV, client_hello};
 use crate::{CipherResult, HelloResponse, ProbeError, Transport};
 
@@ -168,24 +171,62 @@ pub async fn probe_features(
         .first()
         .filter(|c| c.version > ProtocolVersion::SSL3)
     {
-        let suites = suites_of(best);
-        let mut hello = client_hello(best.version, suites.clone(), sni);
-        hello.extensions.push(Extension::Raw {
-            typ: ext::ALPN,
-            data: UNKNOWN_ALPN.to_vec(),
-        });
-        let response = send(transport, &hello).await.ok().flatten();
-        features.strict_alpn = match &response {
-            Some(HelloResponse::Alert(a)) if a.description == Alert::NO_APPLICATION_PROTOCOL => {
-                Some(true)
-            }
-            r => accepted(best.version, &suites, r.as_ref())
-                .ok()
-                .flatten()
-                .map(|_| false),
+        features.strict_alpn = if best.version >= ProtocolVersion::TLS13 {
+            tls13_strict_alpn(transport, sni).await
+        } else {
+            legacy_strict_alpn(transport, best, sni).await
         };
     }
     Ok(features)
+}
+
+/// Strict ALPN up to TLS 1.2, where the server answers ALPN in its
+/// `ServerHello` (RFC 7301, section 3.1), so a raw hello at `best`'s
+/// version shows the result.
+async fn legacy_strict_alpn(
+    transport: &Transport,
+    best: &CipherResult,
+    sni: Option<&str>,
+) -> Option<bool> {
+    let suites = suites_of(best);
+    let mut hello = client_hello(best.version, suites.clone(), sni);
+    hello.extensions.push(Extension::Raw {
+        typ: ext::ALPN,
+        data: UNKNOWN_ALPN.to_vec(),
+    });
+    match send(transport, &hello).await.ok().flatten() {
+        Some(HelloResponse::Alert(a)) if a.description == Alert::NO_APPLICATION_PROTOCOL => {
+            Some(true)
+        }
+        r => accepted(best.version, &suites, r.as_ref())
+            .ok()
+            .flatten()
+            .map(|_| false),
+    }
+}
+
+/// Strict ALPN over TLS 1.3, where the server's ALPN answer travels in the
+/// encrypted `EncryptedExtensions` (RFC 8446, section 4.3.1) and a refusal
+/// may follow the `ServerHello`, so only a full rustls handshake shows it.
+///
+/// `Some(true)` when the server sends `no_application_protocol`,
+/// `Some(false)` when the handshake completes, `None` on any other failure.
+async fn tls13_strict_alpn(transport: &Transport, sni: Option<&str>) -> Option<bool> {
+    let mut config = client_config();
+    config.alpn_protocols = vec![UNKNOWN_ALPN[3..].to_vec()];
+    match connect_tls(transport, sni, config).await {
+        Ok(_) => Some(false),
+        Err(ProbeError::Io(e)) => {
+            let refused = e
+                .get_ref()
+                .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+                .is_some_and(|e| {
+                    *e == rustls::Error::AlertReceived(AlertDescription::NoApplicationProtocol)
+                });
+            refused.then_some(true)
+        }
+        Err(_) => None,
+    }
 }
 
 #[cfg(test)]
@@ -381,6 +422,58 @@ mod tests {
         assert_eq!(f.fallback_version, Some(ProtocolVersion::TLS11));
         assert_eq!(f.fallback_scsv, None);
         assert_eq!(f.strict_alpn, None);
+    }
+
+    /// Runs a TLS 1.3 server that accepts handshakes forever, with
+    /// `alpn` as its ALPN protocols (none means ALPN is ignored).
+    async fn serve_tls13(alpn: &[&[u8]]) -> SocketAddr {
+        use rustls::ServerConfig;
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+        use std::sync::Arc;
+        use tokio_rustls::TlsAcceptor;
+
+        let mut config =
+            ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_protocol_versions(&[&rustls::version::TLS13])
+                .unwrap()
+                .with_no_client_auth()
+                .with_single_cert(
+                    vec![CertificateDer::from(
+                        include_bytes!("testdata/localhost.cert.der").to_vec(),
+                    )],
+                    PrivateKeyDer::try_from(include_bytes!("testdata/localhost.key.der").to_vec())
+                        .unwrap(),
+                )
+                .unwrap();
+        config.alpn_protocols = alpn.iter().map(|p| p.to_vec()).collect();
+        let acceptor = TlsAcceptor::from(Arc::new(config));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (s, _) = listener.accept().await.unwrap();
+                let _ = acceptor.accept(s).await;
+            }
+        });
+        addr
+    }
+
+    /// TLS 1.3 ALPN is read from a full handshake: a refusal after the
+    /// `ServerHello` counts as strict, a completed handshake as not.
+    #[tokio::test]
+    async fn tls13_alpn() {
+        let tls13 = [CipherResult {
+            version: ProtocolVersion::TLS13,
+            suites: vec![0x1301],
+            order: CipherOrder::NotApplicable,
+        }];
+        for (alpn, expected) in [(&[&b"h2"[..]][..], true), (&[][..], false)] {
+            let addr = serve_tls13(alpn).await;
+            let f = probe_features(&Transport::new(addr), &tls13, Some("localhost"))
+                .await
+                .unwrap();
+            assert_eq!(f.strict_alpn, Some(expected), "{alpn:?}");
+        }
     }
 
     /// With a single version there is nothing to fall back from, and a
