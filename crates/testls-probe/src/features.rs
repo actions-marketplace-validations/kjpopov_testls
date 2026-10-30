@@ -286,7 +286,13 @@ mod tests {
             behaviour.deflate && methods.contains(&COMPRESSION_DEFLATE),
         ));
         let mut exts = Vec::new();
-        if let Some(info) = behaviour.renegotiation {
+        // An SSLv3 hello has no extensions; only the SCSV earns a reply
+        // (RFC 5746 §4.5).
+        let ssl3 = version == 0x0300;
+        if let Some(info) = behaviour
+            .renegotiation
+            .filter(|_| !ssl3 || suites.contains(&EMPTY_RENEGOTIATION_INFO_SCSV))
+        {
             exts.extend([0xff, 0x01]);
             exts.extend(u16::try_from(info.len()).unwrap().to_be_bytes());
             exts.extend(info);
@@ -483,7 +489,8 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
-            while let Ok((mut stream, _)) = listener.accept().await {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
                 let mut buf = [0u8; 512];
                 let _ = stream.read(&mut buf).await;
             }
@@ -497,6 +504,77 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(f.strict_alpn, None);
+    }
+
+    /// An SSLv3 hello signals secure renegotiation with the SCSV, since it
+    /// carries no extensions.
+    #[tokio::test]
+    async fn ssl3_renegotiation_scsv() {
+        let addr = serve(Behaviour {
+            deflate: false,
+            renegotiation: Some(&[0]),
+            fallback: true,
+            alpn: true,
+        })
+        .await;
+        let ssl3 = [CipherResult {
+            version: ProtocolVersion::SSL3,
+            suites: vec![0x000a],
+            order: CipherOrder::NotApplicable,
+        }];
+        let f = probe_features(&Transport::new(addr), &ssl3, None)
+            .await
+            .unwrap();
+        assert_eq!(f.legacy_version, Some(ProtocolVersion::SSL3));
+        assert_eq!(f.compression, Some(false));
+        assert_eq!(f.secure_renegotiation, Some(true));
+    }
+
+    /// A connection reset counts as a refused hello, leaving the verdicts
+    /// untested instead of failing the probe.
+    #[tokio::test]
+    async fn reset_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (mut s, _) = listener.accept().await.unwrap();
+                let mut first = [0; 1];
+                let _ = s.read_exact(&mut first).await;
+                // Closing with unread data makes the kernel send a reset.
+                drop(s);
+            }
+        });
+        let f = probe_features(&Transport::new(addr), &two_versions(), None)
+            .await
+            .unwrap();
+        assert_eq!(f.legacy_version, Some(ProtocolVersion::TLS12));
+        assert_eq!(f.compression, None);
+        assert_eq!(f.secure_renegotiation, None);
+    }
+
+    /// A `ServerHello` with a suite or version other than offered is not
+    /// an acceptance (RFC 5246 §7.4.1.3; suite IDs from the IANA TLS
+    /// Cipher Suites registry).
+    #[test]
+    fn mismatched_server_hello() {
+        let response = HelloResponse::ServerHello {
+            hello: ServerHello {
+                legacy_version: ProtocolVersion::TLS12,
+                random: [1; 32],
+                session_id: vec![],
+                cipher_suite: 0xc013,
+                compression_method: 0,
+                extensions: vec![],
+            },
+            certificates: vec![],
+            server_key_exchange: None,
+        };
+        let v = ProtocolVersion::TLS12;
+        assert!(accepted(v, &[0xc013], Some(&response)).unwrap().is_some());
+        assert!(accepted(v, &[0xc014], Some(&response)).unwrap().is_none());
+        let v11 = ProtocolVersion::TLS11;
+        assert!(accepted(v11, &[0xc013], Some(&response)).unwrap().is_none());
     }
 
     /// With a single version there is nothing to fall back from, and a

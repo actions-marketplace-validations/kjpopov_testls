@@ -351,6 +351,7 @@ mod tests {
         let names: Vec<&str> = Letter::ALL.iter().map(|l| l.as_str()).collect();
         assert_eq!(names, ["A+", "A", "A-", "B", "C", "F"]);
         assert!(Letter::ALL.is_sorted());
+        assert_eq!(Letter::AMinus.to_string(), "A-");
         for s in Severity::ALL {
             assert!(Letter::cap(s) >= Letter::A);
         }

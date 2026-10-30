@@ -241,11 +241,13 @@ mod tests {
         let mut transport = Transport::new(listener.local_addr().unwrap());
         transport.read_timeout = Duration::from_millis(100);
         let _hold = tokio::spawn(async move {
-            let (s, _) = listener.accept().await.unwrap();
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            drop(s);
+            let (mut s, _) = listener.accept().await.unwrap();
+            // Read until the probe gives up and closes.
+            while s.read(&mut [0; 1024]).await.is_ok_and(|n| n > 0) {}
         });
-        let r = upgrade_on(&transport, None).await;
+        let r = tokio::time::timeout(Duration::from_secs(5), upgrade_on(&transport, None))
+            .await
+            .expect("probe must enforce read_timeout");
         assert_eq!(r.accepted, None);
 
         for reply in [&b"HTTP/1.1 101 Switching"[..], b"HTT"] {
@@ -310,6 +312,37 @@ mod tests {
             }
         );
         assert_eq!(list[1].port, 80);
+    }
+
+    /// A reset without a reply and an unparsable HTTP head are refusals.
+    #[tokio::test]
+    async fn reset_and_garbled_head() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut first = [0; 1];
+            s.read_exact(&mut first).await.unwrap();
+            // Closing with unread data makes the kernel send a reset.
+            drop(s);
+        });
+        let r = upgrade_on(&Transport::new(addr), None).await;
+        assert_eq!(r.accepted, Some(false));
+
+        let (addr, _task) = serve(b"HTTP/1.1 abc Weird\r\n\r\n").await;
+        let r = upgrade_on(&Transport::new(addr), None).await;
+        assert_eq!(r.accepted, Some(false));
+    }
+
+    /// Scanning port 80 itself probes it only once.
+    #[tokio::test]
+    async fn port_80_probed_once() {
+        let mut transport = Transport::new("127.0.0.1:80".parse().unwrap());
+        transport.connect_timeout = Duration::from_millis(200);
+        transport.read_timeout = Duration::from_millis(200);
+        let list = probe_tls_upgrade(&transport, None).await;
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].port, 80);
     }
 
     /// `Host` omits port 80 and brackets IPv6 addresses.

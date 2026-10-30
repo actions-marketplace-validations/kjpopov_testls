@@ -789,6 +789,24 @@ mod tests {
             certificate(&Err("refused".into()), PLAIN),
             "Certificate: error: refused\n"
         );
+        let unreadable = Ok(CertificateSection {
+            version: ProtocolVersion::TLS12,
+            certificates: vec![Ok(CertificateInfo {
+                subject: "CN=a".into(),
+                issuer: "CN=a".into(),
+                not_before: "A".into(),
+                not_after: "B".into(),
+                not_before_unix: 0,
+                not_after_unix: 0,
+                names: vec![],
+                key: "RSA 2048 bits".into(),
+                scts: None,
+            })],
+            ocsp: None,
+        });
+        let out = certificate(&unreadable, PLAIN);
+        assert!(out.contains("     SCTs    unreadable\n"), "{out}");
+        assert!(!out.contains("names"), "{out}");
     }
 
     /// The OCSP line shows the stapled status, revocation, or the error.
@@ -849,10 +867,15 @@ mod tests {
                     reason: None,
                 })),
             },
+            RevocationCheck {
+                method: RevocationMethod::Ocsp,
+                url: "http://ocsp.test/b".into(),
+                outcome: Ok(status(CertStatus::Unknown)),
+            },
         ]);
         assert_eq!(
             revocation(&checks, PLAIN),
-            "Revocation\n  OCSP http://ocsp.test/  error: HTTP status 500\n  CRL  http://crl.test/ca.crl  good, next update Nov  2 00:00:00 2026 +00:00\n  CRL  http://crl.test/b.crl  revoked on Oct  1 00:00:00 2026 +00:00 (no reason given)\n"
+            "Revocation\n  OCSP http://ocsp.test/  error: HTTP status 500\n  CRL  http://crl.test/ca.crl  good, next update Nov  2 00:00:00 2026 +00:00\n  CRL  http://crl.test/b.crl  revoked on Oct  1 00:00:00 2026 +00:00 (no reason given)\n  OCSP http://ocsp.test/b  unknown\n"
         );
         let hostile = Ok(vec![RevocationCheck {
             method: RevocationMethod::Ocsp,
@@ -975,6 +998,18 @@ mod tests {
             intolerance(&Err("timed out".into()), PLAIN),
             "ClientHello tolerance: error: timed out\n"
         );
+        let untested = Intolerance {
+            version: None,
+            unknown_version: None,
+            unknown_extension: None,
+            grease: None,
+            oversized: None,
+            fragmented: None,
+        };
+        assert!(
+            intolerance(&Ok(untested), PLAIN).starts_with("ClientHello tolerance\n  "),
+            "no version in the heading"
+        );
     }
 
     /// The post-quantum summary lists ML-KEM and draft groups and the verdict.
@@ -1008,6 +1043,15 @@ mod tests {
              draft Kyber groups     none\n  \
              server prefers ML-KEM  not tested\n"
         );
+        let draft = PostQuantum {
+            status: PqStatus::DraftOnly,
+            groups: vec![],
+            draft_groups: vec![0x6399],
+            preferred: Some(false),
+        };
+        let out = post_quantum(&draft, PLAIN);
+        assert!(out.contains("status                 draft only\n"), "{out}");
+        assert!(out.contains("server prefers ML-KEM  no\n"), "{out}");
     }
 
     /// Detail lines show each flag, the probed version, 0-RTT size and errors.
@@ -1144,5 +1188,21 @@ mod tests {
             reasons: Vec::new(),
         };
         assert_eq!(grade(&best, PLAIN), "\nGrade\n  A+\n");
+    }
+
+    /// Every letter maps to the severity whose colour paints it.
+    #[test]
+    fn letter_colours() {
+        let cases = [
+            (Letter::APlus, Severity::Ok),
+            (Letter::A, Severity::Ok),
+            (Letter::AMinus, Severity::Low),
+            (Letter::B, Severity::Medium),
+            (Letter::C, Severity::High),
+            (Letter::F, Severity::Critical),
+        ];
+        for (letter, severity) in cases {
+            assert_eq!(letter_severity(letter), severity, "{letter}");
+        }
     }
 }
