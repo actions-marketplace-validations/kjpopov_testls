@@ -539,6 +539,12 @@ const EXPLANATIONS: &[Explanation] = &[
         "RFC 7457 §2.6, breachattack.com",
     ),
     entry(
+        "vuln.alpaca",
+        "ALPACA: unknown ALPN protocols are accepted",
+        "A server that completes the handshake for an ALPN protocol it does not speak helps an attacker redirect traffic between services that share a certificate. Refuse unknown protocols with no_application_protocol and keep certificates specific to one service.",
+        "RFC 7301 §3.2, alpaca-attack.com",
+    ),
+    entry(
         "intolerance.unknown_version",
         "Server rejects an unknown protocol version",
         "A server must negotiate the highest version both sides support; failing on a newer version offer breaks future clients and invites insecure fallback.",

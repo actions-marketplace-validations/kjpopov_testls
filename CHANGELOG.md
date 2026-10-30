@@ -26,6 +26,11 @@ All notable changes to `testls` are listed here. The format follows
   reply with a content coding other than `identity` is reported as
   vulnerable. Without an HTTP reply (quick profile, `--starttls`, non-HTTP
   service) it is not tested.
+- ALPACA verdict (`alpaca`, finding `vuln.alpaca`, low): the handshake
+  feature probe sends one more hello at the best version offering only an
+  unknown ALPN protocol; a server that completes the handshake instead of
+  answering `no_application_protocol` is reported as vulnerable. Not
+  tested under the quick profile.
 
 ### Security
 

@@ -13,7 +13,7 @@ what a finding means and why it matters.
 | Certificates | Expiry, chain, hostname, key size, signature, lifetime, embedded SCTs |
 | Revocation | OCSP stapling, OCSP and CRL lookups |
 | HTTP headers | HSTS, preload, cookies, header hygiene |
-| Vulnerabilities | Derived checks: POODLE, BEAST, SWEET32, Logjam, BREACH, … |
+| Vulnerabilities | Derived checks: POODLE, BEAST, SWEET32, Logjam, BREACH, ALPACA, … |
 | Handshake | ClientHello tolerance, TLSv1.3 details, post-quantum readiness |
 
 ## Targets

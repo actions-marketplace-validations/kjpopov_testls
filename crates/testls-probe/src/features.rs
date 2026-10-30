@@ -4,15 +4,24 @@
 //! compression (CRIME, RFC 3749) and signals secure renegotiation
 //! (RFC 5746). A second hello at a version below the server's best carries
 //! `TLS_FALLBACK_SCSV`, which a protected server must refuse with an
-//! `inappropriate_fallback` alert (RFC 7507, section 3).
+//! `inappropriate_fallback` alert (RFC 7507, section 3). A third hello at
+//! the server's best version offers only an unknown ALPN protocol, which a
+//! strict server refuses with `no_application_protocol` (RFC 7301,
+//! section 3.2); the ALPACA paper names strict ALPN as a countermeasure to
+//! cross-protocol attacks.
 
-use testls_wire::{Alert, ClientHello, ProtocolVersion, ServerHello, ext};
+use testls_wire::{Alert, ClientHello, Extension, ProtocolVersion, ServerHello, ext};
 
 use crate::hello::{EMPTY_RENEGOTIATION_INFO_SCSV, FALLBACK_SCSV, client_hello};
 use crate::{CipherResult, HelloResponse, ProbeError, Transport};
 
 /// The DEFLATE compression method (RFC 3749, section 2).
 const COMPRESSION_DEFLATE: u8 = 1;
+
+/// ALPN extension body offering only `testls-unknown`, a protocol id no
+/// server should know: a 15-byte list holding one 14-byte name
+/// (RFC 7301, section 3.1).
+const UNKNOWN_ALPN: &[u8] = b"\x00\x0f\x0etestls-unknown";
 
 /// Handshake features found by [`probe_features`].
 ///
@@ -33,6 +42,9 @@ pub struct HandshakeFeatures {
     /// Whether the server refused the fallback hello with
     /// `inappropriate_fallback`.
     pub fallback_scsv: Option<bool>,
+    /// Whether the server refused a hello offering only an unknown ALPN
+    /// protocol with `no_application_protocol`.
+    pub strict_alpn: Option<bool>,
 }
 
 /// Send one hello and return the reply, treating a reset as a refusal.
@@ -77,16 +89,17 @@ fn suites_of(result: &CipherResult) -> Vec<u16> {
         .collect()
 }
 
-/// Probe compression, secure renegotiation and `TLS_FALLBACK_SCSV`.
+/// Probe compression, secure renegotiation, `TLS_FALLBACK_SCSV` and strict
+/// ALPN.
 ///
 /// `ciphers` are the results of
 /// [`enumerate_ciphers`](crate::enumerate_ciphers) for every version the
-/// server supports. Costs at most two connections.
+/// server supports. Costs at most three connections.
 ///
 /// # Errors
 /// Returns a [`ProbeError`] if the compression and renegotiation probe fails
 /// for reasons other than the server refusing the hello. A failed fallback
-/// probe only leaves `fallback_scsv` unset.
+/// or ALPN probe only leaves `fallback_scsv` or `strict_alpn` unset.
 pub async fn probe_features(
     transport: &Transport,
     ciphers: &[CipherResult],
@@ -103,6 +116,7 @@ pub async fn probe_features(
         secure_renegotiation: None,
         fallback_version: None,
         fallback_scsv: None,
+        strict_alpn: None,
     };
 
     if let Some(legacy) = supported
@@ -148,6 +162,29 @@ pub async fn probe_features(
                 .map(|_| false),
         };
     }
+
+    // SSLv3 hellos carry no extensions, so ALPN needs TLS.
+    if let Some(best) = supported
+        .first()
+        .filter(|c| c.version > ProtocolVersion::SSL3)
+    {
+        let suites = suites_of(best);
+        let mut hello = client_hello(best.version, suites.clone(), sni);
+        hello.extensions.push(Extension::Raw {
+            typ: ext::ALPN,
+            data: UNKNOWN_ALPN.to_vec(),
+        });
+        let response = send(transport, &hello).await.ok().flatten();
+        features.strict_alpn = match &response {
+            Some(HelloResponse::Alert(a)) if a.description == Alert::NO_APPLICATION_PROTOCOL => {
+                Some(true)
+            }
+            r => accepted(best.version, &suites, r.as_ref())
+                .ok()
+                .flatten()
+                .map(|_| false),
+        };
+    }
     Ok(features)
 }
 
@@ -169,6 +206,8 @@ mod tests {
         renegotiation: Option<&'static [u8]>,
         /// Refuse hellos carrying `TLS_FALLBACK_SCSV`.
         fallback: bool,
+        /// Refuse hellos offering an unknown ALPN protocol.
+        alpn: bool,
     }
 
     /// Cipher suites and compression methods of a `ClientHello` record.
@@ -194,6 +233,9 @@ mod tests {
         let (version, suites, methods) = parse_hello(hello);
         if behaviour.fallback && suites.contains(&FALLBACK_SCSV) {
             return vec![21, 3, 3, 0, 2, 2, Alert::INAPPROPRIATE_FALLBACK];
+        }
+        if behaviour.alpn && hello.windows(UNKNOWN_ALPN.len()).any(|w| w == UNKNOWN_ALPN) {
+            return vec![21, 3, 3, 0, 2, 2, Alert::NO_APPLICATION_PROTOCOL];
         }
         let mut body = version.to_be_bytes().to_vec();
         body.extend([7; 32]);
@@ -257,6 +299,7 @@ mod tests {
             deflate: false,
             renegotiation: Some(&[0]),
             fallback: true,
+            alpn: true,
         })
         .await;
         let f = probe_features(&Transport::new(addr), &two_versions(), None)
@@ -267,6 +310,7 @@ mod tests {
         assert_eq!(f.secure_renegotiation, Some(true));
         assert_eq!(f.fallback_version, Some(ProtocolVersion::TLS11));
         assert_eq!(f.fallback_scsv, Some(true));
+        assert_eq!(f.strict_alpn, Some(true));
     }
 
     /// A server with compression, no RFC 5746 and no fallback protection.
@@ -276,6 +320,7 @@ mod tests {
             deflate: true,
             renegotiation: None,
             fallback: false,
+            alpn: false,
         })
         .await;
         let f = probe_features(&Transport::new(addr), &two_versions(), None)
@@ -284,6 +329,7 @@ mod tests {
         assert_eq!(f.compression, Some(true));
         assert_eq!(f.secure_renegotiation, Some(false));
         assert_eq!(f.fallback_scsv, Some(false));
+        assert_eq!(f.strict_alpn, Some(false));
     }
 
     /// A malformed or non-empty `renegotiation_info` on an initial
@@ -295,6 +341,7 @@ mod tests {
                 deflate: false,
                 renegotiation: Some(info),
                 fallback: true,
+                alpn: true,
             })
             .await;
             let f = probe_features(&Transport::new(addr), &two_versions(), None)
@@ -321,6 +368,7 @@ mod tests {
                 deflate: false,
                 renegotiation: Some(&[0]),
                 fallback: true,
+                alpn: true,
             };
             s.write_all(&reply(&buf[..n], behaviour)).await.unwrap();
             // Dropping the listener refuses the fallback connection.
@@ -332,6 +380,7 @@ mod tests {
         assert_eq!(f.secure_renegotiation, Some(true));
         assert_eq!(f.fallback_version, Some(ProtocolVersion::TLS11));
         assert_eq!(f.fallback_scsv, None);
+        assert_eq!(f.strict_alpn, None);
     }
 
     /// With a single version there is nothing to fall back from, and a
@@ -351,5 +400,6 @@ mod tests {
         assert_eq!(f.fallback_scsv, None);
         let none = probe_features(&unreachable, &[], None).await.unwrap();
         assert_eq!(none.secure_renegotiation, None);
+        assert_eq!(none.strict_alpn, None);
     }
 }
