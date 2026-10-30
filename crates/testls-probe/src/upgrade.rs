@@ -49,18 +49,24 @@ pub async fn probe_tls_upgrade(transport: &Transport, sni: Option<&str>) -> Vec<
 /// reply.
 async fn upgrade_on(transport: &Transport, sni: Option<&str>) -> TlsUpgrade {
     let port = transport.addr.port();
-    let accepted = match request_upgrade(transport, sni).await {
+    let result = request_upgrade(transport, sni).await;
+    TlsUpgrade {
+        port,
+        accepted: classify(result, transport.proxy.is_some()),
+    }
+}
+
+/// Maps the outcome of [`request_upgrade`] to [`TlsUpgrade::accepted`].
+fn classify(result: Result<bool, ProbeError>, proxied: bool) -> Option<bool> {
+    match result {
         Ok(accepted) => Some(accepted),
         // Nothing listens there; through a proxy the proxy may be to blame,
         // and a timeout may be a firewall hiding a listener.
-        Err(ProbeError::Connect(e))
-            if transport.proxy.is_none() && e.kind() == io::ErrorKind::ConnectionRefused =>
-        {
+        Err(ProbeError::Connect(e)) if !proxied && e.kind() == io::ErrorKind::ConnectionRefused => {
             Some(false)
         }
         Err(_) => None,
-    };
-    TlsUpgrade { port, accepted }
+    }
 }
 
 /// Whether the server switches to TLS after `OPTIONS *` with
@@ -70,7 +76,7 @@ async fn upgrade_on(transport: &Transport, sni: Option<&str>) -> TlsUpgrade {
 ///
 /// # Errors
 /// Returns a [`ProbeError`] on connect or I/O failure, on timeout and when
-/// the connection closes inside an HTTP reply head.
+/// an HTTP reply head is cut short or too large.
 async fn request_upgrade(transport: &Transport, sni: Option<&str>) -> Result<bool, ProbeError> {
     let mut stream = transport.connect().await?;
     let request = format!(
@@ -89,6 +95,7 @@ async fn request_upgrade(transport: &Transport, sni: Option<&str>) -> Result<boo
             match complete_head(&head) {
                 Ok(Some(end)) => return Ok(switches_to_tls(&head[..end])),
                 Ok(None) => {}
+                Err(e) if is_http_prefix(&head) => return Err(e),
                 Err(_) => return Ok(false),
             }
             let n = match stream.read(&mut buf).await {
@@ -220,8 +227,8 @@ mod tests {
         }
     }
 
-    /// A port that refuses the connection is a refusal; a connect timeout,
-    /// a silent server and a reply head cut short are failed probes.
+    /// A port that refuses the connection is a refusal; a silent server and
+    /// a reply head cut short are failed probes.
     #[tokio::test]
     async fn unreachable_and_silent() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -241,15 +248,38 @@ mod tests {
         let r = upgrade_on(&transport, None).await;
         assert_eq!(r.accepted, None);
 
-        let mut transport = Transport::new("192.0.2.1:80".parse().unwrap());
-        transport.connect_timeout = Duration::from_millis(100);
-        let r = upgrade_on(&transport, None).await;
-        assert_eq!(r.accepted, None);
-
         for reply in [&b"HTTP/1.1 101 Switching"[..], b"HTT"] {
             let (addr, _task) = serve(reply).await;
             let r = upgrade_on(&Transport::new(addr), None).await;
             assert_eq!(r.accepted, None, "{reply:?}");
+        }
+    }
+
+    /// Only a refused direct connect is a refusal; connect timeouts and
+    /// proxy failures leave the port untested.
+    #[test]
+    fn connect_errors() {
+        let refused = || ProbeError::Connect(io::ErrorKind::ConnectionRefused.into());
+        let timed_out = || ProbeError::Connect(io::ErrorKind::TimedOut.into());
+        assert_eq!(classify(Err(refused()), false), Some(false));
+        assert_eq!(classify(Err(refused()), true), None);
+        assert_eq!(classify(Err(timed_out()), false), None);
+        assert_eq!(classify(Err(ProbeError::Timeout), false), None);
+        assert_eq!(classify(Ok(true), true), Some(true));
+    }
+
+    /// An HTTP reply head beyond the size limit leaves the port untested;
+    /// oversized non-HTTP data is a refusal.
+    #[tokio::test]
+    async fn oversized_reply() {
+        let http: &'static [u8] = format!("HTTP/1.1 101 Switching\r\nX: {}", "a".repeat(70_000))
+            .into_bytes()
+            .leak();
+        let binary: &'static [u8] = vec![0x16; 70_000].leak();
+        for (reply, expected) in [(http, None), (binary, Some(false))] {
+            let (addr, _task) = serve(reply).await;
+            let r = upgrade_on(&Transport::new(addr), None).await;
+            assert_eq!(r.accepted, expected);
         }
     }
 
