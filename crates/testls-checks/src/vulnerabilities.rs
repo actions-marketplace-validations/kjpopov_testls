@@ -75,9 +75,8 @@ fn severity(finding: &str) -> Option<Severity> {
     match finding {
         "vuln.crime" => Some(Severity::High),
         "vuln.renegotiation" => Some(Severity::Medium),
-        "vuln.beast" | "vuln.logjam" | "vuln.fallback_scsv" | "vuln.raccoon" | "vuln.breach" => {
-            Some(Severity::Low)
-        }
+        "vuln.beast" | "vuln.logjam" | "vuln.fallback_scsv" | "vuln.raccoon" | "vuln.breach"
+        | "vuln.alpaca" => Some(Severity::Low),
         _ => None,
     }
 }
@@ -552,7 +551,33 @@ pub fn assess_vulnerabilities(
         ),
         raccoon(&inputs),
         breach(&inputs),
+        alpaca(&inputs),
     ]
+}
+
+/// ALPACA: strict ALPN is one of the countermeasures (Brinkmann et al.,
+/// USENIX Security 2021; RFC 7301 section 3.2). The probe runs at the
+/// highest enumerated version, so a higher offered version without an
+/// enumeration leaves the verdict untested; lower versions don't matter.
+fn alpaca(inputs: &Inputs) -> Vulnerability {
+    let (id, name, finding) = ("alpaca", "ALPACA", "vuln.alpaca");
+    let probed = inputs
+        .ciphers
+        .iter()
+        .filter(|c| c.version > ProtocolVersion::SSL3 && !c.suites.is_empty())
+        .map(|c| c.version)
+        .max();
+    let higher_missing = probed.is_some_and(|best| inputs.enumeration_missing(|v| v > best));
+    let (status, detail) = match inputs.features.and_then(|f| f.strict_alpn) {
+        None => (VulnStatus::NotTested, "handshake probe failed"),
+        Some(_) if higher_missing => (
+            VulnStatus::NotTested,
+            "cipher suites not enumerated for the highest offered version",
+        ),
+        Some(false) => (VulnStatus::Vulnerable, "unknown ALPN protocol accepted"),
+        Some(true) => (VulnStatus::NotVulnerable, "unknown ALPN protocol refused"),
+    };
+    vuln(id, name, status, detail, finding)
 }
 
 /// Findings for vulnerable entries not already reported by another check.
@@ -643,6 +668,7 @@ mod tests {
             secure_renegotiation: Some(true),
             fallback_version: Some(ProtocolVersion::TLS12),
             fallback_scsv: Some(true),
+            strict_alpn: Some(true),
         }
     }
 
@@ -673,7 +699,7 @@ mod tests {
         ];
         let http = response(&[("Content-Type", "text/html")]);
         let list = assess_vulnerabilities(&p, &c, &k, Some(&good_features()), Some(&http));
-        assert_eq!(list.len(), 13);
+        assert_eq!(list.len(), 14);
         for v in &list {
             assert_eq!(
                 v.status,
@@ -709,6 +735,7 @@ mod tests {
             secure_renegotiation: Some(false),
             fallback_version: Some(ProtocolVersion::TLS10),
             fallback_scsv: Some(false),
+            strict_alpn: Some(false),
         };
         let http = response(&[("Content-Encoding", "gzip")]);
         let list = assess_vulnerabilities(&p, &c, &k, Some(&features), Some(&http));
@@ -740,6 +767,7 @@ mod tests {
                 ("vuln.fallback_scsv", Severity::Low),
                 ("vuln.raccoon", Severity::Low),
                 ("vuln.breach", Severity::Low),
+                ("vuln.alpaca", Severity::Low),
             ]
         );
         assert_eq!(findings[2].message, "CRIME: TLS compression enabled");
@@ -824,6 +852,7 @@ mod tests {
             "renegotiation",
             "fallback_scsv",
             "raccoon",
+            "alpaca",
         ] {
             assert_eq!(status(&list, id), VulnStatus::NotTested, "{id}");
         }
@@ -857,12 +886,31 @@ mod tests {
             secure_renegotiation: Some(true),
             fallback_version: None,
             fallback_scsv: None,
+            strict_alpn: Some(true),
         };
         let c = [ciphers(ProtocolVersion::TLS12, &[ECDHE_GCM])];
         let list = assess_vulnerabilities(&p, &c, &[], Some(&features), None);
         assert_eq!(status(&list, "crime"), VulnStatus::Vulnerable);
         for id in ["renegotiation", "fallback_scsv"] {
             assert_eq!(status(&list, id), VulnStatus::NotTested, "{id}");
+        }
+        // ALPACA only needs the version it probed, not lower ones.
+        assert_eq!(status(&list, "alpaca"), VulnStatus::NotVulnerable);
+    }
+
+    /// A higher offered version without an enumeration means the ALPN probe
+    /// ran below the best version, so either outcome is untested.
+    #[test]
+    fn alpaca_higher_version_missing() {
+        let p = protocols(&[ProtocolVersion::TLS12, ProtocolVersion::TLS13]);
+        let c = [ciphers(ProtocolVersion::TLS12, &[ECDHE_GCM])];
+        for strict in [true, false] {
+            let features = HandshakeFeatures {
+                strict_alpn: Some(strict),
+                ..good_features()
+            };
+            let list = assess_vulnerabilities(&p, &c, &[], Some(&features), None);
+            assert_eq!(status(&list, "alpaca"), VulnStatus::NotTested, "{strict}");
         }
     }
 
@@ -933,6 +981,7 @@ mod tests {
             secure_renegotiation: None,
             fallback_version: None,
             fallback_scsv: None,
+            strict_alpn: None,
         };
         let list = assess_vulnerabilities(&p, &c, &[], Some(&features), None);
         let crime = list.iter().find(|v| v.id == "crime").unwrap();

@@ -24,6 +24,8 @@ pub mod ext {
     pub const EXTENDED_MASTER_SECRET: u16 = 23;
     /// `signature_algorithms` (RFC 8446).
     pub const SIGNATURE_ALGORITHMS: u16 = 13;
+    /// `application_layer_protocol_negotiation` (RFC 7301).
+    pub const ALPN: u16 = 16;
     /// `supported_versions` (RFC 8446).
     pub const SUPPORTED_VERSIONS: u16 = 43;
     /// `key_share` (RFC 8446).
