@@ -336,7 +336,7 @@ Abbreviated:
     "protocol": "TLSv1.2", "extended_master_secret": true, "downgrade_sentinel": true,
     "session_tickets": true, "max_early_data": 0
   },
-  "grade": { "letter": "A", "untrusted": false, "incomplete": false, "reasons": ["A+ needs TLSv1.3"] },
+  "grade": { "letter": "A+", "untrusted": false, "incomplete": false, "reasons": [] },
   "findings": [
     { "id": "protocol.no_tls13", "severity": "info", "message": "..." }
   ],

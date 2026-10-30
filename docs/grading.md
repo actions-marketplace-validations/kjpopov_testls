@@ -1,6 +1,7 @@
 # Grading
 
-Every scan gets a letter grade. It is testls' own model, documented here,
+Every scan that produces a report gets a letter grade; a target that
+fails to scan (exit code 2) gets none. It is testls' own model, documented here,
 and is **not** compatible with SSL Labs grades: the same server can get a
 different letter there.
 

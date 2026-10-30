@@ -100,7 +100,7 @@ testls --format markdown example.com >> "$GITHUB_STEP_SUMMARY"
 
 ## Grade
 
-Each scan ends with a letter grade (A+, A, A-, B, C, F) and the reasons it
+Each completed scan ends with a letter grade (A+, A, A-, B, C, F) and the reasons it
 is not better; `T` marks an untrusted or mismatched certificate. It is
 testls' own model, not SSL Labs', and does not affect the exit status. See
 [grading.md](grading.md).
