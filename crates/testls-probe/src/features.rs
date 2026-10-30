@@ -14,7 +14,7 @@
 use rustls::AlertDescription;
 use testls_wire::{Alert, ClientHello, Extension, ProtocolVersion, ServerHello, ext};
 
-use crate::certificates::{client_config, connect_tls};
+use crate::certificates::{connect_tls, tls13_client_config};
 use crate::hello::{EMPTY_RENEGOTIATION_INFO_SCSV, FALLBACK_SCSV, client_hello};
 use crate::{CipherResult, HelloResponse, ProbeError, Transport};
 
@@ -212,7 +212,7 @@ async fn legacy_strict_alpn(
 /// `Some(true)` when the server sends `no_application_protocol`,
 /// `Some(false)` when the handshake completes, `None` on any other failure.
 async fn tls13_strict_alpn(transport: &Transport, sni: Option<&str>) -> Option<bool> {
-    let mut config = client_config();
+    let mut config = tls13_client_config();
     config.alpn_protocols = vec![UNKNOWN_ALPN[3..].to_vec()];
     match connect_tls(transport, sni, config).await {
         Ok(_) => Some(false),
@@ -476,6 +476,29 @@ mod tests {
         }
     }
 
+    /// A TLS 1.3 server that drops the connection mid-handshake leaves the
+    /// ALPN verdict untested.
+    #[tokio::test]
+    async fn tls13_alpn_failure() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = [0u8; 512];
+                let _ = stream.read(&mut buf).await;
+            }
+        });
+        let tls13 = [CipherResult {
+            version: ProtocolVersion::TLS13,
+            suites: vec![0x1301],
+            order: CipherOrder::NotApplicable,
+        }];
+        let f = probe_features(&Transport::new(addr), &tls13, Some("localhost"))
+            .await
+            .unwrap();
+        assert_eq!(f.strict_alpn, None);
+    }
+
     /// With a single version there is nothing to fall back from, and a
     /// TLS 1.3-only server has no legacy hello to send.
     #[tokio::test]
@@ -491,6 +514,7 @@ mod tests {
         assert_eq!(f.compression, None);
         assert_eq!(f.fallback_version, None);
         assert_eq!(f.fallback_scsv, None);
+        assert_eq!(f.strict_alpn, None);
         let none = probe_features(&unreachable, &[], None).await.unwrap();
         assert_eq!(none.secure_renegotiation, None);
         assert_eq!(none.strict_alpn, None);
