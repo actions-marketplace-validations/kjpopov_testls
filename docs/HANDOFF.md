@@ -57,7 +57,9 @@ if `gh` is allowed); update it when a session ends.
   skipped because repo variable `CRATES_IO_TRUSTED_PUBLISHING` is not
   `true`. Maintainer: set it (and trusted publishing per `testls*` crate),
   then rerun the job or `cargo publish --workspace --locked` from tag
-  v0.5.0. If it fails halfway, rerun failed jobs.
+  v0.5.0. If the `crates-io` job fails halfway, rerun it (it skips
+  versions already published); if a manual publish stops halfway,
+  publish the remaining crates with `cargo publish -p <crate> --locked`.
 - winget: deliberately postponed until there are more features (better odds
   with the moderators). Keep generating `packaging/winget/X.Y.Z/` in the
   packages PR, but do not remind the maintainer each release.
