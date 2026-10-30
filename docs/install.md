@@ -60,7 +60,7 @@ Images for linux/amd64 and linux/arm64 (distroless, unprivileged, no
 shell):
 
 ```bash
-podman run --rm ghcr.io/kjpopov/testls:0.4 example.com
+podman run --rm ghcr.io/kjpopov/testls:0.5 example.com
 ```
 
 ## GitHub Actions

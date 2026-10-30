@@ -118,6 +118,7 @@ Two connection paths:
 - [x] Released as v0.4.3 (two-column `--help`, short README; v0.4.2 was a web UI mistake)
 
 ### v0.5 — STARTTLS, application-layer checks, grading
+
 - [x] STARTTLS: SMTP, IMAP, POP3, FTP, XMPP, LDAP, PostgreSQL, MySQL
   (`--starttls smtp|imap|pop3|ftp|xmpp|ldap|postgres|mysql`)
 - [x] `--mx`: scan a domain's mail exchangers (needs SMTP STARTTLS)
