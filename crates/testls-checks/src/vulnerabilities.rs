@@ -419,7 +419,7 @@ fn feature_vuln(
 /// response bodies can leak through the compressed length (as CRIME does for
 /// TLS compression). Whether a body mixes secrets with attacker-chosen input
 /// cannot be seen from outside, so a compressed reply is reported as a
-/// potential issue.
+/// potential issue. RFC 7457 §2.6 covers compression side channels.
 fn breach(inputs: &Inputs) -> Vulnerability {
     let (id, name, finding) = ("breach", "BREACH", "vuln.breach");
     let Some(http) = inputs.http else {

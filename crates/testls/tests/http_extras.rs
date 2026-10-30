@@ -136,6 +136,13 @@ fn json_reports_http_extras() {
         .expect("breach verdict");
     assert_eq!(breach["status"], "vulnerable", "{breach}");
     assert_eq!(breach["detail"], "HTTP compression: gzip");
+    let finding = v["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .find(|f| f["id"] == "vuln.breach")
+        .expect("breach finding");
+    assert_eq!(finding["severity"], "low", "{finding}");
 }
 
 /// `--format sarif` prints one SARIF 2.1.0 log whose results carry the
