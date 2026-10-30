@@ -58,8 +58,11 @@ jobs:
   # The upload runs in its own job so the Codecov token (environment
   # `codecov`) is never present while the tests run code from the pull
   # request. Fork pull requests get no secrets and upload tokenless.
+  # Dependabot gets no environment secrets either, so its runs skip the
+  # upload.
   upload:
     needs: coverage
+    if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     environment: codecov
     steps:
@@ -69,9 +72,12 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: lcov
+      # fail_ci_if_error makes the action stop if the CLI signature check
+      # fails; continue-on-error keeps a Codecov outage from failing CI.
       - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        continue-on-error: true
         with:
           files: lcov.info
           disable_search: true
-          fail_ci_if_error: false
+          fail_ci_if_error: true
           token: ${{ secrets.CODECOV_TOKEN }}
