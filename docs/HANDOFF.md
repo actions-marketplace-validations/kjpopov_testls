@@ -17,13 +17,15 @@ if `gh` is allowed); update it when a session ends.
   "Security" section), Codecov upload (PR #128, decision #82) and the
   application-layer checks: BREACH (#129, decision #83), ALPACA (#130,
   #84), Opossum (#131, #85), Codecov Test Analytics (PR #133, decision
-  #86) and grading (PR #134 model, then the report/CLI PR; decisions
+  #86) and grading (PR #134 model, PR #135 report/CLI; decisions
   #87–#89, which also settled the default profile and politeness open
   questions). Next decision log number: **#90**.
 - Grading code map: `testls-checks/src/grade.rs` (`grade()`, `Grade`,
   `Letter`), rendered by `text::grade` / `grade_label` and every summary
   format via `sarif::Scan::grade`; `main.rs` grades before `triage`.
-  Model documented in `docs/grading.md`.
+  Model documented in `docs/grading.md`. Adding a field to
+  `sarif::Scan` means touching the `scan()` test helper in every summary
+  format (sarif, markdown, html, csv, junit).
 - Application-layer code map: BREACH reads `Content-Encoding` from the
   existing GET (`testls-probe/src/http.rs` sends `Accept-Encoding`); ALPACA
   is `HandshakeFeatures::strict_alpn` in `testls-probe/src/features.rs`
@@ -76,8 +78,7 @@ v0.5 in PLAN.md, suggested order:
    Ticketbleed, ROBOT), one PR each. Skipped by the maintainer in the
    2026-10-30 session; a remote branch `feat/intrusive-checks` exists (not
    ours, check with the maintainer before touching it).
-2. Merge the grading PRs if still open.
-3. v0.5 release once the maintainer decides; close PR #117 then.
+2. v0.5 release once the maintainer decides; close PR #117 then.
 
 Backlog gained `--delay` and `--parallel` (decision #89).
 
@@ -86,6 +87,16 @@ Backlog gained `--delay` and `--parallel` (decision #89).
 - One topic per PR, all review fixes in one commit per round, reply to each
   thread; reviews take 10–15 minutes, poll with `sleep 290` and a 320 s tool
   timeout.
+- Ask the maintainer design questions (question tool) before coding a
+  roadmap item with open choices; record the answers as decisions.
+- Decision numbers collide when parallel PRs land: before each PR, rebase on
+  fresh `main` and recheck the last decision number (grading's #86 became
+  #87 after #133 merged).
+- Split a feature PR into model (checks crate, unit tests) and report/CLI
+  (formats, integration tests, docs); open the second only after the first
+  merges, then rebase it on `main`.
+- Keep `scan()` in `main.rs` under clippy's 100-line limit by moving
+  output assembly into helpers (`outcome()`).
 - Decline wrong suggestions with a PR comment and point the maintainer to it
   in the final message.
 - Stay inside the repository directory (use `target/` or
