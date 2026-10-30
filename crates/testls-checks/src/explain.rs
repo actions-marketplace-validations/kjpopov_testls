@@ -280,8 +280,14 @@ const EXPLANATIONS: &[Explanation] = &[
     entry(
         "cert.error",
         "Certificate chain could not be retrieved",
-        "The full handshake used to fetch the certificate chain failed.",
+        "The full handshake used to fetch the certificate chain failed. A handshake signature that does not match the leaf key also fails it: the peer does not hold the key of the certificate it presented.",
         "testls",
+    ),
+    entry(
+        "cert.signature_unverified",
+        "Handshake signature not verified",
+        "The server signed the handshake with a scheme or key testls cannot check (ML-DSA, P-521, Ed448, or RSA keys under 2048 bits), so it cannot confirm the server holds the key of the certificate it presented. The certificate results still apply to the chain as sent.",
+        "RFC 8446 §4.4.3",
     ),
     // Stapled OCSP.
     entry(
@@ -667,10 +673,11 @@ mod tests {
     ];
 
     /// Ids emitted by the CLI itself for scan errors.
-    const CLI_IDS: [&str; 7] = [
+    const CLI_IDS: [&str; 8] = [
         "cipher.error",
         "group.error",
         "cert.error",
+        "cert.signature_unverified",
         "revocation.error",
         "http.error",
         "intolerance.error",

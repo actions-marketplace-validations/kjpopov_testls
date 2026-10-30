@@ -1415,6 +1415,7 @@ dependencies = [
  "testls-wire",
  "tokio",
  "tokio-rustls",
+ "x509-parser",
 ]
 
 [[package]]
