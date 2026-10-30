@@ -25,9 +25,9 @@ pub struct TlsUpgrade {
     pub port: u16,
     /// `Some(true)` when the server answered `101 Switching Protocols` to
     /// TLS, `Some(false)` when it answered otherwise, closed the connection
-    /// or could not be connected to directly, `None` when it did not answer
-    /// in time, the proxy could not reach it, or the connection failed after
-    /// it was opened.
+    /// without a reply or refused a direct connection, `None` when the
+    /// connect or reply timed out, the proxy could not reach it, or the
+    /// connection failed after it was opened or mid-reply.
     pub accepted: Option<bool>,
 }
 
@@ -51,8 +51,13 @@ async fn upgrade_on(transport: &Transport, sni: Option<&str>) -> TlsUpgrade {
     let port = transport.addr.port();
     let accepted = match request_upgrade(transport, sni).await {
         Ok(accepted) => Some(accepted),
-        // Nothing listens there; through a proxy the proxy may be to blame.
-        Err(ProbeError::Connect(_)) if transport.proxy.is_none() => Some(false),
+        // Nothing listens there; through a proxy the proxy may be to blame,
+        // and a timeout may be a firewall hiding a listener.
+        Err(ProbeError::Connect(e))
+            if transport.proxy.is_none() && e.kind() == io::ErrorKind::ConnectionRefused =>
+        {
+            Some(false)
+        }
         Err(_) => None,
     };
     TlsUpgrade { port, accepted }
@@ -60,11 +65,12 @@ async fn upgrade_on(transport: &Transport, sni: Option<&str>) -> TlsUpgrade {
 
 /// Whether the server switches to TLS after `OPTIONS *` with
 /// `Upgrade: TLS/1.0` and `Connection: Upgrade` (RFC 2817 §3.2, §3.3).
-/// A reply that is not HTTP, such as a TLS alert, or a closed connection
-/// counts as a refusal.
+/// A reply that is not HTTP, such as a TLS alert, or a connection closed
+/// without a reply counts as a refusal.
 ///
 /// # Errors
-/// Returns a [`ProbeError`] on connect or I/O failure and on timeout.
+/// Returns a [`ProbeError`] on connect or I/O failure, on timeout and when
+/// the connection closes inside an HTTP reply head.
 async fn request_upgrade(transport: &Transport, sni: Option<&str>) -> Result<bool, ProbeError> {
     let mut stream = transport.connect().await?;
     let request = format!(
@@ -91,13 +97,26 @@ async fn request_upgrade(transport: &Transport, sni: Option<&str>) -> Result<boo
                 Err(e) => return Err(ProbeError::Io(e)),
             };
             if n == 0 {
-                return Ok(false);
+                return if is_http_prefix(&head) {
+                    Err(ProbeError::Unexpected(
+                        "connection closed inside the reply head",
+                    ))
+                } else {
+                    Ok(false)
+                };
             }
             head.extend_from_slice(&buf[..n]);
         }
     })
     .await
     .map_err(|_| ProbeError::Timeout)?
+}
+
+/// Whether `head` is a non-empty start of an HTTP reply, so a close here
+/// cuts the reply short.
+fn is_http_prefix(head: &[u8]) -> bool {
+    const HTTP: &[u8] = b"HTTP/";
+    !head.is_empty() && (head.starts_with(HTTP) || HTTP.starts_with(head))
 }
 
 /// Whether `head` is `101 Switching Protocols` naming a `TLS/` protocol in
@@ -201,8 +220,8 @@ mod tests {
         }
     }
 
-    /// A port that cannot be connected to is a refusal; a silent server is
-    /// a failed probe.
+    /// A port that refuses the connection is a refusal; a connect timeout,
+    /// a silent server and a reply head cut short are failed probes.
     #[tokio::test]
     async fn unreachable_and_silent() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -221,6 +240,26 @@ mod tests {
         });
         let r = upgrade_on(&transport, None).await;
         assert_eq!(r.accepted, None);
+
+        let mut transport = Transport::new("192.0.2.1:80".parse().unwrap());
+        transport.connect_timeout = Duration::from_millis(100);
+        let r = upgrade_on(&transport, None).await;
+        assert_eq!(r.accepted, None);
+
+        for reply in [&b"HTTP/1.1 101 Switching"[..], b"HTT"] {
+            let (addr, _task) = serve(reply).await;
+            let r = upgrade_on(&Transport::new(addr), None).await;
+            assert_eq!(r.accepted, None, "{reply:?}");
+        }
+    }
+
+    /// Only non-empty starts of `HTTP/` count as a reply head.
+    #[test]
+    fn http_prefix() {
+        assert!(is_http_prefix(b"H"));
+        assert!(is_http_prefix(b"HTTP/1.1 200"));
+        assert!(!is_http_prefix(b""));
+        assert!(!is_http_prefix(b"\x15\x03\x01"));
     }
 
     /// The scanned port and port 80 are both probed, once each.
