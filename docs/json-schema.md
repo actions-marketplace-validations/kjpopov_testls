@@ -163,12 +163,12 @@ unless `--revocation-allow-private` is given; such attempts have the error
 ### Vulnerability
 
 Named vulnerabilities judged from the protocols, cipher suites, key exchange,
-handshake features and HTTP headers the scan collected; no attack traffic is
-sent. Always the same fourteen entries in a fixed order.
+handshake features, HTTP headers and HTTP upgrade replies the scan collected; no
+attack traffic is sent. Always the same fifteen entries in a fixed order.
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `id` | string | Stable id: `poodle`, `beast`, `sweet32`, `rc4`, `freak`, `logjam`, `drown`, `crime`, `renegotiation`, `fallback_scsv`, `no_forward_secrecy`, `raccoon`, `breach`, `alpaca` |
+| `id` | string | Stable id: `poodle`, `beast`, `sweet32`, `rc4`, `freak`, `logjam`, `drown`, `crime`, `renegotiation`, `fallback_scsv`, `no_forward_secrecy`, `raccoon`, `breach`, `alpaca`, `opossum` |
 | `name` | string | Display name, e.g. `"POODLE"` |
 | `status` | string | `"vulnerable"`, `"not vulnerable"`, or `"not tested"` |
 | `detail` | string | Short reason for the verdict; wording may change |
