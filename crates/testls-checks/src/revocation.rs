@@ -6,6 +6,7 @@
 //! Fetching is left to the caller; this module extracts the URLs, verifies
 //! what was fetched and turns the attempts into findings.
 
+use x509_parser::certificate::X509Certificate;
 use x509_parser::extensions::{DistributionPointName, GeneralName, ParsedExtension};
 use x509_parser::oid_registry::{
     OID_PKIX_ACCESS_DESCRIPTOR_OCSP, OID_PKIX_AUTHORITY_INFO_ACCESS,
@@ -106,8 +107,9 @@ impl From<OcspStatus> for RevocationStatus {
 /// The CRL must be a complete CRL (not a delta) issued and signed by the
 /// leaf's issuer, the second entry of `chain`, whose key usage, if present,
 /// must allow `cRLSign` (RFC 5280 §4.2.1.3, §6.3.3). CRLs limited to CA
-/// certificates, attribute certificates, some reasons or other issuers are
-/// rejected. Freshness is left to [`revocation_findings`].
+/// certificates, attribute certificates, some reasons, other issuers or a
+/// partition the leaf is not in are rejected. Freshness is left to
+/// [`revocation_findings`].
 ///
 /// # Errors
 ///
@@ -140,7 +142,7 @@ pub fn verify_crl(crl: &[u8], chain: &[Vec<u8>]) -> Result<RevocationStatus, Str
     }
     crl.verify_signature(issuer.public_key())
         .map_err(|e| format!("CRL signature does not verify: {e}"))?;
-    check_scope(&crl)?;
+    check_scope(&crl, &leaf)?;
     let status = crl
         .iter_revoked_certificates()
         .find(|entry| entry.raw_serial() == leaf.raw_serial())
@@ -155,9 +157,14 @@ pub fn verify_crl(crl: &[u8], chain: &[Vec<u8>]) -> Result<RevocationStatus, Str
     })
 }
 
-/// Rejects CRLs that do not cover every end-entity certificate of the
-/// issuer for every reason (RFC 5280 §5.2.4, §5.2.5).
-fn check_scope(crl: &CertificateRevocationList<'_>) -> Result<(), String> {
+/// Rejects CRLs whose scope does not include `leaf` for every reason
+/// (RFC 5280 §5.2.4, §5.2.5, §6.3.3 (b)). A CRL naming a distribution point
+/// covers only that partition, so one of its names must match a name in
+/// the leaf's own CRL Distribution Points.
+fn check_scope(
+    crl: &CertificateRevocationList<'_>,
+    leaf: &X509Certificate<'_>,
+) -> Result<(), String> {
     for ext in crl.extensions() {
         if ext.oid == OID_X509_EXT_DELTA_CRL_INDICATOR {
             return Err("delta CRLs are not supported".into());
@@ -170,8 +177,16 @@ fn check_scope(crl: &CertificateRevocationList<'_>) -> Result<(), String> {
                 || point.only_contains_attribute_certs
                 || point.only_some_reasons.is_some()
                 || point.indirect_crl
+                || (point.only_contains_user_certs && leaf.is_ca())
             {
                 return Err("CRL covers only part of the issuer's certificates".into());
+            }
+            if let Some(name) = &point.distribution_point
+                && !distribution_points(leaf)?
+                    .iter()
+                    .any(|own| same_point(own, name))
+            {
+                return Err("CRL covers another partition of the issuer's certificates".into());
             }
         } else if ext.critical
             && matches!(
@@ -186,6 +201,44 @@ fn check_scope(crl: &CertificateRevocationList<'_>) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Distribution point names in the leaf's CRL Distribution Points, skipping
+/// points served by another CRL issuer.
+fn distribution_points<'a>(
+    leaf: &X509Certificate<'a>,
+) -> Result<Vec<DistributionPointName<'a>>, String> {
+    let mut names = Vec::new();
+    for ext in leaf.extensions() {
+        if ext.oid == OID_X509_EXT_CRL_DISTRIBUTION_POINTS {
+            let ParsedExtension::CRLDistributionPoints(points) = ext.parsed_extension() else {
+                return Err("invalid CRL Distribution Points extension".into());
+            };
+            names.extend(
+                points
+                    .points
+                    .iter()
+                    .filter(|point| point.crl_issuer.is_none())
+                    .filter_map(|point| point.distribution_point.clone()),
+            );
+        }
+    }
+    Ok(names)
+}
+
+/// Reports whether two distribution point names match: full names when they
+/// share a name, relative names when equal (RFC 5280 §6.3.3 (b)(2)(i)).
+fn same_point(a: &DistributionPointName<'_>, b: &DistributionPointName<'_>) -> bool {
+    match (a, b) {
+        (DistributionPointName::FullName(a), DistributionPointName::FullName(b)) => {
+            a.iter().any(|name| b.contains(name))
+        }
+        (
+            DistributionPointName::NameRelativeToCRLIssuer(a),
+            DistributionPointName::NameRelativeToCRLIssuer(b),
+        ) => a == b,
+        _ => false,
+    }
 }
 
 /// How revocation data was obtained.
@@ -305,6 +358,12 @@ mod tests {
     const CRL: &[u8] = include_bytes!("testdata/ocsp-crl.der");
     /// The same CRL content issued and signed by the OCSP responder.
     const CRL_RESPONDER: &[u8] = include_bytes!("testdata/ocsp-crl-responder.der");
+    /// Partitioned CRL for `http://crl.example.test/ca.crl`, the partition of `URLS`.
+    const CRL_SCOPED: &[u8] = include_bytes!("testdata/ocsp-crl-scoped.der");
+    /// Partitioned CRL for a partition no test leaf is in.
+    const CRL_PARTITION: &[u8] = include_bytes!("testdata/ocsp-crl-partition.der");
+    /// CRL limited to end-entity certificates.
+    const CRL_USERS: &[u8] = include_bytes!("testdata/ocsp-crl-users.der");
     /// CA-signed OCSP response: `LEAF` is good.
     const GOOD: &[u8] = include_bytes!("testdata/ocsp-good.der");
 
@@ -420,6 +479,44 @@ mod tests {
             verify_crl(CRL, &[LEAF.to_vec()]).unwrap_err(),
             "issuer certificate missing from chain"
         );
+    }
+
+    /// A partitioned CRL covers only leaves naming its distribution point, and a CRL for
+    /// end-entity certificates does not cover CA certificates (RFC 5280 §6.3.3 (b)).
+    #[test]
+    fn partitioned_crls() {
+        assert_eq!(
+            verify_crl(CRL_SCOPED, &chain(URLS)).unwrap().status,
+            CertStatus::Good
+        );
+        let other = "CRL covers another partition of the issuer's certificates";
+        assert_eq!(verify_crl(CRL_SCOPED, &chain(LEAF)).unwrap_err(), other);
+        assert_eq!(verify_crl(CRL_PARTITION, &chain(URLS)).unwrap_err(), other);
+        assert_eq!(verify_crl(CRL_PARTITION, &chain(OTHER)).unwrap_err(), other);
+        assert!(matches!(
+            verify_crl(CRL_USERS, &chain(OTHER)).unwrap().status,
+            CertStatus::Revoked { .. }
+        ));
+        assert_eq!(
+            verify_crl(CRL_USERS, &chain(CA)).unwrap_err(),
+            "CRL covers only part of the issuer's certificates"
+        );
+    }
+
+    /// Full names match when they share a name; relative names never match full names.
+    #[test]
+    fn distribution_point_names() {
+        let names = distribution_points(&certificate(URLS).unwrap()).unwrap();
+        assert_eq!(names.len(), 2);
+        let ca = DistributionPointName::FullName(vec![GeneralName::URI(
+            "http://crl.example.test/ca.crl",
+        )]);
+        let other = DistributionPointName::FullName(vec![GeneralName::URI(
+            "http://crl.example.test/other.crl",
+        )]);
+        assert!(same_point(&names[0], &ca));
+        assert!(!same_point(&names[0], &other));
+        assert_eq!(distribution_points(&certificate(LEAF).unwrap()), Ok(vec![]));
     }
 
     /// The first successful attempt decides; failures before it are
