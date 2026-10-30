@@ -502,7 +502,7 @@ mod tests {
         assert!(!verifier.signature_verified());
     }
 
-    /// Server that presents [`CERT`] but signs with an unrelated key.
+    /// Server that always presents one certificate and key, matching or not.
     #[derive(Debug)]
     struct WrongKey(Arc<rustls::sign::CertifiedKey>);
 
@@ -544,6 +544,69 @@ mod tests {
             assert!(r.is_err(), "{version:?}: {r:?}");
             assert!(server.await.unwrap(), "{version:?}");
         }
+    }
+
+    /// Signing key that answers with a fixed ML-DSA-65 placeholder, standing
+    /// in for a post-quantum server ring cannot sign for.
+    #[derive(Debug)]
+    struct FakeMlDsa;
+
+    impl rustls::sign::SigningKey for FakeMlDsa {
+        /// Signs with ML-DSA-65 when the client offers it.
+        fn choose_scheme(
+            &self,
+            offered: &[SignatureScheme],
+        ) -> Option<Box<dyn rustls::sign::Signer>> {
+            offered
+                .contains(&SignatureScheme::ML_DSA_65)
+                .then(|| Box::new(FakeMlDsa) as Box<dyn rustls::sign::Signer>)
+        }
+
+        /// Not an algorithm rustls knows.
+        fn algorithm(&self) -> rustls::SignatureAlgorithm {
+            rustls::SignatureAlgorithm::Unknown(0x05)
+        }
+    }
+
+    impl rustls::sign::Signer for FakeMlDsa {
+        /// Returns placeholder bytes; the client cannot check them anyway.
+        fn sign(&self, _message: &[u8]) -> Result<Vec<u8>, rustls::Error> {
+            Ok(vec![0; 3309])
+        }
+
+        /// ML-DSA-65.
+        fn scheme(&self) -> SignatureScheme {
+            SignatureScheme::ML_DSA_65
+        }
+    }
+
+    /// A TLS 1.3 server with an ML-DSA-65 certificate keeps its chain, marked
+    /// as not verified.
+    #[tokio::test]
+    async fn accepts_unverifiable_handshake() {
+        let certified = Arc::new(rustls::sign::CertifiedKey::new(
+            vec![CertificateDer::from(MLDSA65_CERT.to_vec())],
+            Arc::new(FakeMlDsa),
+        ));
+        let config = ServerConfig::builder_with_provider(Arc::new(ring::default_provider()))
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .unwrap()
+            .with_no_client_auth()
+            .with_cert_resolver(Arc::new(WrongKey(certified)));
+        let acceptor = TlsAcceptor::from(Arc::new(config));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (s, _) = listener.accept().await.unwrap();
+            if let Ok(mut tls) = acceptor.accept(s).await {
+                let _ = tls.shutdown().await;
+            }
+        });
+        let chain = fetch_certificates(&Transport::new(addr), Some("localhost"))
+            .await
+            .unwrap();
+        assert_eq!(chain.certificates, vec![MLDSA65_CERT.to_vec()]);
+        assert!(!chain.signature_verified);
     }
 
     /// TLS 1.3 handshake returns the leaf certificate and version.
