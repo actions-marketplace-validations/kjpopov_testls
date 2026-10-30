@@ -106,11 +106,13 @@ issue must-staple 0x1005 muststaple
 issue responder-no-sign 0x1006 responder_no_sign
 issue urls 0x1007 urls
 issue indirect 0x1008 indirect
+issue urls-revoked 0x1009 urls
 
 # Status database: leaf is good, other was revoked for key compromise on
-# 2026-10-01; stray is absent and therefore unknown.
+# 2026-10-01, and so was urls-revoked; stray is absent and therefore unknown.
 printf 'V\t361231000000Z\t\t1001\tunknown\t/CN=leaf\n' > index.txt
 printf 'R\t361231000000Z\t261001000000Z,keyCompromise\t1002\tunknown\t/CN=other\n' >> index.txt
+printf 'R\t361231000000Z\t261001000000Z,keyCompromise\t1009\tunknown\t/CN=urls-revoked\n' >> index.txt
 
 respond leaf ca good
 respond other ca revoked
@@ -152,7 +154,7 @@ done
 # The request openssl builds for leaf, to compare with ours.
 cp good.req request.der
 
-for cert in ca leaf other stray must-staple urls indirect; do
+for cert in ca leaf other stray must-staple urls indirect urls-revoked; do
     "$openssl" x509 -in "$cert.pem" -outform DER -out "$cert.der"
     cp "$cert.der" "$out/ocsp-$cert.der"
 done

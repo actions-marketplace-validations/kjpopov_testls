@@ -352,6 +352,8 @@ mod tests {
     const OTHER: &[u8] = include_bytes!("testdata/ocsp-other.der");
     /// Leaf with OCSP and CRL URLs.
     const URLS: &[u8] = include_bytes!("testdata/ocsp-urls.der");
+    /// Leaf with the same URLs as `URLS`, revoked for key compromise on 2026-10-01.
+    const URLS_REVOKED: &[u8] = include_bytes!("testdata/ocsp-urls-revoked.der");
     /// Leaf whose only CRL distribution point, `other-partition.crl`, has a `cRLIssuer`.
     const INDIRECT: &[u8] = include_bytes!("testdata/ocsp-indirect.der");
     /// Leaf issued by an unrelated intermediate CA.
@@ -491,6 +493,10 @@ mod tests {
             verify_crl(CRL_SCOPED, &chain(URLS)).unwrap().status,
             CertStatus::Good
         );
+        assert!(matches!(
+            verify_crl(CRL_SCOPED, &chain(URLS_REVOKED)).unwrap().status,
+            CertStatus::Revoked { .. }
+        ));
         let other = "CRL covers another partition of the issuer's certificates";
         assert_eq!(verify_crl(CRL_SCOPED, &chain(LEAF)).unwrap_err(), other);
         assert_eq!(verify_crl(CRL_PARTITION, &chain(URLS)).unwrap_err(), other);
