@@ -7,10 +7,10 @@ use std::fmt::Write as _;
 use std::net::SocketAddr;
 
 use testls_checks::{
-    CertStatus, CertificateInfo, Finding, OcspStatus, PostQuantum, PqStatus, RevocationCheck,
-    Severity, VulnStatus, Vulnerability, alt_services, banners, cipher_name, cipher_severity,
-    cookies, dh_severity, display_time, group_name, group_severity, protocol_severity,
-    revocation_reason_name,
+    CertStatus, CertificateInfo, Finding, Grade, Letter, OcspStatus, PostQuantum, PqStatus,
+    RevocationCheck, Severity, VulnStatus, Vulnerability, alt_services, banners, cipher_name,
+    cipher_severity, cookies, dh_severity, display_time, group_name, group_severity,
+    protocol_severity, revocation_reason_name,
 };
 use testls_probe::{
     CipherOrder, CipherResult, HandshakeDetails, HttpResponse, Intolerance, KeyExchangeResult,
@@ -549,6 +549,43 @@ pub fn suppressed(suppressed: &[Suppressed], paint: Painter) -> String {
     out
 }
 
+/// Severity whose colour paints `letter`.
+fn letter_severity(letter: Letter) -> Severity {
+    match letter {
+        Letter::APlus | Letter::A => Severity::Ok,
+        Letter::AMinus => Severity::Low,
+        Letter::B => Severity::Medium,
+        Letter::C => Severity::High,
+        Letter::F => Severity::Critical,
+    }
+}
+
+/// Grade with its T marker and an `(incomplete)` note, e.g. `C T
+/// (incomplete)`.
+pub(crate) fn grade_label(grade: &Grade) -> String {
+    if grade.incomplete {
+        format!("{grade} (incomplete)")
+    } else {
+        grade.to_string()
+    }
+}
+
+/// Renders the overall grade, after a blank line, with the reasons it is
+/// not better.
+#[must_use]
+pub fn grade(grade: &Grade, paint: Painter) -> String {
+    let mut out = format!("\n{}\n", paint.heading("Grade"));
+    let _ = writeln!(
+        out,
+        "  {}",
+        paint.severity(letter_severity(grade.letter), &grade_label(grade))
+    );
+    for reason in &grade.reasons {
+        let _ = writeln!(out, "    {}", printable(reason));
+    }
+    out
+}
+
 /// Formats a cipher suite id and name for the cipher listing.
 fn cipher_label(version: ProtocolVersion, id: u32) -> String {
     format!("{}  {}", suite_id(version, id), cipher_name(version, id))
@@ -1080,5 +1117,32 @@ mod tests {
             reason: "r".to_owned(),
         }];
         assert!(suppressed(&hostile, PLAIN).contains("[\\u{1b}[2J]"));
+    }
+
+    /// The grade shows the letter, T marker, incomplete note and reasons.
+    #[test]
+    fn grade_lines() {
+        let g = Grade {
+            letter: Letter::C,
+            untrusted: true,
+            incomplete: true,
+            reasons: vec![
+                "high findings: cert.untrusted".into(),
+                "incomplete: some probes failed".into(),
+            ],
+        };
+        assert_eq!(
+            grade(&g, PLAIN),
+            "\nGrade\n  C T (incomplete)\n    high findings: cert.untrusted\n    \
+             incomplete: some probes failed\n"
+        );
+        assert!(grade(&g, Painter::new(true)).contains("\x1b[31mC T (incomplete)\x1b[0m"));
+        let best = Grade {
+            letter: Letter::APlus,
+            untrusted: false,
+            incomplete: false,
+            reasons: Vec::new(),
+        };
+        assert_eq!(grade(&best, PLAIN), "\nGrade\n  A+\n");
     }
 }

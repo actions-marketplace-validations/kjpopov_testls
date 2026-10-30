@@ -130,6 +130,7 @@ fn legacy_server() {
         s.line("downgrade sentinel"),
         "downgrade sentinel      not tested"
     );
+    assert_eq!(s.line("F T"), "F T");
     assert_eq!(
         s.code, 1,
         "critical findings must fail the default threshold"
@@ -205,6 +206,8 @@ fn modern_server() {
         ]
     );
     let findings = s.stdout.split_once("\nFindings\n").expect("findings").1;
+    let (findings, grade) = findings.split_once("\n\nGrade\n").expect("grade");
+    assert_eq!(grade, "  A-\n    low findings: hsts.missing\n");
     let lines: Vec<&str> = findings.lines().map(str::trim).collect();
     assert_eq!(
         lines,
@@ -320,6 +323,8 @@ fn json_report() {
     assert_eq!(v["post_quantum"]["status"], "not tested");
     assert_eq!(v["details"]["extended_master_secret"], true);
     assert_eq!(v["details"]["downgrade_sentinel"], serde_json::Value::Null);
+    assert_eq!(v["grade"]["letter"], "F");
+    assert_eq!(v["grade"]["untrusted"], true);
     assert_eq!(v["findings"][0]["severity"], "critical");
     assert!(
         v["findings"]
@@ -359,13 +364,15 @@ fn revocation_without_sources() {
 }
 
 /// Without the test CA the same server's certificate is untrusted, and an
-/// SNI name it does not cover is a mismatch.
+/// SNI name it does not cover is a mismatch; both cap the grade at C with
+/// the T marker.
 #[test]
 #[ignore = "needs tests/servers running"]
 fn untrusted_certificate() {
     let s = scan("127.0.0.1:14434", &["--sni", "example.com"]);
     assert!(s.has("high     certificate chain is not trusted: issuer is not a trusted root"));
     assert!(s.has("high     certificate does not cover example.com"));
+    assert_eq!(s.line("C T"), "C T");
     assert_eq!(s.code, 1);
 }
 
