@@ -51,6 +51,16 @@ subjectAltName=DNS:localhost
 extendedKeyUsage=serverAuth
 authorityInfoAccess=OCSP;URI:http://ocsp.example.test/,caIssuers;URI:http://ca.example.test/ca.der
 crlDistributionPoints=URI:http://crl.example.test/ca.crl,URI:ldap://crl.example.test/ca
+[indirect]
+basicConstraints=CA:false
+subjectAltName=DNS:localhost
+extendedKeyUsage=serverAuth
+crlDistributionPoints=indirect_dp
+[indirect_dp]
+fullname=URI:http://crl.example.test/other-partition.crl
+CRLissuer=dirName:indirect_issuer
+[indirect_issuer]
+CN=other CRL issuer
 EOF
 
 cat > ca.cnf <<'EOF'
@@ -95,6 +105,7 @@ issue stray 0x1004 leaf
 issue must-staple 0x1005 muststaple
 issue responder-no-sign 0x1006 responder_no_sign
 issue urls 0x1007 urls
+issue indirect 0x1008 indirect
 
 # Status database: leaf is good, other was revoked for key compromise on
 # 2026-10-01; stray is absent and therefore unknown.
@@ -141,7 +152,7 @@ done
 # The request openssl builds for leaf, to compare with ours.
 cp good.req request.der
 
-for cert in ca leaf other stray must-staple urls; do
+for cert in ca leaf other stray must-staple urls indirect; do
     "$openssl" x509 -in "$cert.pem" -outform DER -out "$cert.der"
     cp "$cert.der" "$out/ocsp-$cert.der"
 done

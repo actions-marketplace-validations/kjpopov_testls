@@ -352,6 +352,8 @@ mod tests {
     const OTHER: &[u8] = include_bytes!("testdata/ocsp-other.der");
     /// Leaf with OCSP and CRL URLs.
     const URLS: &[u8] = include_bytes!("testdata/ocsp-urls.der");
+    /// Leaf whose only CRL distribution point, `other-partition.crl`, has a `cRLIssuer`.
+    const INDIRECT: &[u8] = include_bytes!("testdata/ocsp-indirect.der");
     /// Leaf issued by an unrelated intermediate CA.
     const FOREIGN: &[u8] = include_bytes!("testdata/trust-leaf.der");
     /// CRL from the test CA listing `OTHER`.
@@ -517,6 +519,20 @@ mod tests {
         assert!(same_point(&names[0], &ca));
         assert!(!same_point(&names[0], &other));
         assert_eq!(distribution_points(&certificate(LEAF).unwrap()), Ok(vec![]));
+    }
+
+    /// Points with a `cRLIssuer` are skipped, so the issuer's own CRL for that
+    /// partition does not cover the leaf.
+    #[test]
+    fn indirect_distribution_points() {
+        assert_eq!(
+            distribution_points(&certificate(INDIRECT).unwrap()),
+            Ok(vec![])
+        );
+        assert_eq!(
+            verify_crl(CRL_PARTITION, &chain(INDIRECT)).unwrap_err(),
+            "CRL covers another partition of the issuer's certificates"
+        );
     }
 
     /// The first successful attempt decides; failures before it are
