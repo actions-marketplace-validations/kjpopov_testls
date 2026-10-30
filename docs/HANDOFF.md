@@ -14,7 +14,17 @@ if `gh` is allowed); update it when a session ends.
   #68–#75) and `--mx` (probe PR #119 `MxResolver` in `testls-probe/src/mx.rs`,
   CLI PR #120 `mail_hosts` in `main.rs`, decisions #76–#77), plus the
   PR #117 security hardening (PRs #122–#126, decisions #78–#81, CHANGELOG
-  "Security" section). Next decision log number: **#82**.
+  "Security" section), Codecov upload (PR #128, decision #82) and the
+  application-layer checks: BREACH (#129, decision #83), ALPACA (#130,
+  #84), Opossum (#131, #85). Next decision log number: **#86**.
+- Application-layer code map: BREACH reads `Content-Encoding` from the
+  existing GET (`testls-probe/src/http.rs` sends `Accept-Encoding`); ALPACA
+  is `HandshakeFeatures::strict_alpn` in `testls-probe/src/features.rs`
+  (raw hello up to TLS 1.2, rustls handshake at TLS 1.3); Opossum is
+  `testls-probe/src/upgrade.rs` (`OPTIONS *` + `Upgrade: TLS/1.0` to the
+  scanned port and port 80, joined with the feature probe in
+  `vulnerability_section`). Verdicts in `testls-checks/src/vulnerabilities.rs`
+  (15 entries).
 - PR #117 (external audit by r4d1um, Stephan
   `<dertoradium@googlemail.com>`) stays open as reference; **close it when
   v0.5 is released** (status comment 6521444559 lists the follow-ups). Its
@@ -33,8 +43,6 @@ if `gh` is allowed); update it when a session ends.
   in `main.rs`); no integration test (would need a DNS server in
   `tests/servers`). Outbound port 25 is blocked on the dev machine, so live
   `--mx` scans hang until the connect timeout.
-- PLAN v0.5 has a new item (PR #116): upload coverage to Codecov; needs
-  the maintainer to enable the Codecov app first.
 - STARTTLS lives in `testls-probe/src/starttls.rs`; `Transport::connect`
   runs it after TCP/proxy connect, failures are `ProbeError::Connect`.
   `Transport` is no longer `Copy` (has `host` for XMPP).
@@ -57,11 +65,12 @@ if `gh` is allowed); update it when a session ends.
 
 v0.5 in PLAN.md, suggested order:
 
-1. Codecov upload (once the maintainer enabled the app).
-2. Intrusive checks behind `--intrusive` (Heartbleed, CCS injection,
-   Ticketbleed, ROBOT), one PR each.
-3. Application-layer checks (BREACH, ALPACA, Opossum), then grading.
-4. v0.5 release once the maintainer decides; close PR #117 then.
+1. Intrusive checks behind `--intrusive` (Heartbleed, CCS injection,
+   Ticketbleed, ROBOT), one PR each. Skipped by the maintainer in the
+   2026-10-30 session; a remote branch `feat/intrusive-checks` exists (not
+   ours, check with the maintainer before touching it).
+2. Grading.
+3. v0.5 release once the maintainer decides; close PR #117 then.
 
 Open questions in PLAN.md (default profile runtime, politeness/rate limits)
 still need a decision before grading.
