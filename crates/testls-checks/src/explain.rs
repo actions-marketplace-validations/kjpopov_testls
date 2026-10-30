@@ -533,6 +533,12 @@ const EXPLANATIONS: &[Explanation] = &[
         "RFC 7919 §8.3, raccoon-attack.com",
     ),
     entry(
+        "vuln.breach",
+        "BREACH: HTTP responses are compressed",
+        "Compressing response bodies leaks the length of secrets, such as CSRF tokens, that appear next to attacker-reflected input. Only the front page is checked; disable compression for pages with secrets, or mask tokens per response.",
+        "RFC 7457 §2.6, breachattack.com",
+    ),
+    entry(
         "intolerance.unknown_version",
         "Server rejects an unknown protocol version",
         "A server must negotiate the highest version both sides support; failing on a newer version offer breaks future clients and invites insecure fallback.",

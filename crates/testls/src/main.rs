@@ -1053,7 +1053,8 @@ async fn later_sections(
         skipped()
     };
 
-    let vulns = vulnerability_section(transport, protocols, ciphers, key_exchange, sni, deep).await;
+    let measured = (protocols, ciphers, key_exchange, http.as_ref().ok());
+    let vulns = vulnerability_section(transport, measured, sni, deep).await;
     show(format!("\n{}", text::vulnerabilities(&vulns, paint)));
     findings.extend(vulnerability_findings(&vulns));
 
@@ -1215,15 +1216,19 @@ async fn http_section(
 
 /// Probes compression, renegotiation and downgrade protection when `probe`
 /// is set, then derives the named vulnerabilities from everything the scan
-/// collected.
+/// collected: protocols, cipher and key exchange sections, and the HTTP
+/// response when one was retrieved.
 ///
-/// A failed or skipped feature probe leaves the affected verdicts as not
-/// tested.
+/// A failed or skipped feature probe or HTTP fetch leaves the affected
+/// verdicts as not tested.
 async fn vulnerability_section(
     transport: &Transport,
-    protocols: &[ProtocolResult],
-    ciphers: &[CipherSection],
-    key_exchange: &[KeyExchangeSection],
+    (protocols, ciphers, key_exchange, http): (
+        &[ProtocolResult],
+        &[CipherSection],
+        &[KeyExchangeSection],
+        Option<&HttpResponse>,
+    ),
     sni: Option<&str>,
     probe: bool,
 ) -> Vec<Vulnerability> {
@@ -1237,7 +1242,7 @@ async fn vulnerability_section(
     } else {
         None
     };
-    assess_vulnerabilities(protocols, &ciphers, &key_exchange, features.as_ref())
+    assess_vulnerabilities(protocols, &ciphers, &key_exchange, features.as_ref(), http)
 }
 
 /// Sends unusual but valid `ClientHello`s at the best offered version.
@@ -1661,7 +1666,8 @@ mod tests {
                 order: testls_probe::CipherOrder::Server,
             }),
         }];
-        let list = vulnerability_section(&transport, &protocols, &ciphers, &[], None, true).await;
+        let measured = (&protocols[..], &ciphers[..], &[][..], None);
+        let list = vulnerability_section(&transport, measured, None, true).await;
         let crime = list.iter().find(|v| v.id == "crime").expect("crime");
         assert_eq!(crime.status, testls_checks::VulnStatus::NotTested);
         assert_eq!(vulnerability_findings(&list), vec![]);
