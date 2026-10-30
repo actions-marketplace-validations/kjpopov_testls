@@ -499,6 +499,75 @@ mod tests {
         assert_eq!(f.strict_alpn, None);
     }
 
+    /// An SSLv3 hello signals secure renegotiation with the SCSV, since it
+    /// carries no extensions.
+    #[tokio::test]
+    async fn ssl3_renegotiation_scsv() {
+        let addr = serve(Behaviour {
+            deflate: false,
+            renegotiation: Some(&[0]),
+            fallback: true,
+            alpn: true,
+        })
+        .await;
+        let ssl3 = [CipherResult {
+            version: ProtocolVersion::SSL3,
+            suites: vec![0x000a],
+            order: CipherOrder::NotApplicable,
+        }];
+        let f = probe_features(&Transport::new(addr), &ssl3, None)
+            .await
+            .unwrap();
+        assert_eq!(f.legacy_version, Some(ProtocolVersion::SSL3));
+        assert_eq!(f.compression, Some(false));
+        assert_eq!(f.secure_renegotiation, Some(true));
+    }
+
+    /// A connection reset counts as a refused hello, leaving the verdicts
+    /// untested instead of failing the probe.
+    #[tokio::test]
+    async fn reset_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = listener.accept().await {
+                let mut first = [0; 1];
+                let _ = s.read_exact(&mut first).await;
+                // Closing with unread data makes the kernel send a reset.
+                drop(s);
+            }
+        });
+        let f = probe_features(&Transport::new(addr), &two_versions(), None)
+            .await
+            .unwrap();
+        assert_eq!(f.legacy_version, Some(ProtocolVersion::TLS12));
+        assert_eq!(f.compression, None);
+        assert_eq!(f.secure_renegotiation, None);
+    }
+
+    /// A `ServerHello` with a suite or version other than offered is not
+    /// an acceptance.
+    #[test]
+    fn mismatched_server_hello() {
+        let response = HelloResponse::ServerHello {
+            hello: ServerHello {
+                legacy_version: ProtocolVersion::TLS12,
+                random: [1; 32],
+                session_id: vec![],
+                cipher_suite: 0xc013,
+                compression_method: 0,
+                extensions: vec![],
+            },
+            certificates: vec![],
+            server_key_exchange: None,
+        };
+        let v = ProtocolVersion::TLS12;
+        assert!(accepted(v, &[0xc013], Some(&response)).unwrap().is_some());
+        assert!(accepted(v, &[0xc014], Some(&response)).unwrap().is_none());
+        let v11 = ProtocolVersion::TLS11;
+        assert!(accepted(v11, &[0xc013], Some(&response)).unwrap().is_none());
+    }
+
     /// With a single version there is nothing to fall back from, and a
     /// TLS 1.3-only server has no legacy hello to send.
     #[tokio::test]
