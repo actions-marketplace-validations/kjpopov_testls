@@ -53,20 +53,21 @@ if `gh` is allowed); update it when a session ends.
 
 ## Waiting on the maintainer
 
-- crates.io: GitHub environment `crates-io` and the variable
-  `CRATES_IO_TRUSTED_PUBLISHING` are set up. The first manual
-  `cargo publish --workspace --locked` of v0.4.3 and trusted publishing on
-  each `testls*` crate may still be pending; check with
-  `curl -s https://crates.io/api/v1/crates/testls`. From the next tag the
-  `crates-io` job publishes; if it fails halfway, rerun failed jobs.
+- crates.io: v0.4.3 is published manually. The v0.5.0 `crates-io` job was
+  skipped because repo variable `CRATES_IO_TRUSTED_PUBLISHING` is not
+  `true`. Maintainer: set it (and trusted publishing per `testls*` crate),
+  then rerun the job or `cargo publish --workspace --locked` from tag
+  v0.5.0. If the `crates-io` job fails halfway, rerun it (it skips
+  versions already published); if a manual publish stops halfway,
+  publish the remaining crates with `cargo publish -p <crate> --locked`.
 - winget: deliberately postponed until there are more features (better odds
   with the moderators). Keep generating `packaging/winget/X.Y.Z/` in the
   packages PR, but do not remind the maintainer each release.
 
 ## Next work
 
-1. Finish the v0.5.0 release loop if not done: tag, `release.yml`,
-   packages PR `chore/packages-0.5.0`, Marketplace tick by the maintainer.
+1. v0.5.0 released (tag, `release.yml`, packages PR #140 merged).
+   Maintainer: Marketplace tick, crates.io (above).
 2. v0.6 web service (`testls serve`) in PLAN.md; ask the maintainer design
    questions first.
 3. Backlog: intrusive checks (`--intrusive`: Heartbleed, CCS injection,
