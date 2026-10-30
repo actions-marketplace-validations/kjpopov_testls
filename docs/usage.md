@@ -98,6 +98,13 @@ testls --format sarif example.com > testls.sarif
 testls --format markdown example.com >> "$GITHUB_STEP_SUMMARY"
 ```
 
+## Grade
+
+Each completed scan ends with a letter grade (A+, A, A-, B, C, F) and the reasons it
+is not better; `T` marks an untrusted or mismatched certificate. It is
+testls' own model, not SSL Labs', and does not affect the exit status. See
+[grading.md](grading.md).
+
 ## Exit status
 
 | Code | Meaning |

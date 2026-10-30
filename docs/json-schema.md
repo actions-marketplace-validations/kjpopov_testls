@@ -42,6 +42,7 @@ per target, in scan order. This page describes schema version **1**.
 | `vulnerabilities` | array | [Vulnerabilities](#vulnerability) derived from the scan data |
 | `intolerance` | object | [ClientHello tolerance](#clienthello-tolerance) tests |
 | `details` | object | [Handshake details](#handshake-details) |
+| `grade` | object | Overall [grade](#grade) |
 | `findings` | array | [Findings](#finding), most severe first |
 | `suppressed` | array | [Suppressed findings](#suppressed-finding) from `.testls.toml` or `--baseline`, most severe first |
 
@@ -203,6 +204,18 @@ Each field is `null` when not tested.
 | `max_early_data` | integer or null | Largest 0-RTT early data size in a ticket; `0` = no 0-RTT |
 | `error` | string | Only when the probe failed |
 
+### Grade
+
+testls' own letter grade, see [grading.md](grading.md). It is computed
+from the findings before suppressions and baseline.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `letter` | string | `"A+"`, `"A"`, `"A-"`, `"B"`, `"C"`, or `"F"` |
+| `untrusted` | bool | Certificate untrusted or not covering the host (T marker) |
+| `incomplete` | bool | A probe failed; the grade may be too good |
+| `reasons` | array of strings | Why the grade is not better; wording may change |
+
 ### Finding
 
 | Field | Type | Description |
@@ -323,6 +336,7 @@ Abbreviated:
     "protocol": "TLSv1.2", "extended_master_secret": true, "downgrade_sentinel": true,
     "session_tickets": true, "max_early_data": 0
   },
+  "grade": { "letter": "A+", "untrusted": false, "incomplete": false, "reasons": [] },
   "findings": [
     { "id": "protocol.no_tls13", "severity": "info", "message": "..." }
   ],

@@ -2,7 +2,8 @@
 //!
 //! Each scanned address is a `<testsuite>` and each finding a `<testcase>`
 //! named by its id, with the suite name as its classname. Findings at or above `--fail-on` carry a `<failure>`,
-//! so the report fails exactly where the exit code does; a scan that could
+//! so the report fails exactly where the exit code does; each suite has a
+//! `grade` property; a scan that could
 //! not run is a suite with one `<error>` case. The element and attribute
 //! names follow the common JUnit XML format read by Jenkins, GitLab and
 //! GitHub test reporters.
@@ -12,6 +13,7 @@ use std::fmt::Write as _;
 use testls_checks::Severity;
 
 use crate::sarif::Scan;
+use crate::text::grade_label;
 
 /// A target whose scan failed before producing findings.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,8 +70,10 @@ pub fn render(scans: &[Scan], failures: &[Failure], fail_on: Severity) -> String
             .count();
         let _ = writeln!(
             out,
-            "  <testsuite name=\"{suite}\" tests=\"{}\" failures=\"{failed}\" errors=\"0\">",
-            scan.findings.len()
+            "  <testsuite name=\"{suite}\" tests=\"{}\" failures=\"{failed}\" errors=\"0\">\n    \
+             <properties>\n      <property name=\"grade\" value=\"{}\"/>\n    </properties>",
+            scan.findings.len(),
+            escape(&grade_label(&scan.grade))
         );
         for f in &scan.findings {
             let name = escape(&f.id);
@@ -109,7 +113,7 @@ pub fn render(scans: &[Scan], failures: &[Failure], fail_on: Severity) -> String
 
 #[cfg(test)]
 mod tests {
-    use testls_checks::Finding;
+    use testls_checks::{Finding, Grade, Letter};
 
     use super::*;
 
@@ -118,6 +122,12 @@ mod tests {
         Scan {
             target: target.to_owned(),
             addr: "192.0.2.1:443".parse().expect("address"),
+            grade: Grade {
+                letter: Letter::B,
+                untrusted: false,
+                incomplete: false,
+                reasons: Vec::new(),
+            },
             findings,
         }
     }
@@ -149,6 +159,7 @@ mod tests {
             "<failure message=\"TLSv1.0 offered\" type=\"medium\">medium: TLSv1.0 offered</failure>"
         ));
         assert!(xml.contains("<system-out>low: no HSTS</system-out>"));
+        assert!(xml.contains("<properties>\n      <property name=\"grade\" value=\"B\"/>"));
         assert!(xml.contains("<error message=\"cannot resolve: no such host\" type=\"scan\">"));
         assert!(xml.ends_with("</testsuites>\n"));
         assert_eq!(xml.matches("<testcase ").count(), 3);

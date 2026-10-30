@@ -135,7 +135,7 @@ Two connection paths:
 - Intrusive checks behind `--intrusive`: Heartbleed, CCS injection,
   Ticketbleed, ROBOT
 - [x] Application-layer checks: BREACH, ALPACA, Opossum
-- Own grading model (documented, not SSL Labs-compatible)
+- [x] Own grading model (documented, not SSL Labs-compatible)
 - [x] Upload coverage to Codecov (PR comments and history, like hickory-dns);
   revisits #22
 - [x] Codecov Test Analytics (failed and flaky tests in the PR comment)
@@ -174,11 +174,12 @@ Not scheduled; pulled into a milestone when someone picks it up.
 - Release trust: Sigstore signatures, SLSA provenance, SBOM, macOS
   notarization
 - Docs: catalogue of checks, mapping from testssl.sh options, threat model
+- Politeness: `--delay` between connections to one target
+- Bounded parallel probes per target (`--parallel`, #8 as planned, see #89)
 
 ## Open questions
 
-- Default scan profile: what runs without flags, and how long it may take
-- Rate limiting / politeness defaults towards scanned servers
+None at the moment (default profile and politeness settled in #88, #89).
 
 ## Decision log
 
@@ -270,3 +271,6 @@ Not scheduled; pulled into a milestone when someone picks it up.
 | 84 | ALPACA is judged by strict ALPN only: the feature probe sends a hello at the server's best TLS version offering only the unknown protocol `testls-unknown` (a raw hello up to TLS 1.2, a full rustls handshake at TLS 1.3, where the answer is in the encrypted `EncryptedExtensions`); a `no_application_protocol` alert is not vulnerable, a completed handshake is vulnerable (`vuln.alpaca`, low), anything else not tested. No SNI-mismatch or cross-protocol probes | Strict ALPN is the countermeasure a scanner can observe with one handshake; certificate sharing across services and strict SNI cannot be judged from one endpoint. Low because exploitation needs a man-in-the-middle and a second, weaker service under the same certificate |
 | 85 | Opossum is judged from one plaintext `OPTIONS *` request with `Upgrade: TLS/1.0` and `Connection: Upgrade` (RFC 2817 §3.2) to the scanned port and to port 80 of the same address, run concurrently with the feature probe in the default profile and skipped under `--starttls`; a `101 Switching Protocols` reply naming `TLS/…` on either port is vulnerable (`vuln.opossum`, medium), a port that refuses a direct connection or closes without a reply counts as refusing, any other failure (connection or read timeout, proxy failure, I/O error after connecting, truncated or oversized HTTP reply head) leaves the port not tested | Port 80 is where the Opossum paper found most upgrade-capable servers; probing it reaches beyond the scanned port, but one request is polite and the verdict depends on it. Medium like insecure renegotiation: a man-in-the-middle can desynchronise HTTPS responses without breaking TLS |
 | 86 | The coverage job runs the tests through `cargo llvm-cov nextest` (profile `ci` in `.config/nextest.toml`, `fail-fast = false`) and keeps the JUnit report as artifact `junit` unless the run was cancelled. The `upload` job also runs after failed tests and sends the report to Codecov Test Analytics (`report_type: test_results`); coverage is still uploaded only after a successful run. Other CI jobs keep `cargo test`. Amends #82 | Test Analytics needs JUnit XML, which `cargo test` cannot write on stable; nextest is the usual way. Failed runs are the ones Codecov needs to spot flaky tests, and the token stays out of the job that runs PR code. The workspace has no doctests, so nextest loses nothing |
+| 87 | Own letter grade (A+, A, A-, B, C, F), documented in `docs/grading.md`: the worst finding of severity `low` or worse caps it (critical F, high C, medium B, low A-); with none it is A, or A+ with TLSv1.3, nothing below TLSv1.2 and HSTS `max-age` ≥ 1 year. `policy.*` findings do not count; suppressions and baseline do not apply. `cert.untrusted`/`cert.hostname_mismatch` add a `T` marker, failed probes mark it incomplete. Shown in every format, never affects the exit status | Reuses the severity model (#13) so the grade and `--fail-on` agree and every grade is explained by finding ids; SSL Labs' scoring is undocumented in detail and changes, so no compatibility is claimed. Policies are the user's choice and suppressions what they accept, neither describes the server. Exit codes stay tied to `--fail-on` alone |
+| 88 | Default profile stays as is: every non-intrusive probe of the target; revocation lookups and all addresses only with `full`, intrusive checks never by default. Target: under 30 s against a responsive server | Measured 3–11 s on public sites; network fetches to third parties and extra addresses are opt-in |
+| 89 | Politeness: probes run sequentially, one connection at a time per target, no retries, targets one after another (amends #8; the bounded parallelism was never built). `--delay` and `--parallel` are in the backlog | Sequential scans are gentle on servers and IDS and fast enough (#88); parallelism can come back when a need shows |

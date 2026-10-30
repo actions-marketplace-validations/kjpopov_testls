@@ -36,6 +36,12 @@ All notable changes to `testls` are listed here. The format follows
   scanned port and port 80; a `101 Switching Protocols` reply to TLS on
   either is reported as vulnerable. Not tested under the quick profile or
   `--starttls`.
+- Letter grade per scan (A+, A, A-, B, C, F, with `T` for an untrusted or
+  mismatched certificate and the reasons it is not better), testls' own
+  model documented in [docs/grading.md](docs/grading.md), not SSL Labs'.
+  The worst finding of severity `low` or worse caps it, `policy.*`
+  findings excepted, before suppressions and baseline. Shown in every
+  format (`grade` object in JSON); it does not change the exit status.
 
 ### Security
 
