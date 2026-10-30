@@ -33,6 +33,11 @@ All notable changes to `testls` are listed here. The format follows
   since the baseline, and never treats failed or incomplete measurements
   (`*.error`, `*.incomplete`, `cert.unparsable`) as known. An invalid
   severity in the baseline is a scan error. Reported by @r4d1um in #117.
+- The certificate fetch checks the server's handshake signature against its
+  certificate, so a peer relaying another server's certificate fails with
+  `cert.error`. Signatures testls cannot check (ML-DSA, RSA keys under 2048
+  bits) are reported as `cert.signature_unverified`. Reported by @r4d1um in
+  #117.
 
 ## [0.4.3] - 2026-10-27
 

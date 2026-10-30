@@ -1110,6 +1110,13 @@ async fn certificate_section(
     };
     let now = unix_now();
     let mut findings = certificate_findings(&chain.certificates, Some(host), now);
+    if !chain.signature_verified {
+        findings.push(Finding::new(
+            "cert.signature_unverified",
+            Severity::Info,
+            "handshake signature not verified: scheme or key not supported",
+        ));
+    }
     if store.is_public() && is_trusted(&chain.certificates, now, store) {
         findings.extend(baseline_findings(&chain.certificates));
     }

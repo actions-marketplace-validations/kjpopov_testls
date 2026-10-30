@@ -1,20 +1,24 @@
 //! Certificate chain retrieval over a full rustls handshake.
 //!
-//! The verifier used here accepts every chain and signature: the goal is to
-//! record what the server presents, not to decide whether to trust it. Trust
-//! is evaluated later by the checks.
+//! The verifier used here accepts every chain: the goal is to record what the
+//! server presents, not to decide whether to trust it. Trust is evaluated
+//! later by the checks. The handshake signature is checked against the leaf
+//! key, so a peer relaying someone else's certificate without its private
+//! key fails the handshake instead of being reported as that server.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{CryptoProvider, ring};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme};
+use rustls::{CertificateError, ClientConfig, DigitallySignedStruct, SignatureScheme};
 use testls_wire::ProtocolVersion;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
+use x509_parser::public_key::PublicKey;
 
 use crate::{ProbeError, Transport};
 
@@ -28,10 +32,16 @@ pub struct CertificateChain {
     /// DER-encoded OCSP response stapled to the handshake (RFC 6066 §8,
     /// RFC 8446 §4.4.2.1), if the server sent one.
     pub ocsp_response: Option<Vec<u8>>,
+    /// Whether the handshake signature was verified against the leaf key.
+    /// `false` when ring cannot check it (ML-DSA, RSA keys under 2048 bits).
+    pub signature_verified: bool,
 }
 
 /// Completes a TLS 1.2/1.3 handshake and returns the server's certificate
 /// chain without validating it.
+///
+/// The handshake signature must match the leaf key when it can be checked;
+/// see [`CertificateChain::signature_verified`].
 ///
 /// `sni` is sent as the server name; without it the target IP is used and
 /// no SNI extension is sent.
@@ -62,6 +72,7 @@ pub async fn fetch_certificates(
         version,
         certificates,
         ocsp_response: verifier.take_ocsp_response(),
+        signature_verified: verifier.signature_verified(),
     })
 }
 
@@ -121,14 +132,16 @@ const ML_DSA_SCHEMES: [SignatureScheme; 3] = [
     SignatureScheme::ML_DSA_87,
 ];
 
-/// Verifier that accepts any certificate and handshake signature, and keeps
-/// the stapled OCSP response.
+/// Verifier that accepts any certificate, rejects handshake signatures that
+/// do not match the leaf key, and keeps the stapled OCSP response.
 #[derive(Debug)]
 struct AcceptAll {
-    /// Provider whose signature schemes are advertised.
+    /// Provider whose signature schemes are advertised and verified.
     provider: Arc<CryptoProvider>,
     /// Stapled OCSP response seen during the handshake.
     ocsp_response: Mutex<Option<Vec<u8>>>,
+    /// Set when a handshake signature was accepted without verification.
+    unverified: AtomicBool,
 }
 
 impl AcceptAll {
@@ -137,6 +150,7 @@ impl AcceptAll {
         Self {
             provider: Arc::new(ring::default_provider()),
             ocsp_response: Mutex::new(None),
+            unverified: AtomicBool::new(false),
         }
     }
 
@@ -147,6 +161,45 @@ impl AcceptAll {
             .unwrap_or_else(PoisonError::into_inner)
             .take()
     }
+
+    /// Whether every handshake signature seen so far was verified.
+    fn signature_verified(&self) -> bool {
+        !self.unverified.load(Ordering::Relaxed)
+    }
+
+    /// Turns a signature verification `result` into the verifier's answer.
+    ///
+    /// A signature that is wrong for the leaf key fails the handshake: the
+    /// peer does not hold the key of the certificate it presented. A
+    /// signature ring cannot check (ML-DSA, RSA keys under 2048 bits, keys or
+    /// schemes it does not support) is accepted and recorded as unverified,
+    /// so weak or post-quantum servers are still reported.
+    fn check(
+        &self,
+        result: Result<HandshakeSignatureValid, rustls::Error>,
+        cert: &CertificateDer<'_>,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        match result {
+            Ok(valid) => Ok(valid),
+            Err(e @ rustls::Error::InvalidCertificate(CertificateError::BadSignature))
+                if !small_rsa_key(cert) =>
+            {
+                Err(e)
+            }
+            Err(_) => {
+                self.unverified.store(true, Ordering::Relaxed);
+                Ok(HandshakeSignatureValid::assertion())
+            }
+        }
+    }
+}
+
+/// Whether `cert` has an RSA key below the 2048 bits ring can verify.
+fn small_rsa_key(cert: &CertificateDer<'_>) -> bool {
+    let Ok((_, cert)) = x509_parser::parse_x509_certificate(cert.as_ref()) else {
+        return false;
+    };
+    matches!(cert.public_key().parsed(), Ok(PublicKey::RSA(key)) if key.key_size() < 2048)
 }
 
 impl ServerCertVerifier for AcceptAll {
@@ -169,29 +222,44 @@ impl ServerCertVerifier for AcceptAll {
         Ok(ServerCertVerified::assertion())
     }
 
-    /// Accepts any TLS 1.2 handshake signature.
+    /// Checks the TLS 1.2 handshake signature against the leaf key; see
+    /// [`AcceptAll::check`].
     fn verify_tls12_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
+        let result = rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        );
+        self.check(result, cert)
     }
 
-    /// Accepts any TLS 1.3 handshake signature.
+    /// Checks the TLS 1.3 handshake signature against the leaf key; see
+    /// [`AcceptAll::check`].
     fn verify_tls13_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
+        let result = rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        );
+        self.check(result, cert)
     }
 
     /// Advertises every scheme the crypto provider knows plus ML-DSA, which
-    /// ring cannot verify but this verifier accepts anyway, so servers with
-    /// only an ML-DSA certificate still send their chain.
+    /// ring cannot verify; such signatures are accepted but recorded as
+    /// unverified, so servers with only an ML-DSA certificate still send
+    /// their chain.
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
         let mut schemes = self
             .provider
@@ -220,6 +288,10 @@ mod tests {
     const CERT: &[u8] = include_bytes!("testdata/localhost.cert.der");
     /// PKCS#8 private key for [`CERT`].
     const KEY: &[u8] = include_bytes!("testdata/localhost.key.der");
+    /// Unrelated P-256 PKCS#8 private key (does not match [`CERT`]).
+    const WRONG_KEY: &[u8] = include_bytes!("testdata/wrong.key.der");
+    /// Self-signed certificate with a 1024-bit RSA key (`small-rsa.example`).
+    const RSA1024_CERT: &[u8] = include_bytes!("testdata/rsa1024.cert.der");
 
     /// Starts a one-shot rustls server limited to `versions`.
     async fn serve(versions: &[&'static rustls::SupportedProtocolVersion]) -> SocketAddr {
@@ -264,6 +336,83 @@ mod tests {
         assert!(schemes.contains(&SignatureScheme::ECDSA_NISTP256_SHA256));
     }
 
+    /// Bad signatures fail unless the key is too small for ring; signatures
+    /// ring cannot check are accepted and recorded as unverified.
+    #[test]
+    fn checks_signature_results() {
+        let p256 = CertificateDer::from(CERT.to_vec());
+        let rsa1024 = CertificateDer::from(RSA1024_CERT.to_vec());
+        let bad = || {
+            Err(rustls::Error::InvalidCertificate(
+                CertificateError::BadSignature,
+            ))
+        };
+
+        let verifier = AcceptAll::new();
+        assert!(
+            verifier
+                .check(Ok(HandshakeSignatureValid::assertion()), &p256)
+                .is_ok()
+        );
+        assert!(verifier.check(bad(), &p256).is_err());
+        assert!(verifier.signature_verified());
+
+        assert!(verifier.check(bad(), &rsa1024).is_ok());
+        assert!(!verifier.signature_verified());
+
+        // rustls reports schemes ring lacks, such as ML-DSA, this way.
+        let verifier = AcceptAll::new();
+        let unsupported = Err(rustls::Error::PeerMisbehaved(
+            rustls::PeerMisbehaved::SignedHandshakeWithUnadvertisedSigScheme,
+        ));
+        assert!(verifier.check(unsupported, &p256).is_ok());
+        assert!(!verifier.signature_verified());
+    }
+
+    /// Server that presents [`CERT`] but signs with an unrelated key.
+    #[derive(Debug)]
+    struct WrongKey(Arc<rustls::sign::CertifiedKey>);
+
+    impl rustls::server::ResolvesServerCert for WrongKey {
+        /// Always returns the mismatched certificate and key.
+        fn resolve(
+            &self,
+            _: rustls::server::ClientHello<'_>,
+        ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+            Some(Arc::clone(&self.0))
+        }
+    }
+
+    /// A server that does not hold the key of its certificate fails the
+    /// fetch over TLS 1.2 and 1.3.
+    #[tokio::test]
+    async fn rejects_wrong_handshake_key() {
+        let key = PrivateKeyDer::try_from(WRONG_KEY.to_vec()).unwrap();
+        let key = ring::sign::any_supported_type(&key).unwrap();
+        let certified = Arc::new(rustls::sign::CertifiedKey::new(
+            vec![CertificateDer::from(CERT.to_vec())],
+            key,
+        ));
+        assert!(certified.keys_match().is_err());
+        for version in [&rustls::version::TLS12, &rustls::version::TLS13] {
+            let config = ServerConfig::builder_with_provider(Arc::new(ring::default_provider()))
+                .with_protocol_versions(&[version])
+                .unwrap()
+                .with_no_client_auth()
+                .with_cert_resolver(Arc::new(WrongKey(Arc::clone(&certified))));
+            let acceptor = TlsAcceptor::from(Arc::new(config));
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (s, _) = listener.accept().await.unwrap();
+                acceptor.accept(s).await.is_err()
+            });
+            let r = fetch_certificates(&Transport::new(addr), Some("localhost")).await;
+            assert!(r.is_err(), "{version:?}: {r:?}");
+            assert!(server.await.unwrap(), "{version:?}");
+        }
+    }
+
     /// TLS 1.3 handshake returns the leaf certificate and version.
     #[tokio::test]
     async fn fetches_chain_over_tls13() {
@@ -274,6 +423,7 @@ mod tests {
         assert_eq!(chain.version, ProtocolVersion::TLS13);
         assert_eq!(chain.certificates, vec![CERT.to_vec()]);
         assert_eq!(chain.ocsp_response, None);
+        assert!(chain.signature_verified);
     }
 
     /// A stapled OCSP response is recorded over TLS 1.3 and TLS 1.2.
@@ -298,6 +448,7 @@ mod tests {
             .unwrap();
         assert_eq!(chain.version, ProtocolVersion::TLS12);
         assert_eq!(chain.certificates, vec![CERT.to_vec()]);
+        assert!(chain.signature_verified);
     }
 
     /// A non-TLS peer is reported as an I/O error, not a panic.
