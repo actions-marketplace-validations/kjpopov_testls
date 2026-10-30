@@ -120,6 +120,11 @@ fn is_error(finding: &Finding) -> bool {
 }
 
 /// Requirements for A+ that the scan does not meet.
+///
+/// The requirements are testls' own rule. They follow current guidance
+/// without being mandated by it: TLS 1.3 (RFC 8446), no TLS 1.0 or 1.1
+/// (deprecated by RFC 8996 §1; SSL by RFC 6176 and RFC 7568), and HSTS
+/// (RFC 6797) with a `max-age` of a year, as browser preload lists ask.
 fn a_plus_gaps(protocols: &[ProtocolResult], http: Option<&HttpResponse>) -> Vec<String> {
     let offered = |v| {
         protocols
