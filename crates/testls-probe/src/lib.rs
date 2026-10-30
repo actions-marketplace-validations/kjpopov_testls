@@ -13,6 +13,7 @@ mod mx;
 mod protocols;
 mod response;
 mod starttls;
+mod upgrade;
 
 use std::fmt;
 use std::io;
@@ -37,6 +38,7 @@ pub use response::HelloResponse;
 use response::ResponseParser;
 pub use starttls::Starttls;
 use testls_wire::{DecodeError, EncodeError};
+pub use upgrade::{TlsUpgrade, probe_tls_upgrade};
 
 /// Error from a single probe.
 #[derive(Debug)]

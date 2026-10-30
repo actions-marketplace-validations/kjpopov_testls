@@ -8,7 +8,7 @@
 
 use testls_probe::{
     CipherResult, HandshakeFeatures, HttpResponse, KeyExchangeResult, ProtocolResult,
-    ProtocolSupport,
+    ProtocolSupport, TlsUpgrade,
 };
 use testls_wire::ProtocolVersion;
 
@@ -74,7 +74,7 @@ fn vuln(
 fn severity(finding: &str) -> Option<Severity> {
     match finding {
         "vuln.crime" => Some(Severity::High),
-        "vuln.renegotiation" => Some(Severity::Medium),
+        "vuln.renegotiation" | "vuln.opossum" => Some(Severity::Medium),
         "vuln.beast" | "vuln.logjam" | "vuln.fallback_scsv" | "vuln.raccoon" | "vuln.breach"
         | "vuln.alpaca" => Some(Severity::Low),
         _ => None,
@@ -88,6 +88,7 @@ struct Inputs<'a> {
     key_exchange: &'a [KeyExchangeResult],
     features: Option<&'a HandshakeFeatures>,
     http: Option<&'a HttpResponse>,
+    upgrade: Option<&'a [TlsUpgrade]>,
 }
 
 impl Inputs<'_> {
@@ -458,7 +459,8 @@ fn content_codings(http: &HttpResponse) -> Vec<String> {
 ///
 /// `ciphers` holds the successful cipher enumerations only; `features` is
 /// `None` when the handshake feature probe failed, and `http` when the HTTP
-/// headers were not retrieved.
+/// headers were not retrieved; `upgrade` is `None` when the RFC 2817
+/// upgrade probe did not run.
 #[must_use]
 pub fn assess_vulnerabilities(
     protocols: &[ProtocolResult],
@@ -466,6 +468,7 @@ pub fn assess_vulnerabilities(
     key_exchange: &[KeyExchangeResult],
     features: Option<&HandshakeFeatures>,
     http: Option<&HttpResponse>,
+    upgrade: Option<&[TlsUpgrade]>,
 ) -> Vec<Vulnerability> {
     let inputs = Inputs {
         protocols,
@@ -473,6 +476,7 @@ pub fn assess_vulnerabilities(
         key_exchange,
         features,
         http,
+        upgrade,
     };
     let only_tls13 = "no TLSv1.2 or older protocol";
     let all = |_: ProtocolVersion| true;
@@ -552,6 +556,7 @@ pub fn assess_vulnerabilities(
         raccoon(&inputs),
         breach(&inputs),
         alpaca(&inputs),
+        opossum(&inputs),
     ]
 }
 
@@ -576,6 +581,40 @@ fn alpaca(inputs: &Inputs) -> Vulnerability {
         ),
         Some(false) => (VulnStatus::Vulnerable, "unknown ALPN protocol accepted"),
         Some(true) => (VulnStatus::NotVulnerable, "unknown ALPN protocol refused"),
+    };
+    vuln(id, name, status, detail, finding)
+}
+
+/// Opossum: a server that switches plaintext HTTP to TLS on request
+/// (RFC 2817 §3) lets an attacker desynchronise request and response
+/// streams (Dahlke et al., USENIX Security 2024). Any port that accepts is
+/// vulnerable; otherwise one unanswered probe leaves it untested.
+fn opossum(inputs: &Inputs) -> Vulnerability {
+    let (id, name, finding) = ("opossum", "Opossum", "vuln.opossum");
+    let ports = |want: Option<bool>| {
+        let ports: Vec<String> = inputs
+            .upgrade
+            .unwrap_or_default()
+            .iter()
+            .filter(|u| u.accepted == want)
+            .map(|u| u.port.to_string())
+            .collect();
+        ports.join(", ")
+    };
+    let (status, detail) = match inputs.upgrade {
+        None | Some([]) => (VulnStatus::NotTested, "HTTP upgrade not probed".to_owned()),
+        Some(list) if list.iter().any(|u| u.accepted == Some(true)) => (
+            VulnStatus::Vulnerable,
+            format!("TLS upgrade accepted on port {}", ports(Some(true))),
+        ),
+        Some(list) if list.iter().any(|u| u.accepted.is_none()) => (
+            VulnStatus::NotTested,
+            format!("no answer to the upgrade request on port {}", ports(None)),
+        ),
+        Some(_) => (
+            VulnStatus::NotVulnerable,
+            format!("TLS upgrade refused on port {}", ports(Some(false))),
+        ),
     };
     vuln(id, name, status, detail, finding)
 }
@@ -672,6 +711,14 @@ mod tests {
         }
     }
 
+    /// Upgrade probe result for a port that refused the upgrade.
+    fn refused(port: u16) -> TlsUpgrade {
+        TlsUpgrade {
+            port,
+            accepted: Some(false),
+        }
+    }
+
     /// Decodes upper-case hex.
     fn unhex(hex: &str) -> Vec<u8> {
         (0..hex.len())
@@ -698,8 +745,16 @@ mod tests {
             kx(ProtocolVersion::TLS13, None, None),
         ];
         let http = response(&[("Content-Type", "text/html")]);
-        let list = assess_vulnerabilities(&p, &c, &k, Some(&good_features()), Some(&http));
-        assert_eq!(list.len(), 14);
+        let upgrade = [refused(443), refused(80)];
+        let list = assess_vulnerabilities(
+            &p,
+            &c,
+            &k,
+            Some(&good_features()),
+            Some(&http),
+            Some(&upgrade),
+        );
+        assert_eq!(list.len(), 15);
         for v in &list {
             assert_eq!(
                 v.status,
@@ -738,7 +793,14 @@ mod tests {
             strict_alpn: Some(false),
         };
         let http = response(&[("Content-Encoding", "gzip")]);
-        let list = assess_vulnerabilities(&p, &c, &k, Some(&features), Some(&http));
+        let upgrade = [
+            refused(443),
+            TlsUpgrade {
+                port: 80,
+                accepted: Some(true),
+            },
+        ];
+        let list = assess_vulnerabilities(&p, &c, &k, Some(&features), Some(&http), Some(&upgrade));
         for v in &list {
             assert_eq!(v.status, VulnStatus::Vulnerable, "{}: {}", v.id, v.detail);
         }
@@ -768,6 +830,7 @@ mod tests {
                 ("vuln.raccoon", Severity::Low),
                 ("vuln.breach", Severity::Low),
                 ("vuln.alpaca", Severity::Low),
+                ("vuln.opossum", Severity::Medium),
             ]
         );
         assert_eq!(findings[2].message, "CRIME: TLS compression enabled");
@@ -778,7 +841,7 @@ mod tests {
     fn logjam_cases() {
         let p = protocols(&[ProtocolVersion::TLS12]);
         let assess = |c: &[CipherResult], k: &[KeyExchangeResult]| {
-            let list = assess_vulnerabilities(&p, c, k, None, None);
+            let list = assess_vulnerabilities(&p, c, k, None, None, None);
             list.into_iter().find(|v| v.id == "logjam").unwrap()
         };
         let tls12 = ProtocolVersion::TLS12;
@@ -828,11 +891,11 @@ mod tests {
         // One offered version without key exchange data.
         let p = protocols(&[ProtocolVersion::TLS11, tls12]);
         let k = [kx(tls12, Some(vec![0xc5; 256]), None)];
-        let list = assess_vulnerabilities(&p, &[], &k, None, None);
+        let list = assess_vulnerabilities(&p, &[], &k, None, None, None);
         assert_eq!(status(&list, "logjam"), VulnStatus::NotTested);
         // A measured weak group still wins.
         let k = [kx(tls12, Some(vec![0xff; 64]), None)];
-        let list = assess_vulnerabilities(&p, &[], &k, None, None);
+        let list = assess_vulnerabilities(&p, &[], &k, None, None, None);
         assert_eq!(status(&list, "logjam"), VulnStatus::Vulnerable);
     }
 
@@ -842,7 +905,7 @@ mod tests {
         let mut p = protocols(&[ProtocolVersion::TLS12]);
         p[1].support = ProtocolSupport::Error("timeout".into());
         let k = [kx(ProtocolVersion::TLS12, Some(vec![0xc5; 256]), None)];
-        let list = assess_vulnerabilities(&p, &[], &k, None, None);
+        let list = assess_vulnerabilities(&p, &[], &k, None, None, None);
         for id in [
             "poodle",
             "beast",
@@ -853,6 +916,7 @@ mod tests {
             "fallback_scsv",
             "raccoon",
             "alpaca",
+            "opossum",
         ] {
             assert_eq!(status(&list, id), VulnStatus::NotTested, "{id}");
         }
@@ -866,7 +930,7 @@ mod tests {
     fn incomplete_enumeration() {
         let p = protocols(&[ProtocolVersion::TLS10, ProtocolVersion::TLS12]);
         let c = [ciphers(ProtocolVersion::TLS12, &[ECDHE_GCM, RSA_RC4])];
-        let list = assess_vulnerabilities(&p, &c, &[], None, None);
+        let list = assess_vulnerabilities(&p, &c, &[], None, None, None);
         for id in ["beast", "sweet32", "freak"] {
             assert_eq!(status(&list, id), VulnStatus::NotTested, "{id}");
         }
@@ -876,7 +940,7 @@ mod tests {
             ciphers(ProtocolVersion::TLS10, &[]),
             ciphers(ProtocolVersion::TLS12, &[ECDHE_GCM]),
         ];
-        let list = assess_vulnerabilities(&p, &c, &[], None, None);
+        let list = assess_vulnerabilities(&p, &c, &[], None, None, None);
         assert_eq!(status(&list, "beast"), VulnStatus::NotTested);
         // Feature probes pick versions from the enumerations, so a missing
         // one leaves clean feature verdicts untested; findings still count.
@@ -889,7 +953,7 @@ mod tests {
             strict_alpn: Some(true),
         };
         let c = [ciphers(ProtocolVersion::TLS12, &[ECDHE_GCM])];
-        let list = assess_vulnerabilities(&p, &c, &[], Some(&features), None);
+        let list = assess_vulnerabilities(&p, &c, &[], Some(&features), None, None);
         assert_eq!(status(&list, "crime"), VulnStatus::Vulnerable);
         for id in ["renegotiation", "fallback_scsv"] {
             assert_eq!(status(&list, id), VulnStatus::NotTested, "{id}");
@@ -909,7 +973,7 @@ mod tests {
                 strict_alpn: Some(strict),
                 ..good_features()
             };
-            let list = assess_vulnerabilities(&p, &c, &[], Some(&features), None);
+            let list = assess_vulnerabilities(&p, &c, &[], Some(&features), None, None);
             assert_eq!(status(&list, "alpaca"), VulnStatus::NotTested, "{strict}");
         }
     }
@@ -920,7 +984,7 @@ mod tests {
         let p = protocols(&[ProtocolVersion::TLS12]);
         let by_id = |suites: &[u32], id: &str| {
             let c = [ciphers(ProtocolVersion::TLS12, suites)];
-            let list = assess_vulnerabilities(&p, &c, &[], None, None);
+            let list = assess_vulnerabilities(&p, &c, &[], None, None, None);
             list.into_iter().find(|v| v.id == id).unwrap().finding
         };
         // TLS_RSA_WITH_AES_128_CBC_SHA is reported as cipher.cbc.
@@ -945,14 +1009,14 @@ mod tests {
             kx(ProtocolVersion::TLS11, Some(vec![0xc5; 256]), None),
             kx(ProtocolVersion::TLS12, Some(vec![0xc5; 256]), Some(false)),
         ];
-        let list = assess_vulnerabilities(&p, &[], &k, None, None);
+        let list = assess_vulnerabilities(&p, &[], &k, None, None, None);
         assert_eq!(status(&list, "raccoon"), VulnStatus::NotTested);
         // An accepted DHE suite (TLS_DHE_RSA_WITH_AES_128_GCM_SHA256) without
         // any DH measurement is not "no DHE key exchange".
         let p = protocols(&[ProtocolVersion::TLS12]);
         let c = [ciphers(ProtocolVersion::TLS12, &[0x009e])];
         let k = [kx(ProtocolVersion::TLS12, None, None)];
-        let list = assess_vulnerabilities(&p, &c, &k, None, None);
+        let list = assess_vulnerabilities(&p, &c, &k, None, None, None);
         assert_eq!(status(&list, "raccoon"), VulnStatus::NotTested);
         // A fresh TLSv1.2 result says nothing about TLSv1.1 without a key
         // exchange result, nor about unmeasured DHE-PSK (0x00aa).
@@ -962,11 +1026,11 @@ mod tests {
             Some(vec![0xc5; 256]),
             Some(false),
         )];
-        let list = assess_vulnerabilities(&p, &[], &k, None, None);
+        let list = assess_vulnerabilities(&p, &[], &k, None, None, None);
         assert_eq!(status(&list, "raccoon"), VulnStatus::NotTested);
         let p = protocols(&[ProtocolVersion::TLS12]);
         let c = [ciphers(ProtocolVersion::TLS12, &[0x009e, 0x00aa])];
-        let list = assess_vulnerabilities(&p, &c, &k, None, None);
+        let list = assess_vulnerabilities(&p, &c, &k, None, None, None);
         assert_eq!(status(&list, "raccoon"), VulnStatus::NotTested);
     }
 
@@ -983,7 +1047,7 @@ mod tests {
             fallback_scsv: None,
             strict_alpn: None,
         };
-        let list = assess_vulnerabilities(&p, &c, &[], Some(&features), None);
+        let list = assess_vulnerabilities(&p, &c, &[], Some(&features), None, None);
         let crime = list.iter().find(|v| v.id == "crime").unwrap();
         assert_eq!(crime.status, VulnStatus::NotVulnerable);
         assert_eq!(crime.detail, "no TLSv1.2 or older protocol");
@@ -1011,7 +1075,7 @@ mod tests {
         let p = protocols(&[ProtocolVersion::TLS13]);
         let c = [ciphers(ProtocolVersion::TLS13, &[TLS13_AES])];
         let breach = |http: Option<&HttpResponse>| {
-            let list = assess_vulnerabilities(&p, &c, &[], None, http);
+            let list = assess_vulnerabilities(&p, &c, &[], None, http, None);
             list.into_iter().find(|v| v.id == "breach").unwrap()
         };
         let v = breach(None);
@@ -1035,5 +1099,60 @@ mod tests {
         assert_eq!(v.finding, Some("vuln.breach"));
         let findings = vulnerability_findings(&[v]);
         assert_eq!(findings[0].message, "BREACH: HTTP compression: gzip, br");
+    }
+
+    /// Opossum: one accepting port is enough; an unanswered probe leaves a
+    /// clean result untested; no probe is untested.
+    #[test]
+    fn opossum_cases() {
+        let p = protocols(&[ProtocolVersion::TLS13]);
+        let c = [ciphers(ProtocolVersion::TLS13, &[TLS13_AES])];
+        let opossum = |upgrade: Option<&[TlsUpgrade]>| {
+            let list = assess_vulnerabilities(&p, &c, &[], None, None, upgrade);
+            list.into_iter().find(|v| v.id == "opossum").unwrap()
+        };
+        let silent = |port| TlsUpgrade {
+            port,
+            accepted: None,
+        };
+        let accepted = |port| TlsUpgrade {
+            port,
+            accepted: Some(true),
+        };
+        let cases: [(Option<&[TlsUpgrade]>, VulnStatus, &str); 5] = [
+            (None, VulnStatus::NotTested, "HTTP upgrade not probed"),
+            (Some(&[]), VulnStatus::NotTested, "HTTP upgrade not probed"),
+            (
+                Some(&[refused(443), refused(80)]),
+                VulnStatus::NotVulnerable,
+                "TLS upgrade refused on port 443, 80",
+            ),
+            (
+                Some(&[refused(443), silent(80)]),
+                VulnStatus::NotTested,
+                "no answer to the upgrade request on port 80",
+            ),
+            (
+                Some(&[accepted(443), silent(80)]),
+                VulnStatus::Vulnerable,
+                "TLS upgrade accepted on port 443",
+            ),
+        ];
+        for (upgrade, status, detail) in cases {
+            let v = opossum(upgrade);
+            assert_eq!(
+                (v.status, v.detail.as_str()),
+                (status, detail),
+                "{upgrade:?}"
+            );
+        }
+        let v = opossum(Some(&[accepted(80)]));
+        assert_eq!(v.finding, Some("vuln.opossum"));
+        let findings = vulnerability_findings(&[v]);
+        assert_eq!(findings[0].severity, Severity::Medium);
+        assert_eq!(
+            findings[0].message,
+            "Opossum: TLS upgrade accepted on port 80"
+        );
     }
 }

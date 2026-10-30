@@ -545,6 +545,12 @@ const EXPLANATIONS: &[Explanation] = &[
         "RFC 7301 §3.2, alpaca-attack.com",
     ),
     entry(
+        "vuln.opossum",
+        "Opossum: plaintext HTTP can be upgraded to TLS",
+        "A server that switches a plaintext HTTP connection to TLS on request (RFC 2817) lets a man-in-the-middle splice responses from that connection into a browser's HTTPS session. Disable the HTTP Upgrade to TLS and serve HTTPS on its own port only.",
+        "RFC 2817 §3, opossum-attack.com",
+    ),
+    entry(
         "intolerance.unknown_version",
         "Server rejects an unknown protocol version",
         "A server must negotiate the highest version both sides support; failing on a newer version offer breaks future clients and invites insecure fallback.",

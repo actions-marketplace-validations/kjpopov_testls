@@ -31,6 +31,11 @@ All notable changes to `testls` are listed here. The format follows
   unknown ALPN protocol; a server that completes the handshake instead of
   answering `no_application_protocol` is reported as vulnerable. Not
   tested under the quick profile.
+- Opossum verdict (`opossum`, finding `vuln.opossum`, medium): a plaintext
+  `OPTIONS *` request with `Upgrade: TLS/1.0` (RFC 2817) goes to the
+  scanned port and port 80; a `101 Switching Protocols` reply to TLS on
+  either is reported as vulnerable. Not tested under the quick profile or
+  `--starttls`.
 
 ### Security
 

@@ -27,7 +27,7 @@ use testls_probe::{
     CipherResult, Fetcher, HandshakeDetails, HttpResponse, Intolerance, KeyExchangeResult,
     MxResolver, ProtocolResult, ProtocolSupport, Starttls, Transport, detect_protocols,
     enumerate_ciphers, fetch_certificates, fetch_http_headers, probe_details, probe_features,
-    probe_intolerance, probe_key_exchange,
+    probe_intolerance, probe_key_exchange, probe_tls_upgrade,
 };
 use testls_report::text::{self, CertificateSection, CipherSection, KeyExchangeSection};
 use testls_report::{ColorChoice, Format, Painter, csv, html, json, junit, markdown, sarif};
@@ -1214,8 +1214,9 @@ async fn http_section(
     }
 }
 
-/// Probes compression, renegotiation and downgrade protection when `probe`
-/// is set, then derives the named vulnerabilities from everything the scan
+/// Probes compression, renegotiation, downgrade protection, ALPN and, unless
+/// STARTTLS is used, the RFC 2817 HTTP upgrade when `probe` is set, then
+/// derives the named vulnerabilities from everything the scan
 /// collected: protocols, cipher and key exchange sections, and the HTTP
 /// response when one was retrieved.
 ///
@@ -1237,12 +1238,29 @@ async fn vulnerability_section(
         .filter_map(|s| s.outcome.as_ref().ok().cloned())
         .collect();
     let key_exchange = measured(key_exchange);
-    let features = if probe {
-        probe_features(transport, &ciphers, sni).await.ok()
+    // The RFC 2817 upgrade probe speaks plaintext HTTP, which STARTTLS
+    // protocols are not.
+    let (features, upgrade) = if probe {
+        let upgrade = async {
+            match transport.starttls {
+                Some(_) => None,
+                None => Some(Box::pin(probe_tls_upgrade(transport, sni)).await),
+            }
+        };
+        let (features, upgrade) =
+            tokio::join!(Box::pin(probe_features(transport, &ciphers, sni)), upgrade);
+        (features.ok(), upgrade)
     } else {
-        None
+        (None, None)
     };
-    assess_vulnerabilities(protocols, &ciphers, &key_exchange, features.as_ref(), http)
+    assess_vulnerabilities(
+        protocols,
+        &ciphers,
+        &key_exchange,
+        features.as_ref(),
+        http,
+        upgrade.as_deref(),
+    )
 }
 
 /// Sends unusual but valid `ClientHello`s at the best offered version.

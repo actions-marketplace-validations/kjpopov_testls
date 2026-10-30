@@ -55,7 +55,17 @@ fn serve() -> SocketAddr {
 }
 
 /// Completes one TLS connection, reads the request head and sends [`REPLY`].
-fn handle(config: Arc<ServerConfig>, stream: TcpStream) {
+/// A plaintext request is answered with an RFC 2817 switch to TLS.
+fn handle(config: Arc<ServerConfig>, mut stream: TcpStream) {
+    let mut first = [0u8; 1];
+    if stream.peek(&mut first).is_ok_and(|n| n == 1) && first[0].is_ascii_uppercase() {
+        let mut buf = [0u8; 1024];
+        let _ = stream.read(&mut buf);
+        let _ = stream.write_all(
+            b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: TLS/1.0, HTTP/1.1\r\nConnection: Upgrade\r\n\r\n",
+        );
+        return;
+    }
     let Ok(conn) = ServerConnection::new(config) else {
         return;
     };
@@ -143,6 +153,21 @@ fn json_reports_http_extras() {
         .find(|f| f["id"] == "vuln.breach")
         .expect("breach finding");
     assert_eq!(finding["severity"], "low", "{finding}");
+
+    let opossum = v["vulnerabilities"]
+        .as_array()
+        .expect("vulnerabilities")
+        .iter()
+        .find(|o| o["id"] == "opossum")
+        .expect("opossum verdict");
+    assert_eq!(opossum["status"], "vulnerable", "{opossum}");
+    assert!(
+        opossum["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains(&addr.port().to_string())),
+        "{opossum}"
+    );
+    assert!(ids.contains(&"vuln.opossum"), "{ids:?}");
 }
 
 /// `--format sarif` prints one SARIF 2.1.0 log whose results carry the
@@ -385,8 +410,13 @@ fn proxy_tunnels_scan() {
     }
     let seen = seen.lock().expect("log");
     assert!(seen.len() > 1, "{seen:?}");
-    let expected = format!("CONNECT {target} HTTP/1.1");
-    assert!(seen.iter().all(|l| *l == expected), "{seen:?}");
+    // The Opossum probe also tunnels to port 80 of the target.
+    let expected = [
+        format!("CONNECT {target} HTTP/1.1"),
+        "CONNECT 192.0.2.1:80 HTTP/1.1".to_owned(),
+    ];
+    assert!(seen.iter().all(|l| expected.contains(l)), "{seen:?}");
+    assert!(seen.contains(&expected[1]), "{seen:?}");
 
     let out = Command::new(env!("CARGO_BIN_EXE_testls"))
         .arg(target)

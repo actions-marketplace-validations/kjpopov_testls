@@ -173,7 +173,7 @@ fn modern_server() {
     );
     let vulns = s.stdout.split_once("\nVulnerabilities\n").expect("vulns").1;
     let vulns = vulns.split_once("\n\n").expect("section end").0;
-    assert_eq!(vulns.lines().count(), 14, "{vulns}");
+    assert_eq!(vulns.lines().count(), 15, "{vulns}");
     assert!(
         vulns.lines().all(|l| l.contains(" not vulnerable ")),
         "{vulns}"
