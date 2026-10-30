@@ -286,7 +286,8 @@ mod tests {
             behaviour.deflate && methods.contains(&COMPRESSION_DEFLATE),
         ));
         let mut exts = Vec::new();
-        // An SSLv3 hello has no extensions; only the SCSV earns a reply.
+        // An SSLv3 hello has no extensions; only the SCSV earns a reply
+        // (RFC 5746 §4.5).
         let ssl3 = version == 0x0300;
         if let Some(info) = behaviour
             .renegotiation
@@ -553,7 +554,8 @@ mod tests {
     }
 
     /// A `ServerHello` with a suite or version other than offered is not
-    /// an acceptance.
+    /// an acceptance (RFC 5246 §7.4.1.3; suite IDs from the IANA TLS
+    /// Cipher Suites registry).
     #[test]
     fn mismatched_server_hello() {
         let response = HelloResponse::ServerHello {
