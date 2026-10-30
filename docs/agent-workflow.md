@@ -123,8 +123,9 @@ timeout. Work on the next branch while a review runs.
    (`cargo publish --workspace`), add trusted publishing for
    `kjpopov/testls`, workflow `release.yml`, environment `crates-io` to
    every `testls*` crate on crates.io, create that GitHub environment, and
-   set the repository variable `CRATES_IO_TRUSTED_PUBLISHING=true`. Until
-   then the job is skipped. If it fails halfway, rerun it: crates already
+   set the repository variable `CRATES_IO_TRUSTED_PUBLISHING=true` (not an
+   environment variable: the job's `if:` runs before the environment
+   applies). Until then the job is skipped. If it fails halfway, rerun it: crates already
    published at that version are skipped. Agents never publish to crates.io.
 5. Packages PR `chore/packages-X.Y.Z` once the release exists:
    `gh release download vX.Y.Z -p SHA256SUMS -O target/SHA256SUMS` and
