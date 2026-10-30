@@ -777,41 +777,48 @@ async fn scan(
     let measured_parts = (&protocols[..], &ciphers[..], &key_exchange[..]);
     findings.extend(policy_section(cli, measured_parts, chain.as_deref(), &http));
 
+    let grade = testls_checks::grade(&findings, &protocols, http.as_ref().ok());
     let (findings, suppressed) = triage(findings, rules, scan_target, started_at);
     show(format!("\n{}", text::findings(&findings, paint)));
     show(text::suppressed(&suppressed, paint));
+    show(text::grade(&grade, paint));
 
-    let json = (cli.format == Format::Json).then(|| {
-        json::render(&json::Report {
-            target: &target,
-            addr,
-            sni,
-            started_at,
-            protocols: &protocols,
-            ciphers: &ciphers,
-            key_exchange: &key_exchange,
-            post_quantum: &post_quantum,
-            certificate: &certificate,
-            http: &http,
-            revocation: revocation.as_ref(),
-            vulnerabilities: &vulns,
-            intolerance: &intolerance,
-            details: &details,
-            findings: &findings,
-            suppressed: &suppressed,
-        })
-    });
-    let finding_scan = cli.format.is_summary().then(|| sarif::Scan {
-        target: target.clone(),
+    let report = json::Report {
+        target: &target,
         addr,
-        findings: findings.clone(),
-    });
+        sni,
+        started_at,
+        protocols: &protocols,
+        ciphers: &ciphers,
+        key_exchange: &key_exchange,
+        post_quantum: &post_quantum,
+        certificate: &certificate,
+        http: &http,
+        revocation: revocation.as_ref(),
+        vulnerabilities: &vulns,
+        intolerance: &intolerance,
+        details: &details,
+        grade: &grade,
+        findings: &findings,
+        suppressed: &suppressed,
+    };
+    outcome(cli, &report, chain.as_deref())
+}
+
+/// Outcome of a scan that ran: the exit code from the findings and the
+/// report in the chosen machine-readable format.
+fn outcome(cli: &Cli, report: &json::Report<'_>, chain: Option<&[Vec<u8>]>) -> Outcome {
     Outcome {
-        code: u8::from(findings.iter().any(|f| f.severity >= cli.fail_on)),
-        json,
-        findings: finding_scan,
+        code: u8::from(report.findings.iter().any(|f| f.severity >= cli.fail_on)),
+        json: (cli.format == Format::Json).then(|| json::render(report)),
+        findings: cli.format.is_summary().then(|| sarif::Scan {
+            target: report.target.to_owned(),
+            addr: report.addr,
+            grade: report.grade.clone(),
+            findings: report.findings.to_vec(),
+        }),
         failure: None,
-        profile: Some(profile(&protocols, &ciphers, chain.as_deref())),
+        profile: Some(profile(report.protocols, report.ciphers, chain)),
     }
 }
 

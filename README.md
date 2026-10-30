@@ -58,6 +58,7 @@ at least one, `2` the scan failed.
 
 - [Usage](docs/usage.md): targets, connection options, output formats,
   policies, suppressions and baselines
+- [Grading](docs/grading.md): how the letter grade is computed
 - [Install](docs/install.md): all packages, shell completions, man pages
 - [GitHub Action](docs/github-action.md)
 - [JSON report format](docs/json-schema.md)

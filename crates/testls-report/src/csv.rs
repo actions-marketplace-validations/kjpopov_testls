@@ -4,7 +4,9 @@
 //! `address`, `severity`, `id`, `message` and `failing` (`true` when the
 //! finding is at or above `--fail-on`). Targets whose scan could not run
 //! get one row with the id `scan.error`, an empty address and severity,
-//! and the error as message. Fields are quoted as in RFC 4180 (section 2)
+//! and the error as message. Each scanned address starts with a
+//! `scan.grade` row whose message is the grade and the reasons it is not
+//! better, separated by `; `. Fields are quoted as in RFC 4180 (section 2)
 //! and rows end with CRLF.
 
 use std::fmt::Write as _;
@@ -13,6 +15,7 @@ use testls_checks::Severity;
 
 use crate::junit::Failure;
 use crate::sarif::Scan;
+use crate::text::grade_label;
 
 /// Column names of the header row.
 const HEADER: [&str; 6] = ["target", "address", "severity", "id", "message", "failing"];
@@ -56,6 +59,15 @@ pub fn render(scans: &[Scan], failures: &[Failure], fail_on: Severity) -> String
     row(&mut out, &HEADER);
     for scan in scans {
         let addr = scan.addr.to_string();
+        let mut grade = grade_label(&scan.grade);
+        for reason in &scan.grade.reasons {
+            grade.push_str("; ");
+            grade.push_str(reason);
+        }
+        row(
+            &mut out,
+            &[&scan.target, &addr, "", "scan.grade", &grade, "false"],
+        );
         let mut findings: Vec<_> = scan.findings.iter().collect();
         findings.sort_by(|a, b| b.severity.cmp(&a.severity).then_with(|| a.id.cmp(&b.id)));
         for f in findings {
@@ -95,7 +107,7 @@ pub fn render(scans: &[Scan], failures: &[Failure], fail_on: Severity) -> String
 
 #[cfg(test)]
 mod tests {
-    use testls_checks::Finding;
+    use testls_checks::{Finding, Grade, Letter};
 
     use super::*;
 
@@ -104,14 +116,21 @@ mod tests {
         Scan {
             target: target.to_owned(),
             addr: "192.0.2.1:443".parse().expect("address"),
+            grade: Grade {
+                letter: Letter::B,
+                untrusted: false,
+                incomplete: false,
+                reasons: Vec::new(),
+            },
             findings,
         }
     }
 
-    /// Rows follow the header, most severe first, with scan errors last.
+    /// Rows follow the header, the grade row first, then most severe first,
+    /// with scan errors last.
     #[test]
     fn rows() {
-        let scans = [scan(
+        let mut scans = [scan(
             "a.example:443",
             vec![
                 Finding::new("hsts.missing", Severity::Low, "no HSTS"),
@@ -122,9 +141,11 @@ mod tests {
             target: "c.example:443".to_owned(),
             error: "cannot resolve: no such host".to_owned(),
         }];
+        scans[0].grade.reasons = vec!["medium findings: protocol.tls10".into()];
         assert_eq!(
             render(&scans, &failures, Severity::Medium),
             "target,address,severity,id,message,failing\r\n\
+             a.example:443,192.0.2.1:443,,scan.grade,B; medium findings: protocol.tls10,false\r\n\
              a.example:443,192.0.2.1:443,medium,protocol.tls10,TLSv1.0 offered,true\r\n\
              a.example:443,192.0.2.1:443,low,hsts.missing,no HSTS,false\r\n\
              c.example:443,,,scan.error,cannot resolve: no such host,true\r\n"

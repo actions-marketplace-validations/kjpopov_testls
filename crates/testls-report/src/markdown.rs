@@ -12,6 +12,7 @@ use testls_checks::Severity;
 
 use crate::junit::Failure;
 use crate::sarif::Scan;
+use crate::text::grade_label;
 
 /// Escapes `s` for inline Markdown text in a table cell: Markdown and HTML
 /// punctuation is backslash-escaped and line breaks become spaces.
@@ -66,15 +67,21 @@ pub fn render(scans: &[Scan], failures: &[Failure], fail_on: Severity) -> String
         fail_on.as_str()
     );
     if !scans.is_empty() {
-        out.push_str("| Target | Address |");
+        out.push_str("| Target | Address | Grade |");
         for severity in Severity::ALL.iter().rev() {
             let _ = write!(out, " {} |", severity.as_str());
         }
-        out.push_str("\n| --- | --- |");
+        out.push_str("\n| --- | --- | --- |");
         out.push_str(&" ---: |".repeat(Severity::ALL.len()));
         out.push('\n');
         for scan in scans {
-            let _ = write!(out, "| {} | {} |", escape(&scan.target), scan.addr);
+            let _ = write!(
+                out,
+                "| {} | {} | {} |",
+                escape(&scan.target),
+                scan.addr,
+                escape(&grade_label(&scan.grade))
+            );
             for severity in Severity::ALL.iter().rev() {
                 let n = scan
                     .findings
@@ -88,6 +95,13 @@ pub fn render(scans: &[Scan], failures: &[Failure], fail_on: Severity) -> String
     }
     for scan in scans {
         let _ = writeln!(out, "\n## {} ({})\n", escape(&scan.target), scan.addr);
+        let _ = writeln!(out, "Grade: **{}**\n", escape(&grade_label(&scan.grade)));
+        for reason in &scan.grade.reasons {
+            let _ = writeln!(out, "- {}", escape(reason));
+        }
+        if !scan.grade.reasons.is_empty() {
+            out.push('\n');
+        }
         if scan.findings.is_empty() {
             out.push_str("No findings.\n");
             continue;
@@ -122,7 +136,7 @@ pub fn render(scans: &[Scan], failures: &[Failure], fail_on: Severity) -> String
 
 #[cfg(test)]
 mod tests {
-    use testls_checks::Finding;
+    use testls_checks::{Finding, Grade, Letter};
 
     use super::*;
 
@@ -131,6 +145,12 @@ mod tests {
         Scan {
             target: target.to_owned(),
             addr: "192.0.2.1:443".parse().expect("address"),
+            grade: Grade {
+                letter: Letter::B,
+                untrusted: false,
+                incomplete: false,
+                reasons: Vec::new(),
+            },
             findings,
         }
     }
@@ -139,7 +159,7 @@ mod tests {
     /// most severe first with failing ones marked, and scan errors follow.
     #[test]
     fn report() {
-        let scans = [
+        let mut scans = [
             scan(
                 "a.example:443",
                 vec![
@@ -153,14 +173,15 @@ mod tests {
             target: "c.example:443".to_owned(),
             error: "cannot resolve: no such host".to_owned(),
         }];
+        scans[0].grade.reasons = vec!["medium findings: protocol.tls10".into()];
         let md = render(&scans, &failures, Severity::Medium);
         assert!(md.starts_with("# testls report\n\n"));
         assert!(md.contains("2 scanned, 1 failed to scan, 1 finding(s) at or above `medium`."));
         assert!(md.contains(
-            "| Target | Address | critical | high | medium | low | info | ok |\n\
-             | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |\n\
-             | a.example:443 | 192.0.2.1:443 | 0 | 0 | 1 | 1 | 0 | 0 |\n\
-             | b.example:443 | 192.0.2.1:443 | 0 | 0 | 0 | 0 | 0 | 0 |\n"
+            "| Target | Address | Grade | critical | high | medium | low | info | ok |\n\
+             | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |\n\
+             | a.example:443 | 192.0.2.1:443 | B | 0 | 0 | 1 | 1 | 0 | 0 |\n\
+             | b.example:443 | 192.0.2.1:443 | B | 0 | 0 | 0 | 0 | 0 | 0 |\n"
         ));
         let medium = md
             .find("| ❌ | medium | `protocol.tls10` | TLSv1.0 offered |")
@@ -169,7 +190,10 @@ mod tests {
             .find("|  | low | `hsts.missing` | no HSTS |")
             .expect("passing finding");
         assert!(medium < low);
-        assert!(md.contains("## b.example:443 (192.0.2.1:443)\n\nNo findings.\n"));
+        assert!(md.contains(
+            "## a.example:443 (192.0.2.1:443)\n\nGrade: **B**\n\n- medium findings: protocol.tls10\n\n|"
+        ));
+        assert!(md.contains("## b.example:443 (192.0.2.1:443)\n\nGrade: **B**\n\nNo findings.\n"));
         assert!(md.contains("| c.example:443 | cannot resolve: no such host |"));
     }
 

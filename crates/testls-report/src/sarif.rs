@@ -2,13 +2,14 @@
 //!
 //! One run holds the findings of every scanned address. Each finding id is
 //! a rule described by its `testls explain` entry; each finding is a result
-//! located at `https://HOST:PORT/` of its target. Structure follows the
-//! OASIS SARIF 2.1.0 standard and GitHub's list of supported properties.
+//! located at `https://HOST:PORT/` of its target. The grade of each
+//! address is in the run's `grades` property. Structure follows the OASIS
+//! SARIF 2.1.0 standard and GitHub's list of supported properties.
 
 use std::net::SocketAddr;
 
 use serde_json::{Value, json};
-use testls_checks::{Finding, Severity, explain};
+use testls_checks::{Finding, Grade, Severity, explain};
 
 /// Schema URI written to `$schema`.
 const SCHEMA: &str = "https://json.schemastore.org/sarif-2.1.0.json";
@@ -20,6 +21,8 @@ pub struct Scan {
     pub target: String,
     /// Address that was scanned.
     pub addr: SocketAddr,
+    /// Overall grade.
+    pub grade: Grade,
     /// Findings, most severe first.
     pub findings: Vec<Finding>,
 }
@@ -143,6 +146,16 @@ pub fn render(scans: &[Scan], success: bool) -> String {
             },
             "invocations": [{ "executionSuccessful": success }],
             "results": results,
+            "properties": {
+                "grades": scans.iter().map(|s| json!({
+                    "target": s.target,
+                    "address": s.addr.to_string(),
+                    "letter": s.grade.letter.as_str(),
+                    "untrusted": s.grade.untrusted,
+                    "incomplete": s.grade.incomplete,
+                    "reasons": s.grade.reasons,
+                })).collect::<Vec<_>>(),
+            },
         }],
     });
     let mut out = serde_json::to_string_pretty(&log).expect("SARIF log serializes");
@@ -152,6 +165,8 @@ pub fn render(scans: &[Scan], success: bool) -> String {
 
 #[cfg(test)]
 mod tests {
+    use testls_checks::Letter;
+
     use super::*;
 
     /// A scan of `target` with the given findings.
@@ -159,6 +174,12 @@ mod tests {
         Scan {
             target: target.to_owned(),
             addr: "192.0.2.1:443".parse().expect("address"),
+            grade: Grade {
+                letter: Letter::B,
+                untrusted: false,
+                incomplete: false,
+                reasons: Vec::new(),
+            },
             findings,
         }
     }
@@ -190,6 +211,11 @@ mod tests {
         let run = &v["runs"][0];
         assert_eq!(run["tool"]["driver"]["name"], "testls");
         assert_eq!(run["invocations"][0]["executionSuccessful"], true);
+        assert_eq!(
+            run["properties"]["grades"][0],
+            json!({"target": "a.example:443", "address": "192.0.2.1:443", "letter": "B",
+                "untrusted": false, "incomplete": false, "reasons": []})
+        );
 
         let rules = run["tool"]["driver"]["rules"].as_array().expect("rules");
         let ids: Vec<&str> = rules.iter().filter_map(|r| r["id"].as_str()).collect();

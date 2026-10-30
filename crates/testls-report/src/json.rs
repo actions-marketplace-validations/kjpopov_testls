@@ -8,9 +8,9 @@ use std::net::SocketAddr;
 
 use serde::Serialize;
 use testls_checks::{
-    CertStatus, Finding, OcspStatus, PostQuantum, RevocationCheck, RevocationMethod, Vulnerability,
-    alt_services, banners, cipher_name, cipher_severity, cookies, group_name, group_severity,
-    parse_hsts, revocation_reason_name,
+    CertStatus, Finding, Grade, OcspStatus, PostQuantum, RevocationCheck, RevocationMethod,
+    Vulnerability, alt_services, banners, cipher_name, cipher_severity, cookies, group_name,
+    group_severity, parse_hsts, revocation_reason_name,
 };
 use testls_probe::{
     CipherOrder, HandshakeDetails, HttpResponse, Intolerance, ProtocolResult, ProtocolSupport,
@@ -57,6 +57,8 @@ pub struct Report<'a> {
     pub intolerance: &'a Result<Intolerance, String>,
     /// Handshake details, or why they could not be probed.
     pub details: &'a Result<HandshakeDetails, String>,
+    /// Overall grade, from the findings before suppressions.
+    pub grade: &'a Grade,
     /// Findings, most severe first.
     pub findings: &'a [Finding],
     /// Findings hidden by a suppression, most severe first.
@@ -104,6 +106,8 @@ struct Document<'a> {
     intolerance: IntoleranceJson<'a>,
     /// Handshake details result.
     details: DetailsJson<'a>,
+    /// Overall grade.
+    grade: GradeJson<'a>,
     /// Findings, most severe first.
     findings: Vec<FindingJson<'a>>,
     /// Suppressed findings, most severe first.
@@ -420,6 +424,19 @@ struct PostQuantumJson {
     preferred: Option<bool>,
 }
 
+/// Overall grade of the scan.
+#[derive(Debug, Serialize)]
+struct GradeJson<'a> {
+    /// `A+`, `A`, `A-`, `B`, `C`, or `F`.
+    letter: &'static str,
+    /// The certificate is untrusted or does not cover the host.
+    untrusted: bool,
+    /// A probe failed, so the grade may be too good.
+    incomplete: bool,
+    /// Why the grade is not better.
+    reasons: &'a [String],
+}
+
 /// One finding.
 #[derive(Debug, Serialize)]
 struct FindingJson<'a> {
@@ -480,6 +497,12 @@ pub fn render(report: &Report<'_>) -> String {
         vulnerabilities: report.vulnerabilities.iter().map(vulnerability).collect(),
         intolerance: intolerance(report.intolerance),
         details: details(report.details),
+        grade: GradeJson {
+            letter: report.grade.letter.as_str(),
+            untrusted: report.grade.untrusted,
+            incomplete: report.grade.incomplete,
+            reasons: &report.grade.reasons,
+        },
         findings: report.findings.iter().map(finding).collect(),
         suppressed: report
             .suppressed
@@ -838,7 +861,9 @@ fn revocation_check(check: &RevocationCheck) -> RevocationCheckJson<'_> {
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
-    use testls_checks::{CertificateInfo, PqStatus, RevocationStatus, Severity, VulnStatus};
+    use testls_checks::{
+        CertificateInfo, Letter, PqStatus, RevocationStatus, Severity, VulnStatus,
+    };
     use testls_probe::{CipherResult, KeyExchangeResult};
     use testls_wire::ProtocolVersion;
 
@@ -851,6 +876,24 @@ mod tests {
         draft_groups: Vec::new(),
         preferred: None,
     };
+
+    /// Grade of a scan without counted findings.
+    const GRADE_A: Grade = Grade {
+        letter: Letter::A,
+        untrusted: false,
+        incomplete: false,
+        reasons: Vec::new(),
+    };
+
+    /// Grade of an incomplete scan with an untrusted certificate.
+    fn untrusted_grade() -> Grade {
+        Grade {
+            letter: Letter::C,
+            untrusted: true,
+            incomplete: true,
+            reasons: vec!["high findings: cert.untrusted".into()],
+        }
+    }
 
     /// The post-quantum summary lists ML-KEM and draft groups separately.
     #[test]
@@ -945,6 +988,7 @@ mod tests {
             vulnerabilities: &[],
             intolerance: &Err("skipped".into()),
             details: &Err("skipped".into()),
+            grade: &untrusted_grade(),
             findings: &[Finding::new("cert.untrusted", Severity::High, "untrusted")],
             suppressed: &[],
         };
@@ -974,14 +1018,13 @@ mod tests {
                         "names": ["localhost"], "key": "EC 256 bits", "scts": 0}, {"error": "bad"}],
                     "ocsp": {"stapled": false, "status": null},
                 },
-                "http": {"status": null, "headers": {}, "hsts": null, "banners": {}, "alt_svc": null, "cookies": [], "error": "reset"},
-                "revocation": null, "vulnerabilities": [],
+                "http": {"status": null, "headers": {}, "hsts": null, "banners": {}, "alt_svc": null, "cookies": [], "error": "reset"}, "revocation": null, "vulnerabilities": [],
                 "intolerance": {"protocol": null, "error": "skipped", "tests": {
                     "fragmented": null, "grease": null, "oversized": null, "unknown_extension": null, "unknown_version": null}},
                 "details": {"protocol": null, "extended_master_secret": null, "downgrade_sentinel": null,
                     "session_tickets": null, "max_early_data": null, "error": "skipped"},
                 "findings": [{"id": "cert.untrusted", "severity": "high", "message": "untrusted"}],
-                "suppressed": [],
+                "suppressed": [], "grade": {"letter": "C", "untrusted": true, "incomplete": true, "reasons": ["high findings: cert.untrusted"]},
             })
         );
     }
@@ -1034,6 +1077,7 @@ mod tests {
             vulnerabilities: &[],
             intolerance: &Err("skipped".into()),
             details: &Err("skipped".into()),
+            grade: &GRADE_A,
             findings: &[],
             suppressed: &[],
         };
@@ -1096,6 +1140,7 @@ mod tests {
             vulnerabilities: &[],
             intolerance: &Err("skipped".into()),
             details: &Err("skipped".into()),
+            grade: &GRADE_A,
             findings: &[],
             suppressed: &[Suppressed {
                 finding: Finding::new("hsts.missing", Severity::Medium, "no HSTS"),
@@ -1151,6 +1196,7 @@ mod tests {
             vulnerabilities: &[],
             intolerance: &Err("skipped".into()),
             details: &Err("skipped".into()),
+            grade: &GRADE_A,
             findings: &[],
             suppressed: &[],
         };
