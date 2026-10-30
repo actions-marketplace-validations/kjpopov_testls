@@ -117,7 +117,7 @@ Two connection paths:
 - [x] Released as v0.4.1 (Marketplace action name)
 - [x] Released as v0.4.3 (two-column `--help`, short README; v0.4.2 was a web UI mistake)
 
-### v0.5 — STARTTLS, intrusive probes, grading
+### v0.5 — STARTTLS, application-layer checks, grading
 - [x] STARTTLS: SMTP, IMAP, POP3, FTP, XMPP, LDAP, PostgreSQL, MySQL
   (`--starttls smtp|imap|pop3|ftp|xmpp|ldap|postgres|mysql`)
 - [x] `--mx`: scan a domain's mail exchangers (needs SMTP STARTTLS)
@@ -132,13 +132,12 @@ Two connection paths:
     certificate's CRL DP (RFC 5280 §6.3.3)
   - [x] Revocation fetches: block non-public endpoints by default, opt-in flag
     for internal CAs, proxy keeps host names (#48)
-- Intrusive checks behind `--intrusive`: Heartbleed, CCS injection,
-  Ticketbleed, ROBOT
 - [x] Application-layer checks: BREACH, ALPACA, Opossum
 - [x] Own grading model (documented, not SSL Labs-compatible)
 - [x] Upload coverage to Codecov (PR comments and history, like hickory-dns);
   revisits #22
 - [x] Codecov Test Analytics (failed and flaky tests in the PR comment)
+- [x] Released as v0.5.0 (intrusive checks moved to the backlog, #90)
 
 ### v0.6 — Web service
 - `testls serve`: axum, binds 127.0.0.1 by default
@@ -176,6 +175,8 @@ Not scheduled; pulled into a milestone when someone picks it up.
 - Docs: catalogue of checks, mapping from testssl.sh options, threat model
 - Politeness: `--delay` between connections to one target
 - Bounded parallel probes per target (`--parallel`, #8 as planned, see #89)
+- Intrusive checks behind `--intrusive`: Heartbleed, CCS injection,
+  Ticketbleed, ROBOT (moved from v0.5, #90)
 
 ## Open questions
 
@@ -274,3 +275,4 @@ None at the moment (default profile and politeness settled in #88, #89).
 | 87 | Own letter grade (A+, A, A-, B, C, F), documented in `docs/grading.md`: the worst finding of severity `low` or worse caps it (critical F, high C, medium B, low A-); with none it is A, or A+ with TLSv1.3, nothing below TLSv1.2 and HSTS `max-age` ≥ 1 year. `policy.*` findings do not count; suppressions and baseline do not apply. `cert.untrusted`/`cert.hostname_mismatch` add a `T` marker, failed probes mark it incomplete. Shown in every format, never affects the exit status | Reuses the severity model (#13) so the grade and `--fail-on` agree and every grade is explained by finding ids; SSL Labs' scoring is undocumented in detail and changes, so no compatibility is claimed. Policies are the user's choice and suppressions what they accept, neither describes the server. Exit codes stay tied to `--fail-on` alone |
 | 88 | Default profile stays as is: every non-intrusive probe of the target; revocation lookups and all addresses only with `full`, intrusive checks never by default. Target: under 30 s against a responsive server | Measured 3–11 s on public sites; network fetches to third parties and extra addresses are opt-in |
 | 89 | Politeness: probes run sequentially, one connection at a time per target, no retries, targets one after another (amends #8; the bounded parallelism was never built). `--delay` and `--parallel` are in the backlog | Sequential scans are gentle on servers and IDS and fast enough (#88); parallelism can come back when a need shows |
+| 90 | v0.5.0 ships without the intrusive checks (Heartbleed, CCS injection, Ticketbleed, ROBOT behind `--intrusive`); they move to the backlog. Amends #34 | Everything else planned for v0.5 is done and useful now; the intrusive probes send attack traffic, need their own design and test servers, and should not hold back the release |
