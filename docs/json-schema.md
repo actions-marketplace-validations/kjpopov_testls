@@ -141,7 +141,9 @@ One `GET /` request is sent over a full handshake; redirects are not followed.
 
 Only with `--revocation`: the OCSP responders named in the leaf certificate
 are queried first, then its CRLs are downloaded, until one gives a verifiable
-answer. Only `http://` URLs are used.
+answer. Only `http://` URLs are used. Non-public addresses are refused
+unless `--revocation-allow-private` is given; such attempts have the error
+`non-public address refused`.
 
 | Field | Type | Description |
 | --- | --- | --- |

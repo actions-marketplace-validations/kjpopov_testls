@@ -71,6 +71,10 @@ testls --ca-file my-ca.pem 10.0.0.5 --sni intranet.example
 # Also ask the CA's OCSP responder or CRL whether the certificate is revoked
 testls --revocation example.com
 
+# Revocation lookups refuse private and loopback addresses; allow them for
+# an internal CA
+testls --revocation --revocation-allow-private intranet.example
+
 # Quick check (protocols, cipher suites, certificate) or everything,
 # including revocation and every address of the host
 testls --profile quick example.com

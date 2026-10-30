@@ -31,6 +31,10 @@ pub struct Fetcher {
     /// HTTP proxy to tunnel through with `CONNECT`; the proxy then
     /// resolves the host name. Direct when `None`.
     pub proxy: Option<SocketAddr>,
+    /// Whether endpoints on loopback, private, link-local and other
+    /// non-public addresses may be contacted. The scanned server's
+    /// certificate chooses the URLs, so they are refused by default.
+    pub allow_private: bool,
 }
 
 /// Reply to a [`Fetcher`] request.
@@ -104,7 +108,14 @@ impl Fetcher {
 
     /// Connects to the first reachable address of the URL's host, or opens
     /// a tunnel to it through the proxy.
+    ///
+    /// Unless [`Fetcher::allow_private`] is set, non-public addresses are
+    /// skipped. Through a proxy, which resolves names itself, only IP
+    /// literals and `localhost` names can be checked.
     async fn connect(&self, url: &HttpUrl) -> Result<TcpStream, ProbeError> {
+        if !self.allow_private && local_host(&url.host) {
+            return Err(blocked());
+        }
         if let Some(proxy) = self.proxy {
             let host = if url.host.contains(':') {
                 format!("[{}]", url.host)
@@ -124,6 +135,10 @@ impl Fetcher {
         let mut last = None;
         let mut skipped = false;
         for addr in addrs {
+            if !self.allow_private && !public_address(addr.ip()) {
+                last.get_or_insert_with(blocked);
+                continue;
+            }
             if self.source.is_some_and(|ip| ip.is_ipv4() != addr.is_ipv4()) {
                 skipped = true;
                 continue;
@@ -212,6 +227,61 @@ impl Fetcher {
                 return Err(too_large());
             }
             closed = read_more(stream, &mut buf, &mut data).await?;
+        }
+    }
+}
+
+/// Error for an endpoint refused by the non-public address guard.
+fn blocked() -> ProbeError {
+    ProbeError::Unexpected("non-public address refused")
+}
+
+/// Reports whether `host` is visibly local without resolving it: a
+/// non-public IP literal or a `localhost` name (RFC 6761 §6.3).
+fn local_host(host: &str) -> bool {
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return !public_address(ip);
+    }
+    let name = host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase();
+    name == "localhost" || name.ends_with(".localhost")
+}
+
+/// Reports whether `ip` is a public unicast address.
+///
+/// Blocks the IANA IPv4 and IPv6 Special-Purpose Address Registries
+/// (RFC 6890 and updates), multicast and reserved space, and IPv6 outside
+/// global unicast `2000::/3`. IPv4-mapped (RFC 4291 §2.5.5.2) and NAT64
+/// well-known-prefix (RFC 6052 §2.1) addresses are judged by their embedded
+/// IPv4 address; 6to4 and Teredo prefixes are blocked.
+fn public_address(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            let [a, b, c, _] = ip.octets();
+            !(matches!(a, 0 | 10 | 127 | 224..=255)
+                || (a == 100 && (64..=127).contains(&b))
+                || (a == 169 && b == 254)
+                || (a == 172 && (16..=31).contains(&b))
+                || (a == 192 && b == 0 && (c == 0 || c == 2))
+                || (a == 192 && b == 88 && c == 99)
+                || (a == 192 && b == 168)
+                || (a == 198 && (b == 18 || b == 19))
+                || (a == 198 && b == 51 && c == 100)
+                || (a == 203 && b == 0 && c == 113))
+        }
+        IpAddr::V6(ip) => {
+            if let Some(v4) = ip.to_ipv4_mapped() {
+                return public_address(IpAddr::V4(v4));
+            }
+            let octets = ip.octets();
+            if octets[..12] == [0, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0] {
+                let embedded: [u8; 4] = octets[12..].try_into().expect("four bytes");
+                return public_address(IpAddr::V4(embedded.into()));
+            }
+            let [first, second, ..] = ip.segments();
+            (0x2000..=0x3fff).contains(&first)
+                && !(first == 0x2001 && (second < 0x0200 || second == 0x0db8))
+                && first != 0x2002
+                && !(first == 0x3fff && second < 0x1000)
         }
     }
 }
@@ -448,7 +518,105 @@ mod tests {
             max_body: 1024,
             source: None,
             proxy: None,
+            allow_private: true,
         }
+    }
+
+    /// Special-purpose addresses are not public; embedded IPv4 addresses
+    /// are judged on their own.
+    #[test]
+    fn public_addresses() {
+        for ip in [
+            "0.0.0.0",
+            "10.1.2.3",
+            "100.64.0.1",
+            "127.0.0.1",
+            "169.254.169.254",
+            "172.16.0.1",
+            "172.31.255.255",
+            "192.0.0.8",
+            "192.0.2.1",
+            "192.88.99.1",
+            "192.168.1.1",
+            "198.18.0.1",
+            "198.51.100.1",
+            "203.0.113.1",
+            "224.0.0.1",
+            "240.0.0.1",
+            "255.255.255.255",
+            "::",
+            "::1",
+            "::ffff:10.0.0.1",
+            "64:ff9b::a9fe:a9fe",
+            "64:ff9b:1::1",
+            "fc00::1",
+            "fe80::1",
+            "ff02::1",
+            "2001::1",
+            "2001:db8::1",
+            "2002:7f00:1::",
+            "3fff::1",
+        ] {
+            assert!(!public_address(ip.parse().unwrap()), "{ip}");
+        }
+        for ip in [
+            "1.1.1.1",
+            "172.32.0.1",
+            "192.0.1.1",
+            "192.0.3.1",
+            "192.1.0.1",
+            "198.20.0.1",
+            "::ffff:8.8.8.8",
+            "64:ff9b::808:808",
+            "2001:4860:4860::8888",
+            "2606:4700:4700::1111",
+        ] {
+            assert!(public_address(ip.parse().unwrap()), "{ip}");
+        }
+    }
+
+    /// Local names and non-public literals are recognised without a lookup.
+    #[test]
+    fn local_hosts() {
+        for host in [
+            "localhost",
+            "LOCALHOST.",
+            "ocsp.localhost",
+            "127.0.0.2",
+            "fd00::1",
+        ] {
+            assert!(local_host(host), "{host}");
+        }
+        for host in ["ocsp.example", "localhost.example", "8.8.8.8"] {
+            assert!(!local_host(host), "{host}");
+        }
+    }
+
+    /// Without `allow_private`, non-public endpoints are refused before any
+    /// connection, directly and through a proxy.
+    #[tokio::test]
+    async fn private_endpoints_are_refused() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        for proxy in [None, Some(addr)] {
+            let guarded = Fetcher {
+                proxy,
+                allow_private: false,
+                ..fetcher()
+            };
+            for url in [
+                format!("http://{addr}/"),
+                format!("http://localhost:{}/", addr.port()),
+            ] {
+                let e = guarded.get(&url).await.unwrap_err();
+                assert!(
+                    e.to_string().contains("non-public address refused"),
+                    "{url}: {e}"
+                );
+            }
+        }
+        let accepted = timeout(Duration::from_millis(50), listener.accept()).await;
+        assert!(accepted.is_err(), "a connection was opened");
     }
 
     /// Starts a one-shot HTTP server that records the request and answers
@@ -624,7 +792,8 @@ mod tests {
     }
 
     /// With a proxy, the host name is sent unresolved in `CONNECT` and the
-    /// request goes through the tunnel.
+    /// request goes through the tunnel. The proxy itself may be local even
+    /// when non-public endpoints are refused.
     #[tokio::test]
     async fn through_proxy() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -650,6 +819,7 @@ mod tests {
         });
         let via_proxy = Fetcher {
             proxy: Some(proxy),
+            allow_private: false,
             ..fetcher()
         };
         let r = via_proxy.get("http://ocsp.invalid:8080/x").await.unwrap();
