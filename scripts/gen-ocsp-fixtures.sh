@@ -51,6 +51,16 @@ subjectAltName=DNS:localhost
 extendedKeyUsage=serverAuth
 authorityInfoAccess=OCSP;URI:http://ocsp.example.test/,caIssuers;URI:http://ca.example.test/ca.der
 crlDistributionPoints=URI:http://crl.example.test/ca.crl,URI:ldap://crl.example.test/ca
+[indirect]
+basicConstraints=CA:false
+subjectAltName=DNS:localhost
+extendedKeyUsage=serverAuth
+crlDistributionPoints=indirect_dp
+[indirect_dp]
+fullname=URI:http://crl.example.test/other-partition.crl
+CRLissuer=dirName:indirect_issuer
+[indirect_issuer]
+CN=other CRL issuer
 EOF
 
 cat > ca.cnf <<'EOF'
@@ -95,11 +105,14 @@ issue stray 0x1004 leaf
 issue must-staple 0x1005 muststaple
 issue responder-no-sign 0x1006 responder_no_sign
 issue urls 0x1007 urls
+issue indirect 0x1008 indirect
+issue urls-revoked 0x1009 urls
 
 # Status database: leaf is good, other was revoked for key compromise on
-# 2026-10-01; stray is absent and therefore unknown.
+# 2026-10-01, and so was urls-revoked; stray is absent and therefore unknown.
 printf 'V\t361231000000Z\t\t1001\tunknown\t/CN=leaf\n' > index.txt
 printf 'R\t361231000000Z\t261001000000Z,keyCompromise\t1002\tunknown\t/CN=other\n' >> index.txt
+printf 'R\t361231000000Z\t261001000000Z,keyCompromise\t1009\tunknown\t/CN=urls-revoked\n' >> index.txt
 
 respond leaf ca good
 respond other ca revoked
@@ -116,15 +129,37 @@ echo 1000 > crlnumber
     -out crl-responder.pem 2>/dev/null
 "$openssl" crl -in crl-responder.pem -outform DER -out crl-responder.der
 
+# Partitioned CRLs (RFC 5280 §5.2.5): one for the partition named in the urls
+# leaf, one for another partition, and one for end-entity certificates only.
+cat >> ca.cnf <<'EOF'
+[scoped]
+issuingDistributionPoint=critical,@scoped_idp
+[scoped_idp]
+fullname=URI:http://crl.example.test/ca.crl
+[partition]
+issuingDistributionPoint=critical,@partition_idp
+[partition_idp]
+fullname=URI:http://crl.example.test/other-partition.crl
+[users]
+issuingDistributionPoint=critical,@users_idp
+[users_idp]
+onlyuser=TRUE
+EOF
+for scope in scoped partition users; do
+    "$openssl" ca -config ca.cnf -gencrl -keyfile ca.key -cert ca.pem -crlexts "$scope" \
+        -out "crl-$scope.pem" 2>/dev/null
+    "$openssl" crl -in "crl-$scope.pem" -outform DER -out "crl-$scope.der"
+done
+
 # The request openssl builds for leaf, to compare with ours.
 cp good.req request.der
 
-for cert in ca leaf other stray must-staple urls; do
+for cert in ca leaf other stray must-staple urls indirect urls-revoked; do
     "$openssl" x509 -in "$cert.pem" -outform DER -out "$cert.der"
     cp "$cert.der" "$out/ocsp-$cert.der"
 done
 for response in good revoked delegated unknown unauthorized no-digital-signature \
-    crl crl-responder request; do
+    crl crl-responder crl-scoped crl-partition crl-users request; do
     cp "$response.der" "$out/ocsp-$response.der"
 done
 echo "wrote OCSP fixtures to $out"

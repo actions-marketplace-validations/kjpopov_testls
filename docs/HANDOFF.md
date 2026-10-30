@@ -13,7 +13,7 @@ if `gh` is allowed); update it when a session ends.
   smtp|imap|pop3|ftp|xmpp|ldap|postgres|mysql` (PRs #108–#115, decisions
   #68–#75) and `--mx` (probe PR #119 `MxResolver` in `testls-probe/src/mx.rs`,
   CLI PR #120 `mail_hosts` in `main.rs`, decisions #76–#77). Next decision
-  log number: **#80**.
+  log number: **#81**.
 - `--mx` has unit tests only (fake UDP DNS server in `mx.rs`, CLI parsing
   in `main.rs`); no integration test (would need a DNS server in
   `tests/servers`). Outbound port 25 is blocked on the dev machine, so live
@@ -52,8 +52,8 @@ v0.5 in PLAN.md, suggested order:
    errors can't be baselined); ML-DSA-only servers keep the chain result,
    marked "signature not verified". Escaping (#122), baseline
    severity (decision #78) and handshake signature (decision #79,
-   `cert.signature_unverified`) are done; then CRL partition scope,
-   revocation endpoint guard. The PR branch is fetched
+   `cert.signature_unverified`) and CRL partition scope (decision #80)
+   are done; next the revocation endpoint guard. The PR branch is fetched
    locally as `pr-117`.
 2. Codecov upload (once the maintainer enabled the app).
 3. Intrusive checks behind `--intrusive` (Heartbleed, CCS injection,

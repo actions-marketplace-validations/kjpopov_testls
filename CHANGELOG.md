@@ -38,6 +38,9 @@ All notable changes to `testls` are listed here. The format follows
   `cert.error`. Signatures testls cannot check (ML-DSA, P-521, Ed448, RSA keys
   under 2048 bits) are reported as `cert.signature_unverified`. Reported by @r4d1um in
   #117.
+- A partitioned CRL is used only if its distribution point matches one in the
+  certificate, so a CRL for another partition can no longer report a revoked
+  certificate as good. Reported by @r4d1um in #117.
 
 ## [0.4.3] - 2026-10-27
 
