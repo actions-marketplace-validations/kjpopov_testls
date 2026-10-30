@@ -138,6 +138,7 @@ Two connection paths:
 - Own grading model (documented, not SSL Labs-compatible)
 - [x] Upload coverage to Codecov (PR comments and history, like hickory-dns);
   revisits #22
+- [x] Codecov Test Analytics (failed and flaky tests in the PR comment)
 
 ### v0.6 — Web service
 - `testls serve`: axum, binds 127.0.0.1 by default
@@ -155,9 +156,10 @@ Two connection paths:
 - Integration: `tests/servers/compose.yaml` runs `openssl s_server`
   containers with specific protocol/cipher sets (podman or docker);
   `crates/testls/tests/servers.rs` scans them (`--ignored`, own CI job).
-- Coverage: `cargo llvm-cov --workspace -- --include-ignored` with the
+- Coverage: `cargo llvm-cov nextest --workspace --run-ignored all` with the
   test servers running; reported in the job summary and on Codecov
-  (PR comment, history), no threshold.
+  (PR comment, history), no threshold. The nextest JUnit report feeds
+  Codecov Test Analytics (failed and flaky tests).
   The JSON renderer is checked field by field against expected documents
 - Opt-in live tests against badssl.com (not in default CI)
 
@@ -267,3 +269,4 @@ Not scheduled; pulled into a milestone when someone picks it up.
 | 83 | BREACH is a derived verdict from the existing `GET /` reply: the request offers `Accept-Encoding: gzip, deflate, br, zstd` (what browsers send) and any `Content-Encoding` other than `identity` is vulnerable (`vuln.breach`, low); no HTTP reply means not tested. No extra requests, no reflected-input or secret detection | Whether a body mixes secrets with attacker input cannot be judged from outside, so compression is the observable precondition, as in CRIME. Low, not high like CRIME, because the attack needs a reflected secret in the body and per-response token masking defeats it; one request keeps the scan polite |
 | 84 | ALPACA is judged by strict ALPN only: the feature probe sends a hello at the server's best TLS version offering only the unknown protocol `testls-unknown` (a raw hello up to TLS 1.2, a full rustls handshake at TLS 1.3, where the answer is in the encrypted `EncryptedExtensions`); a `no_application_protocol` alert is not vulnerable, a completed handshake is vulnerable (`vuln.alpaca`, low), anything else not tested. No SNI-mismatch or cross-protocol probes | Strict ALPN is the countermeasure a scanner can observe with one handshake; certificate sharing across services and strict SNI cannot be judged from one endpoint. Low because exploitation needs a man-in-the-middle and a second, weaker service under the same certificate |
 | 85 | Opossum is judged from one plaintext `OPTIONS *` request with `Upgrade: TLS/1.0` and `Connection: Upgrade` (RFC 2817 §3.2) to the scanned port and to port 80 of the same address, run concurrently with the feature probe in the default profile and skipped under `--starttls`; a `101 Switching Protocols` reply naming `TLS/…` on either port is vulnerable (`vuln.opossum`, medium), a port that refuses a direct connection or closes without a reply counts as refusing, any other failure (connection or read timeout, proxy failure, I/O error after connecting, truncated or oversized HTTP reply head) leaves the port not tested | Port 80 is where the Opossum paper found most upgrade-capable servers; probing it reaches beyond the scanned port, but one request is polite and the verdict depends on it. Medium like insecure renegotiation: a man-in-the-middle can desynchronise HTTPS responses without breaking TLS |
+| 86 | The coverage job runs the tests through `cargo llvm-cov nextest` (profile `ci` in `.config/nextest.toml`, `fail-fast = false`) and keeps the JUnit report as artifact `junit` unless the run was cancelled. The `upload` job also runs after failed tests and sends the report to Codecov Test Analytics (`report_type: test_results`); coverage is still uploaded only after a successful run. Other CI jobs keep `cargo test`. Amends #82 | Test Analytics needs JUnit XML, which `cargo test` cannot write on stable; nextest is the usual way. Failed runs are the ones Codecov needs to spot flaky tests, and the token stays out of the job that runs PR code. The workspace has no doctests, so nextest loses nothing |
