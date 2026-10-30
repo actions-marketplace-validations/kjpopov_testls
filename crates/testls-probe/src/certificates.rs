@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{CryptoProvider, ring};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{CertificateError, ClientConfig, DigitallySignedStruct, SignatureScheme};
+use rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme};
 use testls_wire::ProtocolVersion;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
@@ -33,7 +33,8 @@ pub struct CertificateChain {
     /// RFC 8446 §4.4.2.1), if the server sent one.
     pub ocsp_response: Option<Vec<u8>>,
     /// Whether the handshake signature was verified against the leaf key.
-    /// `false` when ring cannot check it (ML-DSA, RSA keys under 2048 bits).
+    /// `false` when ring cannot check the key (ML-DSA, RSA under 2048 bits,
+    /// P-521, Ed448) and the scheme fits it.
     pub signature_verified: bool,
 }
 
@@ -169,37 +170,66 @@ impl AcceptAll {
 
     /// Turns a signature verification `result` into the verifier's answer.
     ///
-    /// A signature that is wrong for the leaf key fails the handshake: the
-    /// peer does not hold the key of the certificate it presented. A
-    /// signature ring cannot check (ML-DSA, RSA keys under 2048 bits, keys or
-    /// schemes it does not support) is accepted and recorded as unverified,
-    /// so weak or post-quantum servers are still reported.
+    /// A failed check fails the handshake: the peer may not hold the key of
+    /// the certificate it presented. The one exception is a leaf key ring
+    /// cannot verify, signed with a scheme that fits that key (see
+    /// [`unverifiable`]); it is accepted and recorded as unverified, so weak
+    /// or post-quantum servers are still reported.
     fn check(
         &self,
         result: Result<HandshakeSignatureValid, rustls::Error>,
         cert: &CertificateDer<'_>,
+        scheme: SignatureScheme,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
         match result {
             Ok(valid) => Ok(valid),
-            Err(e @ rustls::Error::InvalidCertificate(CertificateError::BadSignature))
-                if !small_rsa_key(cert) =>
-            {
-                Err(e)
-            }
-            Err(_) => {
+            Err(_) if unverifiable(cert, scheme) => {
                 self.unverified.store(true, Ordering::Relaxed);
                 Ok(HandshakeSignatureValid::assertion())
             }
+            Err(e) => Err(e),
         }
     }
 }
 
-/// Whether `cert` has an RSA key below the 2048 bits ring can verify.
-fn small_rsa_key(cert: &CertificateDer<'_>) -> bool {
+/// Whether `cert` has a key ring cannot verify and `scheme` fits that key.
+///
+/// Covers RSA keys under 2048 bits with an RSA scheme, P-521 with
+/// `ecdsa_secp521r1_sha512`, Ed448 with `ed448`, and ML-DSA with the scheme
+/// of the same parameter set. Key OIDs: RFC 8017 (RSA), RFC 5480 (EC
+/// curves), RFC 8410 (Ed448), RFC 9881 (ML-DSA).
+fn unverifiable(cert: &CertificateDer<'_>, scheme: SignatureScheme) -> bool {
     let Ok((_, cert)) = x509_parser::parse_x509_certificate(cert.as_ref()) else {
         return false;
     };
-    matches!(cert.public_key().parsed(), Ok(PublicKey::RSA(key)) if key.key_size() < 2048)
+    let spki = cert.public_key();
+    let key = spki.algorithm.algorithm.to_id_string();
+    let curve = spki
+        .algorithm
+        .parameters
+        .as_ref()
+        .and_then(|p| p.as_oid().ok())
+        .map(|oid| oid.to_id_string());
+    match (key.as_str(), scheme) {
+        (
+            "1.2.840.113549.1.1.1",
+            SignatureScheme::RSA_PKCS1_SHA1
+            | SignatureScheme::RSA_PKCS1_SHA256
+            | SignatureScheme::RSA_PKCS1_SHA384
+            | SignatureScheme::RSA_PKCS1_SHA512
+            | SignatureScheme::RSA_PSS_SHA256
+            | SignatureScheme::RSA_PSS_SHA384
+            | SignatureScheme::RSA_PSS_SHA512,
+        ) => matches!(spki.parsed(), Ok(PublicKey::RSA(k)) if k.key_size() < 2048),
+        ("1.2.840.10045.2.1", SignatureScheme::ECDSA_NISTP521_SHA512) => {
+            curve.as_deref() == Some("1.3.132.0.35")
+        }
+        ("1.3.101.113", SignatureScheme::ED448)
+        | ("2.16.840.1.101.3.4.3.17", SignatureScheme::ML_DSA_44)
+        | ("2.16.840.1.101.3.4.3.18", SignatureScheme::ML_DSA_65)
+        | ("2.16.840.1.101.3.4.3.19", SignatureScheme::ML_DSA_87) => true,
+        _ => false,
+    }
 }
 
 impl ServerCertVerifier for AcceptAll {
@@ -236,7 +266,7 @@ impl ServerCertVerifier for AcceptAll {
             dss,
             &self.provider.signature_verification_algorithms,
         );
-        self.check(result, cert)
+        self.check(result, cert, dss.scheme)
     }
 
     /// Checks the TLS 1.3 handshake signature against the leaf key; see
@@ -253,7 +283,7 @@ impl ServerCertVerifier for AcceptAll {
             dss,
             &self.provider.signature_verification_algorithms,
         );
-        self.check(result, cert)
+        self.check(result, cert, dss.scheme)
     }
 
     /// Advertises every scheme the crypto provider knows plus ML-DSA, which
@@ -277,8 +307,8 @@ impl ServerCertVerifier for AcceptAll {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rustls::ServerConfig;
     use rustls::pki_types::PrivateKeyDer;
+    use rustls::{CertificateError, ServerConfig};
     use std::net::SocketAddr;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
@@ -292,6 +322,8 @@ mod tests {
     const WRONG_KEY: &[u8] = include_bytes!("testdata/wrong.key.der");
     /// Self-signed certificate with a 1024-bit RSA key (`small-rsa.example`).
     const RSA1024_CERT: &[u8] = include_bytes!("testdata/rsa1024.cert.der");
+    /// Self-signed ML-DSA-65 certificate (`mldsa.example`).
+    const MLDSA65_CERT: &[u8] = include_bytes!("testdata/mldsa65.cert.der");
 
     /// Starts a one-shot rustls server limited to `versions`.
     async fn serve(versions: &[&'static rustls::SupportedProtocolVersion]) -> SocketAddr {
@@ -336,8 +368,8 @@ mod tests {
         assert!(schemes.contains(&SignatureScheme::ECDSA_NISTP256_SHA256));
     }
 
-    /// Bad signatures fail unless the key is too small for ring; signatures
-    /// ring cannot check are accepted and recorded as unverified.
+    /// Failed checks fail the handshake, except for a key ring cannot verify
+    /// signed with a scheme that fits it; that is recorded as unverified.
     #[test]
     fn checks_signature_results() {
         let p256 = CertificateDer::from(CERT.to_vec());
@@ -347,25 +379,44 @@ mod tests {
                 CertificateError::BadSignature,
             ))
         };
+        // rustls reports schemes ring lacks, such as ML-DSA, this way.
+        let unsupported = || {
+            Err(rustls::Error::PeerMisbehaved(
+                rustls::PeerMisbehaved::SignedHandshakeWithUnadvertisedSigScheme,
+            ))
+        };
+        let mismatch = || {
+            Err(rustls::Error::InvalidCertificate(
+                CertificateError::UnsupportedSignatureAlgorithmForPublicKeyContext {
+                    signature_algorithm_id: Vec::new(),
+                    public_key_algorithm_id: Vec::new(),
+                },
+            ))
+        };
 
         let verifier = AcceptAll::new();
-        assert!(
-            verifier
-                .check(Ok(HandshakeSignatureValid::assertion()), &p256)
-                .is_ok()
-        );
-        assert!(verifier.check(bad(), &p256).is_err());
+        let ok = Ok(HandshakeSignatureValid::assertion());
+        let ecdsa = SignatureScheme::ECDSA_NISTP256_SHA256;
+        assert!(verifier.check(ok, &p256, ecdsa).is_ok());
+        assert!(verifier.check(bad(), &p256, ecdsa).is_err());
+        // A P-256 leaf with an ML-DSA or RSA scheme is a mismatch.
+        let mldsa = SignatureScheme::ML_DSA_65;
+        assert!(verifier.check(unsupported(), &p256, mldsa).is_err());
+        let rsa = SignatureScheme::RSA_PSS_SHA256;
+        assert!(verifier.check(mismatch(), &p256, rsa).is_err());
+        assert!(verifier.check(bad(), &rsa1024, ecdsa).is_err());
         assert!(verifier.signature_verified());
 
-        assert!(verifier.check(bad(), &rsa1024).is_ok());
+        let mldsa_cert = CertificateDer::from(MLDSA65_CERT.to_vec());
+        let mldsa44 = SignatureScheme::ML_DSA_44;
+        assert!(verifier.check(unsupported(), &mldsa_cert, mldsa44).is_err());
+        assert!(verifier.signature_verified());
+
+        assert!(verifier.check(bad(), &rsa1024, rsa).is_ok());
         assert!(!verifier.signature_verified());
 
-        // rustls reports schemes ring lacks, such as ML-DSA, this way.
         let verifier = AcceptAll::new();
-        let unsupported = Err(rustls::Error::PeerMisbehaved(
-            rustls::PeerMisbehaved::SignedHandshakeWithUnadvertisedSigScheme,
-        ));
-        assert!(verifier.check(unsupported, &p256).is_ok());
+        assert!(verifier.check(unsupported(), &mldsa_cert, mldsa).is_ok());
         assert!(!verifier.signature_verified());
     }
 

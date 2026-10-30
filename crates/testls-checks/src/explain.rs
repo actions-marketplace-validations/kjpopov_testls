@@ -286,7 +286,7 @@ const EXPLANATIONS: &[Explanation] = &[
     entry(
         "cert.signature_unverified",
         "Handshake signature not verified",
-        "The server signed the handshake with a scheme or key testls cannot check (ML-DSA, or RSA keys under 2048 bits), so it cannot confirm the server holds the key of the certificate it presented. The certificate results still apply to the chain as sent.",
+        "The server signed the handshake with a scheme or key testls cannot check (ML-DSA, P-521, Ed448, or RSA keys under 2048 bits), so it cannot confirm the server holds the key of the certificate it presented. The certificate results still apply to the chain as sent.",
         "RFC 8446 §4.4.3",
     ),
     // Stapled OCSP.
