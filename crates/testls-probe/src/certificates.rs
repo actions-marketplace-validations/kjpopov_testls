@@ -129,6 +129,9 @@ fn config_with(verifier: Arc<AcceptAll>) -> ClientConfig {
 /// Signature schemes ring cannot verify, advertised so servers whose only
 /// certificate uses them still send their chain (IANA TLS `SignatureScheme`
 /// registry: 0x0603 P-521, 0x0808 Ed448, 0x0904-0x0906 ML-DSA).
+/// In TLS 1.2 rustls only takes the schemes of the cipher suite's
+/// signature algorithm, which ring lacks for Ed448, so an Ed448 server still
+/// fails the TLS 1.2 fetch.
 const UNVERIFIABLE_SCHEMES: [SignatureScheme; 5] = [
     SignatureScheme::ECDSA_NISTP521_SHA512,
     SignatureScheme::ED448,
@@ -178,16 +181,18 @@ impl AcceptAll {
     /// the certificate it presented. The one exception is a leaf key ring
     /// cannot verify, signed with a scheme that fits that key (see
     /// [`unverifiable`]); it is accepted and recorded as unverified, so weak
-    /// or post-quantum servers are still reported.
+    /// or post-quantum servers are still reported. `tls12` is set for a
+    /// TLS 1.2 handshake.
     fn check(
         &self,
         result: Result<HandshakeSignatureValid, rustls::Error>,
         cert: &CertificateDer<'_>,
         scheme: SignatureScheme,
+        tls12: bool,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
         match result {
             Ok(valid) => Ok(valid),
-            Err(_) if unverifiable(cert, scheme) => {
+            Err(_) if unverifiable(cert, scheme, tls12) => {
                 self.unverified.store(true, Ordering::Relaxed);
                 Ok(HandshakeSignatureValid::assertion())
             }
@@ -196,13 +201,18 @@ impl AcceptAll {
     }
 }
 
+/// OID of the P-521 curve (RFC 5480).
+const P521_OID: &str = "1.3.132.0.35";
+
 /// Whether `cert` has a key ring cannot verify and `scheme` fits that key.
 ///
 /// Covers RSA keys under 2048 bits with an RSA scheme, P-521 with
 /// `ecdsa_secp521r1_sha512`, Ed448 with `ed448`, and ML-DSA with the scheme
-/// of the same parameter set. Key OIDs: RFC 8017 (RSA), RFC 5480 (EC
-/// curves), RFC 8410 (Ed448), RFC 9881 (ML-DSA).
-fn unverifiable(cert: &CertificateDer<'_>, scheme: SignatureScheme) -> bool {
+/// of the same parameter set. In TLS 1.2 (`tls12`) ECDSA schemes only name
+/// the hash (RFC 8446 §4.2.3), so P-521 with any ECDSA scheme and any curve
+/// with SHA-512 also count; ring has neither. Key OIDs: RFC 8017 (RSA),
+/// RFC 5480 (EC curves), RFC 8410 (Ed448), RFC 9881 (ML-DSA).
+fn unverifiable(cert: &CertificateDer<'_>, scheme: SignatureScheme, tls12: bool) -> bool {
     let Ok((_, cert)) = x509_parser::parse_x509_certificate(cert.as_ref()) else {
         return false;
     };
@@ -226,8 +236,12 @@ fn unverifiable(cert: &CertificateDer<'_>, scheme: SignatureScheme) -> bool {
             | SignatureScheme::RSA_PSS_SHA512,
         ) => matches!(spki.parsed(), Ok(PublicKey::RSA(k)) if k.key_size() < 2048),
         ("1.2.840.10045.2.1", SignatureScheme::ECDSA_NISTP521_SHA512) => {
-            curve.as_deref() == Some("1.3.132.0.35")
+            tls12 || curve.as_deref() == Some(P521_OID)
         }
+        (
+            "1.2.840.10045.2.1",
+            SignatureScheme::ECDSA_NISTP256_SHA256 | SignatureScheme::ECDSA_NISTP384_SHA384,
+        ) => tls12 && curve.as_deref() == Some(P521_OID),
         ("1.3.101.113", SignatureScheme::ED448)
         | ("2.16.840.1.101.3.4.3.17", SignatureScheme::ML_DSA_44)
         | ("2.16.840.1.101.3.4.3.18", SignatureScheme::ML_DSA_65)
@@ -270,7 +284,7 @@ impl ServerCertVerifier for AcceptAll {
             dss,
             &self.provider.signature_verification_algorithms,
         );
-        self.check(result, cert, dss.scheme)
+        self.check(result, cert, dss.scheme, true)
     }
 
     /// Checks the TLS 1.3 handshake signature against the leaf key; see
@@ -287,7 +301,7 @@ impl ServerCertVerifier for AcceptAll {
             dss,
             &self.provider.signature_verification_algorithms,
         );
-        self.check(result, cert, dss.scheme)
+        self.check(result, cert, dss.scheme, false)
     }
 
     /// Advertises every scheme the crypto provider knows plus
@@ -406,40 +420,85 @@ mod tests {
         let verifier = AcceptAll::new();
         let ok = Ok(HandshakeSignatureValid::assertion());
         let ecdsa = SignatureScheme::ECDSA_NISTP256_SHA256;
-        assert!(verifier.check(ok, &p256, ecdsa).is_ok());
-        assert!(verifier.check(bad(), &p256, ecdsa).is_err());
+        assert!(verifier.check(ok, &p256, ecdsa, false).is_ok());
+        assert!(verifier.check(bad(), &p256, ecdsa, false).is_err());
         // A P-256 leaf with an ML-DSA or RSA scheme is a mismatch.
         let mldsa = SignatureScheme::ML_DSA_65;
-        assert!(verifier.check(unsupported(), &p256, mldsa).is_err());
+        assert!(verifier.check(unsupported(), &p256, mldsa, false).is_err());
         let rsa = SignatureScheme::RSA_PSS_SHA256;
-        assert!(verifier.check(mismatch(), &p256, rsa).is_err());
-        assert!(verifier.check(bad(), &rsa1024, ecdsa).is_err());
+        assert!(verifier.check(mismatch(), &p256, rsa, false).is_err());
+        assert!(verifier.check(bad(), &rsa1024, ecdsa, false).is_err());
         assert!(verifier.signature_verified());
 
         let mldsa_cert = CertificateDer::from(MLDSA65_CERT.to_vec());
         let mldsa44 = SignatureScheme::ML_DSA_44;
-        assert!(verifier.check(unsupported(), &mldsa_cert, mldsa44).is_err());
+        assert!(
+            verifier
+                .check(unsupported(), &mldsa_cert, mldsa44, false)
+                .is_err()
+        );
         assert!(verifier.signature_verified());
 
-        assert!(verifier.check(bad(), &rsa1024, rsa).is_ok());
+        assert!(verifier.check(bad(), &rsa1024, rsa, false).is_ok());
         assert!(!verifier.signature_verified());
 
         let verifier = AcceptAll::new();
-        assert!(verifier.check(unsupported(), &mldsa_cert, mldsa).is_ok());
+        assert!(
+            verifier
+                .check(unsupported(), &mldsa_cert, mldsa, false)
+                .is_ok()
+        );
         assert!(!verifier.signature_verified());
 
         let p521 = CertificateDer::from(P521_CERT.to_vec());
         let ed448 = CertificateDer::from(ED448_CERT.to_vec());
         let verifier = AcceptAll::new();
         let ed448_scheme = SignatureScheme::ED448;
-        assert!(verifier.check(unsupported(), &p521, ed448_scheme).is_err());
-        assert!(verifier.check(unsupported(), &ed448, mldsa).is_err());
+        assert!(
+            verifier
+                .check(unsupported(), &p521, ed448_scheme, false)
+                .is_err()
+        );
+        assert!(verifier.check(unsupported(), &ed448, mldsa, false).is_err());
         assert!(verifier.signature_verified());
         let p521_scheme = SignatureScheme::ECDSA_NISTP521_SHA512;
-        assert!(verifier.check(unsupported(), &p521, p521_scheme).is_ok());
+        assert!(
+            verifier
+                .check(unsupported(), &p521, p521_scheme, false)
+                .is_ok()
+        );
         assert!(!verifier.signature_verified());
         let verifier = AcceptAll::new();
-        assert!(verifier.check(unsupported(), &ed448, ed448_scheme).is_ok());
+        assert!(
+            verifier
+                .check(unsupported(), &ed448, ed448_scheme, false)
+                .is_ok()
+        );
+        assert!(!verifier.signature_verified());
+
+        // TLS 1.2 ECDSA schemes name only the hash, so P-256 with SHA-512 and
+        // P-521 with SHA-256 fit; TLS 1.3 binds the curve.
+        let verifier = AcceptAll::new();
+        assert!(
+            verifier
+                .check(unsupported(), &p256, p521_scheme, false)
+                .is_err()
+        );
+        assert!(verifier.check(unsupported(), &p521, ecdsa, false).is_err());
+        assert!(
+            verifier
+                .check(unsupported(), &rsa1024, p521_scheme, true)
+                .is_err()
+        );
+        assert!(verifier.signature_verified());
+        assert!(
+            verifier
+                .check(unsupported(), &p256, p521_scheme, true)
+                .is_ok()
+        );
+        assert!(!verifier.signature_verified());
+        let verifier = AcceptAll::new();
+        assert!(verifier.check(mismatch(), &p521, ecdsa, true).is_ok());
         assert!(!verifier.signature_verified());
     }
 
