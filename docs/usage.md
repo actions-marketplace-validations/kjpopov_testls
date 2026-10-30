@@ -144,3 +144,7 @@ To fail only on new findings, save a JSON report and pass it as baseline:
 testls --format json example.com > baseline.json
 testls --baseline baseline.json --fail-on low example.com
 ```
+
+A finding counts as known only if its severity has not risen since the
+baseline. Failed or incomplete measurements (`*.error`, `*.incomplete`,
+`cert.unparsable`) are never known.
