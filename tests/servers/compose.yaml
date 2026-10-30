@@ -17,7 +17,7 @@ services:
   modern:
     build: .
     image: localhost/testls-server
-    command: ["-serverpref", "-min_protocol", "TLSv1.2", "-cipher", "ECDHE+AESGCM:ECDHE+CHACHA20"]
+    command: ["-serverpref", "-min_protocol", "TLSv1.2", "-cipher", "ECDHE+AESGCM:ECDHE+CHACHA20", "-alpn", "http/1.1"]
     ports: ["127.0.0.1:14434:4433"]
 
   # Postfix with optional STARTTLS on SMTP, TLS 1.2+.

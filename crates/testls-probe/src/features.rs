@@ -4,15 +4,27 @@
 //! compression (CRIME, RFC 3749) and signals secure renegotiation
 //! (RFC 5746). A second hello at a version below the server's best carries
 //! `TLS_FALLBACK_SCSV`, which a protected server must refuse with an
-//! `inappropriate_fallback` alert (RFC 7507, section 3).
+//! `inappropriate_fallback` alert (RFC 7507, section 3). A third hello at
+//! the server's best version offers only an unknown ALPN protocol, which a
+//! strict server refuses with `no_application_protocol` (RFC 7301,
+//! section 3.2); the ALPACA paper names strict ALPN as a countermeasure to
+//! cross-protocol attacks. At TLS 1.3 the answer is encrypted, so that
+//! probe is a full rustls handshake instead.
 
-use testls_wire::{Alert, ClientHello, ProtocolVersion, ServerHello, ext};
+use rustls::AlertDescription;
+use testls_wire::{Alert, ClientHello, Extension, ProtocolVersion, ServerHello, ext};
 
+use crate::certificates::{connect_tls, tls13_client_config};
 use crate::hello::{EMPTY_RENEGOTIATION_INFO_SCSV, FALLBACK_SCSV, client_hello};
 use crate::{CipherResult, HelloResponse, ProbeError, Transport};
 
 /// The DEFLATE compression method (RFC 3749, section 2).
 const COMPRESSION_DEFLATE: u8 = 1;
+
+/// ALPN extension body offering only `testls-unknown`, a protocol id no
+/// server should know: a 15-byte list holding one 14-byte name
+/// (RFC 7301, section 3.1).
+const UNKNOWN_ALPN: &[u8] = b"\x00\x0f\x0etestls-unknown";
 
 /// Handshake features found by [`probe_features`].
 ///
@@ -33,6 +45,9 @@ pub struct HandshakeFeatures {
     /// Whether the server refused the fallback hello with
     /// `inappropriate_fallback`.
     pub fallback_scsv: Option<bool>,
+    /// Whether the server refused a hello offering only an unknown ALPN
+    /// protocol with `no_application_protocol`.
+    pub strict_alpn: Option<bool>,
 }
 
 /// Send one hello and return the reply, treating a reset as a refusal.
@@ -77,16 +92,17 @@ fn suites_of(result: &CipherResult) -> Vec<u16> {
         .collect()
 }
 
-/// Probe compression, secure renegotiation and `TLS_FALLBACK_SCSV`.
+/// Probe compression, secure renegotiation, `TLS_FALLBACK_SCSV` and strict
+/// ALPN.
 ///
 /// `ciphers` are the results of
 /// [`enumerate_ciphers`](crate::enumerate_ciphers) for every version the
-/// server supports. Costs at most two connections.
+/// server supports. Costs at most three connections.
 ///
 /// # Errors
 /// Returns a [`ProbeError`] if the compression and renegotiation probe fails
 /// for reasons other than the server refusing the hello. A failed fallback
-/// probe only leaves `fallback_scsv` unset.
+/// or ALPN probe only leaves `fallback_scsv` or `strict_alpn` unset.
 pub async fn probe_features(
     transport: &Transport,
     ciphers: &[CipherResult],
@@ -103,6 +119,7 @@ pub async fn probe_features(
         secure_renegotiation: None,
         fallback_version: None,
         fallback_scsv: None,
+        strict_alpn: None,
     };
 
     if let Some(legacy) = supported
@@ -148,7 +165,68 @@ pub async fn probe_features(
                 .map(|_| false),
         };
     }
+
+    // SSLv3 hellos carry no extensions, so ALPN needs TLS.
+    if let Some(best) = supported
+        .first()
+        .filter(|c| c.version > ProtocolVersion::SSL3)
+    {
+        features.strict_alpn = if best.version >= ProtocolVersion::TLS13 {
+            tls13_strict_alpn(transport, sni).await
+        } else {
+            legacy_strict_alpn(transport, best, sni).await
+        };
+    }
     Ok(features)
+}
+
+/// Strict ALPN up to TLS 1.2, where the server answers ALPN in its
+/// `ServerHello` (RFC 7301, section 3.1), so a raw hello at `best`'s
+/// version shows the result.
+async fn legacy_strict_alpn(
+    transport: &Transport,
+    best: &CipherResult,
+    sni: Option<&str>,
+) -> Option<bool> {
+    let suites = suites_of(best);
+    let mut hello = client_hello(best.version, suites.clone(), sni);
+    hello.extensions.push(Extension::Raw {
+        typ: ext::ALPN,
+        data: UNKNOWN_ALPN.to_vec(),
+    });
+    match send(transport, &hello).await.ok().flatten() {
+        Some(HelloResponse::Alert(a)) if a.description == Alert::NO_APPLICATION_PROTOCOL => {
+            Some(true)
+        }
+        r => accepted(best.version, &suites, r.as_ref())
+            .ok()
+            .flatten()
+            .map(|_| false),
+    }
+}
+
+/// Strict ALPN over TLS 1.3, where the server's ALPN answer travels in the
+/// encrypted `EncryptedExtensions` (RFC 8446, section 4.3.1) and a refusal
+/// may follow the `ServerHello`, so only a full rustls handshake shows it.
+///
+/// `Some(true)` when the server sends `no_application_protocol`,
+/// `Some(false)` when the handshake completes, `None` on any other failure.
+async fn tls13_strict_alpn(transport: &Transport, sni: Option<&str>) -> Option<bool> {
+    let mut config = tls13_client_config();
+    config.alpn_protocols = vec![UNKNOWN_ALPN[3..].to_vec()];
+    match connect_tls(transport, sni, config).await {
+        Ok(_) => Some(false),
+        Err(ProbeError::Io(e)) => {
+            let refused = e
+                .get_ref()
+                .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+                .is_some_and(|e| {
+                    *e == rustls::Error::AlertReceived(AlertDescription::NoApplicationProtocol)
+                });
+            refused.then_some(true)
+        }
+        Err(_) => None,
+    }
 }
 
 #[cfg(test)]
@@ -169,6 +247,8 @@ mod tests {
         renegotiation: Option<&'static [u8]>,
         /// Refuse hellos carrying `TLS_FALLBACK_SCSV`.
         fallback: bool,
+        /// Refuse hellos offering an unknown ALPN protocol.
+        alpn: bool,
     }
 
     /// Cipher suites and compression methods of a `ClientHello` record.
@@ -194,6 +274,9 @@ mod tests {
         let (version, suites, methods) = parse_hello(hello);
         if behaviour.fallback && suites.contains(&FALLBACK_SCSV) {
             return vec![21, 3, 3, 0, 2, 2, Alert::INAPPROPRIATE_FALLBACK];
+        }
+        if behaviour.alpn && hello.windows(UNKNOWN_ALPN.len()).any(|w| w == UNKNOWN_ALPN) {
+            return vec![21, 3, 3, 0, 2, 2, Alert::NO_APPLICATION_PROTOCOL];
         }
         let mut body = version.to_be_bytes().to_vec();
         body.extend([7; 32]);
@@ -257,6 +340,7 @@ mod tests {
             deflate: false,
             renegotiation: Some(&[0]),
             fallback: true,
+            alpn: true,
         })
         .await;
         let f = probe_features(&Transport::new(addr), &two_versions(), None)
@@ -267,6 +351,7 @@ mod tests {
         assert_eq!(f.secure_renegotiation, Some(true));
         assert_eq!(f.fallback_version, Some(ProtocolVersion::TLS11));
         assert_eq!(f.fallback_scsv, Some(true));
+        assert_eq!(f.strict_alpn, Some(true));
     }
 
     /// A server with compression, no RFC 5746 and no fallback protection.
@@ -276,6 +361,7 @@ mod tests {
             deflate: true,
             renegotiation: None,
             fallback: false,
+            alpn: false,
         })
         .await;
         let f = probe_features(&Transport::new(addr), &two_versions(), None)
@@ -284,6 +370,7 @@ mod tests {
         assert_eq!(f.compression, Some(true));
         assert_eq!(f.secure_renegotiation, Some(false));
         assert_eq!(f.fallback_scsv, Some(false));
+        assert_eq!(f.strict_alpn, Some(false));
     }
 
     /// A malformed or non-empty `renegotiation_info` on an initial
@@ -295,6 +382,7 @@ mod tests {
                 deflate: false,
                 renegotiation: Some(info),
                 fallback: true,
+                alpn: true,
             })
             .await;
             let f = probe_features(&Transport::new(addr), &two_versions(), None)
@@ -321,6 +409,7 @@ mod tests {
                 deflate: false,
                 renegotiation: Some(&[0]),
                 fallback: true,
+                alpn: true,
             };
             s.write_all(&reply(&buf[..n], behaviour)).await.unwrap();
             // Dropping the listener refuses the fallback connection.
@@ -332,6 +421,82 @@ mod tests {
         assert_eq!(f.secure_renegotiation, Some(true));
         assert_eq!(f.fallback_version, Some(ProtocolVersion::TLS11));
         assert_eq!(f.fallback_scsv, None);
+        assert_eq!(f.strict_alpn, None);
+    }
+
+    /// Runs a TLS 1.3 server that accepts handshakes forever, with
+    /// `alpn` as its ALPN protocols (none means ALPN is ignored).
+    async fn serve_tls13(alpn: &[&[u8]]) -> SocketAddr {
+        use rustls::ServerConfig;
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+        use std::sync::Arc;
+        use tokio_rustls::TlsAcceptor;
+
+        let mut config =
+            ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_protocol_versions(&[&rustls::version::TLS13])
+                .unwrap()
+                .with_no_client_auth()
+                .with_single_cert(
+                    vec![CertificateDer::from(
+                        include_bytes!("testdata/localhost.cert.der").to_vec(),
+                    )],
+                    PrivateKeyDer::try_from(include_bytes!("testdata/localhost.key.der").to_vec())
+                        .unwrap(),
+                )
+                .unwrap();
+        config.alpn_protocols = alpn.iter().map(|p| p.to_vec()).collect();
+        let acceptor = TlsAcceptor::from(Arc::new(config));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (s, _) = listener.accept().await.unwrap();
+                let _ = acceptor.accept(s).await;
+            }
+        });
+        addr
+    }
+
+    /// TLS 1.3 ALPN is read from a full handshake: a refusal after the
+    /// `ServerHello` counts as strict, a completed handshake as not.
+    #[tokio::test]
+    async fn tls13_alpn() {
+        let tls13 = [CipherResult {
+            version: ProtocolVersion::TLS13,
+            suites: vec![0x1301],
+            order: CipherOrder::NotApplicable,
+        }];
+        for (alpn, expected) in [(&[&b"h2"[..]][..], true), (&[][..], false)] {
+            let addr = serve_tls13(alpn).await;
+            let f = probe_features(&Transport::new(addr), &tls13, Some("localhost"))
+                .await
+                .unwrap();
+            assert_eq!(f.strict_alpn, Some(expected), "{alpn:?}");
+        }
+    }
+
+    /// A TLS 1.3 server that drops the connection mid-handshake leaves the
+    /// ALPN verdict untested.
+    #[tokio::test]
+    async fn tls13_alpn_failure() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = [0u8; 512];
+                let _ = stream.read(&mut buf).await;
+            }
+        });
+        let tls13 = [CipherResult {
+            version: ProtocolVersion::TLS13,
+            suites: vec![0x1301],
+            order: CipherOrder::NotApplicable,
+        }];
+        let f = probe_features(&Transport::new(addr), &tls13, Some("localhost"))
+            .await
+            .unwrap();
+        assert_eq!(f.strict_alpn, None);
     }
 
     /// With a single version there is nothing to fall back from, and a
@@ -349,7 +514,9 @@ mod tests {
         assert_eq!(f.compression, None);
         assert_eq!(f.fallback_version, None);
         assert_eq!(f.fallback_scsv, None);
+        assert_eq!(f.strict_alpn, None);
         let none = probe_features(&unreachable, &[], None).await.unwrap();
         assert_eq!(none.secure_renegotiation, None);
+        assert_eq!(none.strict_alpn, None);
     }
 }

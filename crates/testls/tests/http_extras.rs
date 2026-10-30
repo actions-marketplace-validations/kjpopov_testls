@@ -17,13 +17,15 @@ const CERT: &[u8] = include_bytes!("../../testls-probe/src/testdata/localhost.ce
 /// Private key for [`CERT`].
 const KEY: &[u8] = include_bytes!("../../testls-probe/src/testdata/localhost.key.der");
 
-/// HTTP reply with a versioned banner, `Alt-Svc` and two weak cookies.
+/// HTTP reply with a versioned banner, `Alt-Svc`, two weak cookies and a
+/// compressed body.
 const REPLY: &[u8] = b"HTTP/1.1 200 OK\r\n\
 Server: nginx/1.25.3\r\n\
 X-Powered-By: PHP/8.3\r\n\
 Alt-Svc: h3=\":443\"; ma=60\r\n\
 Set-Cookie: session=abc; HttpOnly\r\n\
 Set-Cookie: theme=dark; Secure; SameSite=None\r\n\
+Content-Encoding: gzip\r\n\
 Content-Length: 0\r\n\
 Connection: close\r\n\r\n";
 
@@ -53,7 +55,17 @@ fn serve() -> SocketAddr {
 }
 
 /// Completes one TLS connection, reads the request head and sends [`REPLY`].
-fn handle(config: Arc<ServerConfig>, stream: TcpStream) {
+/// A plaintext request is answered with an RFC 2817 switch to TLS.
+fn handle(config: Arc<ServerConfig>, mut stream: TcpStream) {
+    let mut first = [0u8; 1];
+    if stream.peek(&mut first).is_ok_and(|n| n == 1) && first[0].is_ascii_uppercase() {
+        let mut buf = [0u8; 1024];
+        let _ = stream.read(&mut buf);
+        let _ = stream.write_all(
+            b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: TLS/1.0, HTTP/1.1\r\nConnection: Upgrade\r\n\r\n",
+        );
+        return;
+    }
     let Ok(conn) = ServerConnection::new(config) else {
         return;
     };
@@ -71,8 +83,8 @@ fn handle(config: Arc<ServerConfig>, stream: TcpStream) {
     let _ = tls.flush();
 }
 
-/// Banners, `Alt-Svc` and cookie attributes appear in the JSON report and
-/// produce their findings.
+/// Banners, `Alt-Svc`, cookie attributes and HTTP compression (BREACH)
+/// appear in the JSON report and produce their findings.
 #[test]
 fn json_reports_http_extras() {
     let addr = serve();
@@ -121,10 +133,41 @@ fn json_reports_http_extras() {
         "cookie.insecure",
         "cookie.no_httponly",
         "cookie.no_samesite",
+        "vuln.breach",
     ] {
         assert!(ids.contains(&id), "missing {id} in {ids:?}");
     }
     assert!(!ids.contains(&"header.alt_svc_invalid"), "{ids:?}");
+    let breach = v["vulnerabilities"]
+        .as_array()
+        .expect("vulnerabilities")
+        .iter()
+        .find(|b| b["id"] == "breach")
+        .expect("breach verdict");
+    assert_eq!(breach["status"], "vulnerable", "{breach}");
+    assert_eq!(breach["detail"], "HTTP compression: gzip");
+    let finding = v["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .find(|f| f["id"] == "vuln.breach")
+        .expect("breach finding");
+    assert_eq!(finding["severity"], "low", "{finding}");
+
+    let opossum = v["vulnerabilities"]
+        .as_array()
+        .expect("vulnerabilities")
+        .iter()
+        .find(|o| o["id"] == "opossum")
+        .expect("opossum verdict");
+    assert_eq!(opossum["status"], "vulnerable", "{opossum}");
+    assert!(
+        opossum["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains(&addr.port().to_string())),
+        "{opossum}"
+    );
+    assert!(ids.contains(&"vuln.opossum"), "{ids:?}");
 }
 
 /// `--format sarif` prints one SARIF 2.1.0 log whose results carry the
@@ -367,8 +410,13 @@ fn proxy_tunnels_scan() {
     }
     let seen = seen.lock().expect("log");
     assert!(seen.len() > 1, "{seen:?}");
-    let expected = format!("CONNECT {target} HTTP/1.1");
-    assert!(seen.iter().all(|l| *l == expected), "{seen:?}");
+    // The Opossum probe also tunnels to port 80 of the target.
+    let expected = [
+        format!("CONNECT {target} HTTP/1.1"),
+        "CONNECT 192.0.2.1:80 HTTP/1.1".to_owned(),
+    ];
+    assert!(seen.iter().all(|l| expected.contains(l)), "{seen:?}");
+    assert!(seen.contains(&expected[1]), "{seen:?}");
 
     let out = Command::new(env!("CARGO_BIN_EXE_testls"))
         .arg(target)

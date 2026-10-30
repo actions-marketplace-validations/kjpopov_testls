@@ -13,7 +13,7 @@ what a finding means and why it matters.
 | Certificates | Expiry, chain, hostname, key size, signature, lifetime, embedded SCTs |
 | Revocation | OCSP stapling, OCSP and CRL lookups |
 | HTTP headers | HSTS, preload, cookies, header hygiene |
-| Vulnerabilities | Derived checks: POODLE, BEAST, SWEET32, Logjam, … |
+| Vulnerabilities | Derived checks: POODLE, BEAST, SWEET32, Logjam, BREACH, ALPACA, Opossum, … |
 | Handshake | ClientHello tolerance, TLSv1.3 details, post-quantum readiness |
 
 ## Targets
@@ -43,6 +43,9 @@ testls --starttls mysql db.example.com
 # XMPP addresses the stream to the SNI name; set --sni when the XMPP
 # domain differs from the host name
 testls --starttls xmpp --sni example.com xmpp.example.com
+
+# Every mail server (MX host) of a domain, with SMTP STARTTLS on port 25
+testls --mx example.com
 ```
 
 ## Connection control
@@ -67,6 +70,10 @@ testls --ca-file my-ca.pem 10.0.0.5 --sni intranet.example
 ```bash
 # Also ask the CA's OCSP responder or CRL whether the certificate is revoked
 testls --revocation example.com
+
+# Revocation lookups refuse private and loopback addresses; allow them for
+# an internal CA
+testls --revocation --revocation-allow-private intranet.example
 
 # Quick check (protocols, cipher suites, certificate) or everything,
 # including revocation and every address of the host
@@ -141,3 +148,7 @@ To fail only on new findings, save a JSON report and pass it as baseline:
 testls --format json example.com > baseline.json
 testls --baseline baseline.json --fail-on low example.com
 ```
+
+A finding counts as known only if its severity has not risen since the
+baseline. Failed or incomplete measurements (`*.error`, `*.incomplete`,
+`cert.unparsable`) are never known.

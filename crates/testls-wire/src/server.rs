@@ -199,6 +199,8 @@ impl Alert {
     pub const INAPPROPRIATE_FALLBACK: u8 = 86;
     /// `unrecognized_name`.
     pub const UNRECOGNIZED_NAME: u8 = 112;
+    /// `no_application_protocol` (RFC 7301, section 3.2).
+    pub const NO_APPLICATION_PROTOCOL: u8 = 120;
 
     /// Parse an alert record fragment.
     ///

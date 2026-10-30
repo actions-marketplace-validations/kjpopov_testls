@@ -15,6 +15,51 @@ All notable changes to `testls` are listed here. The format follows
   database servers can be scanned. Targets without a port use the
   protocol's standard port (25, 143, 110, 21, 5222, 389, 5432, 3306); HTTP
   headers are not checked. XMPP addresses the stream to the SNI name.
+- `--mx` scans the mail servers of each target domain instead of the
+  domain: its MX hosts, sorted by preference, each with `--starttls smtp`
+  on port 25 (or the target's port). A domain without MX records is
+  scanned itself; a null MX, an unknown domain or a failed lookup is a
+  scan error for that target (exit code 2). IP and CIDR targets are
+  rejected.
+- BREACH verdict (`breach`, finding `vuln.breach`, low): the `GET /`
+  request now offers `Accept-Encoding: gzip, deflate, br, zstd`, and a
+  reply with a content coding other than `identity` is reported as
+  vulnerable. Without an HTTP reply (quick profile, `--starttls`, non-HTTP
+  service) it is not tested.
+- ALPACA verdict (`alpaca`, finding `vuln.alpaca`, low): the handshake
+  feature probe sends one more hello at the best version offering only an
+  unknown ALPN protocol; a server that completes the handshake instead of
+  answering `no_application_protocol` is reported as vulnerable. Not
+  tested under the quick profile.
+- Opossum verdict (`opossum`, finding `vuln.opossum`, medium): a plaintext
+  `OPTIONS *` request with `Upgrade: TLS/1.0` (RFC 2817) goes to the
+  scanned port and port 80; a `101 Switching Protocols` reply to TLS on
+  either is reported as vulnerable. Not tested under the quick profile or
+  `--starttls`.
+
+### Security
+
+- Text reports and CSV escape control characters in server-supplied text
+  (error messages, findings, suppression reasons, targets, SNI,
+  vulnerability details, STARTTLS replies and XMPP stream errors), so a
+  malicious server cannot send terminal escape sequences. Reported by
+  @r4d1um in #117.
+- `--baseline` treats a finding as known only if its severity has not risen
+  since the baseline, and never treats failed or incomplete measurements
+  (`*.error`, `*.incomplete`, `cert.unparsable`) as known. An invalid
+  severity in the baseline is a scan error. Reported by @r4d1um in #117.
+- The certificate fetch checks the server's handshake signature against its
+  certificate, so a peer relaying another server's certificate fails with
+  `cert.error`. Signatures testls cannot check (ML-DSA, P-521, Ed448, RSA keys
+  under 2048 bits) are reported as `cert.signature_unverified`. Reported by @r4d1um in
+  #117.
+- A partitioned CRL is used only if its distribution point matches one in the
+  certificate, so a CRL for another partition can no longer report a revoked
+  certificate as good. Reported by @r4d1um in #117.
+- Revocation lookups refuse loopback, private, link-local and other
+  non-public addresses, so a certificate cannot point the scanner at internal
+  services. `--revocation-allow-private` allows them for internal CAs.
+  Reported by @r4d1um in #117.
 
 ## [0.4.3] - 2026-10-27
 

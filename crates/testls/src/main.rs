@@ -25,9 +25,9 @@ use testls_checks::{
 };
 use testls_probe::{
     CipherResult, Fetcher, HandshakeDetails, HttpResponse, Intolerance, KeyExchangeResult,
-    ProtocolResult, ProtocolSupport, Starttls, Transport, detect_protocols, enumerate_ciphers,
-    fetch_certificates, fetch_http_headers, probe_details, probe_features, probe_intolerance,
-    probe_key_exchange,
+    MxResolver, ProtocolResult, ProtocolSupport, Starttls, Transport, detect_protocols,
+    enumerate_ciphers, fetch_certificates, fetch_http_headers, probe_details, probe_features,
+    probe_intolerance, probe_key_exchange, probe_tls_upgrade,
 };
 use testls_report::text::{self, CertificateSection, CipherSection, KeyExchangeSection};
 use testls_report::{ColorChoice, Format, Painter, csv, html, json, junit, markdown, sarif};
@@ -48,6 +48,8 @@ use testls_report::json::Suppressed;
     args_conflicts_with_subcommands = true,
     subcommand_negates_reqs = true
 )]
+// Each bool is an independent command-line flag, which clap models as a bool.
+#[allow(clippy::struct_excessive_bools)]
 struct Cli {
     /// Extra commands; without one, `testls` scans the target.
     #[command(subcommand)]
@@ -99,6 +101,13 @@ struct Cli {
     #[arg(long)]
     revocation: bool,
 
+    /// Let revocation lookups reach loopback, private, link-local and other
+    /// non-public addresses, e.g. for an internal CA. The scanned server's
+    /// certificate chooses these URLs, so they are refused by default, as are
+    /// numeric host forms like `127.1` that cannot be checked via `--proxy`.
+    #[arg(long)]
+    revocation_allow_private: bool,
+
     /// How much to scan: `quick` checks protocols, cipher suites and the
     /// certificate only; `default` runs every probe of the target; `full`
     /// adds `--revocation` and `--all-addresses`.
@@ -148,6 +157,13 @@ struct Cli {
           value_parser = clap::builder::PossibleValuesParser::new(Starttls::ALL.map(Starttls::as_str))
               .map(|s| s.parse::<Starttls>().expect("listed value")))]
     starttls: Option<Starttls>,
+
+    /// Scan the mail servers of each target domain instead of the domain
+    /// itself: every MX host is scanned with `--starttls smtp` on the
+    /// target's port (25 by default). A domain without MX records is
+    /// scanned itself; IP and CIDR targets are rejected.
+    #[arg(long)]
+    mx: bool,
 
     /// Read suppressions from this TOML file instead of `.testls.toml` in
     /// the working directory (which is optional).
@@ -357,6 +373,9 @@ async fn main() -> ExitCode {
 /// Collects the targets from the command line and `--file`, in that order,
 /// with CIDR ranges expanded.
 fn targets(cli: &Cli) -> Result<Vec<Target>, String> {
+    if cli.mx && cli.starttls.is_some_and(|s| s != Starttls::Smtp) {
+        return Err("--mx scans mail servers and needs --starttls smtp".to_owned());
+    }
     let port = default_port(cli);
     let mut targets = Vec::new();
     for arg in &cli.targets {
@@ -372,6 +391,11 @@ fn targets(cli: &Cli) -> Result<Vec<Target>, String> {
     if targets.is_empty() {
         return Err("no targets given".to_owned());
     }
+    if cli.mx
+        && let Some(t) = targets.iter().find(|t| matches!(t.host, Host::Ip(_)))
+    {
+        return Err(format!("{t}: --mx needs a domain name, not an IP address"));
+    }
     Ok(targets)
 }
 
@@ -384,8 +408,43 @@ fn target_arg(s: &str) -> Result<String, target::ParseTargetError> {
 /// Port for targets that name none: the `--starttls` protocol's standard
 /// port, else 443.
 fn default_port(cli: &Cli) -> u16 {
-    cli.starttls
-        .map_or(target::DEFAULT_PORT, Starttls::default_port)
+    starttls(cli).map_or(target::DEFAULT_PORT, Starttls::default_port)
+}
+
+/// STARTTLS protocol to use: `--starttls`, or `smtp` with `--mx`.
+fn starttls(cli: &Cli) -> Option<Starttls> {
+    cli.starttls.or(cli.mx.then_some(Starttls::Smtp))
+}
+
+/// Hosts to scan: `targets` unchanged, or with `--mx` the mail servers
+/// of each target domain on the target's port, with a failed outcome for
+/// each domain whose lookup fails. Errs when the system resolver
+/// configuration cannot be read.
+async fn mail_hosts(
+    cli: &Cli,
+    targets: Vec<Target>,
+) -> Result<(Vec<Target>, Vec<Outcome>), String> {
+    if !cli.mx {
+        return Ok((targets, Vec::new()));
+    }
+    let resolver =
+        MxResolver::system(Duration::from_secs(cli.connect_timeout)).map_err(|e| e.to_string())?;
+    let mut hosts = Vec::new();
+    let mut failed = Vec::new();
+    for target in &targets {
+        let Host::Name(domain) = &target.host else {
+            hosts.push(target.clone());
+            continue;
+        };
+        match resolver.lookup(domain).await {
+            Ok(found) => hosts.extend(found.into_iter().map(|host| Target {
+                host: Host::Name(host),
+                port: target.port,
+            })),
+            Err(e) => failed.push(Outcome::failed(target, &e.to_string())),
+        }
+    }
+    Ok((hosts, failed))
 }
 
 /// Parses a target list: one target per line, skipping blank lines and
@@ -448,7 +507,21 @@ async fn scan_all(cli: &Cli) -> ExitCode {
     let mut documents = Vec::new();
     let mut finding_scans = Vec::new();
     let mut failures = Vec::new();
-    for target in &targets {
+    let hosts = match mail_hosts(cli, targets).await {
+        Ok((hosts, failed)) => {
+            for outcome in failed {
+                scans += 1;
+                code = code.max(outcome.code);
+                failures.extend(outcome.failure);
+            }
+            hosts
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    for target in &hosts {
         let addrs = match addresses(target, &cli.resolve, family).await {
             Ok(addrs) => selected(cli, addrs),
             Err(e) => {
@@ -483,28 +556,39 @@ async fn scan_all(cli: &Cli) -> ExitCode {
             eprintln!("warning: {target}: {warning}");
         }
     }
+    print_report(cli, scans, &documents, &finding_scans, &failures, code);
+    ExitCode::from(code)
+}
+
+/// Prints the reports that `--format` renders once at the end of the
+/// run, from the `scans` count, JSON `documents`, `finding_scans`,
+/// `failures` and the run's exit `code`.
+fn print_report(
+    cli: &Cli,
+    scans: usize,
+    documents: &[String],
+    finding_scans: &[sarif::Scan],
+    failures: &[junit::Failure],
+    code: u8,
+) {
     if cli.format == Format::Json {
-        print!("{}", json_output(scans, &documents));
+        print!("{}", json_output(scans, documents));
     }
     if cli.format == Format::Sarif {
-        print!("{}", sarif::render(&finding_scans, code < 2));
+        print!("{}", sarif::render(finding_scans, code < 2));
     }
     if cli.format == Format::Junit {
-        print!("{}", junit::render(&finding_scans, &failures, cli.fail_on));
+        print!("{}", junit::render(finding_scans, failures, cli.fail_on));
     }
     if cli.format == Format::Markdown {
-        print!(
-            "{}",
-            markdown::render(&finding_scans, &failures, cli.fail_on)
-        );
+        print!("{}", markdown::render(finding_scans, failures, cli.fail_on));
     }
     if cli.format == Format::Csv {
-        print!("{}", csv::render(&finding_scans, &failures, cli.fail_on));
+        print!("{}", csv::render(finding_scans, failures, cli.fail_on));
     }
     if cli.format == Format::Html {
-        print!("{}", html::render(&finding_scans, &failures, cli.fail_on));
+        print!("{}", html::render(finding_scans, failures, cli.fail_on));
     }
-    ExitCode::from(code)
 }
 
 /// What must match across the addresses of one host: offered protocols,
@@ -609,7 +693,7 @@ fn transport(cli: &Cli, addr: SocketAddr, proxy: Option<SocketAddr>) -> Transpor
     transport.read_timeout = Duration::from_secs(cli.read_timeout);
     transport.source = cli.source_ip;
     transport.proxy = proxy;
-    transport.starttls = cli.starttls;
+    transport.starttls = starttls(cli);
     transport
 }
 
@@ -671,7 +755,8 @@ async fn scan(
     findings.extend(cert_findings);
 
     let revocation = if cli.revocation || cli.profile.full() {
-        let (section, more) = revocation_section(&transport, chain.as_deref()).await;
+        let (section, more) =
+            revocation_section(&transport, chain.as_deref(), cli.revocation_allow_private).await;
         show(format!("\n{}", text::revocation(&section, paint)));
         findings.extend(more);
         Some(section)
@@ -968,7 +1053,8 @@ async fn later_sections(
         skipped()
     };
 
-    let vulns = vulnerability_section(transport, protocols, ciphers, key_exchange, sni, deep).await;
+    let measured = (protocols, ciphers, key_exchange, http.as_ref().ok());
+    let vulns = vulnerability_section(transport, measured, sni, deep).await;
     show(format!("\n{}", text::vulnerabilities(&vulns, paint)));
     findings.extend(vulnerability_findings(&vulns));
 
@@ -1033,6 +1119,13 @@ async fn certificate_section(
     };
     let now = unix_now();
     let mut findings = certificate_findings(&chain.certificates, Some(host), now);
+    if !chain.signature_verified {
+        findings.push(Finding::new(
+            "cert.signature_unverified",
+            Severity::Info,
+            "handshake signature not verified: scheme or key not supported",
+        ));
+    }
     if store.is_public() && is_trusted(&chain.certificates, now, store) {
         findings.extend(baseline_findings(&chain.certificates));
     }
@@ -1056,10 +1149,12 @@ async fn certificate_section(
 /// CRLs. Without a chain or with unreadable URLs the check cannot run,
 /// which is informational.
 ///
-/// Requests use the connect and read timeouts of `transport`.
+/// Requests use the connect and read timeouts of `transport`; non-public
+/// endpoints are refused unless `allow_private` is set.
 async fn revocation_section(
     transport: &Transport,
     chain: Option<&[Vec<u8>]>,
+    allow_private: bool,
 ) -> (Result<Vec<RevocationCheck>, String>, Vec<Finding>) {
     let fetcher = Fetcher {
         connect_timeout: transport.connect_timeout,
@@ -1067,6 +1162,7 @@ async fn revocation_section(
         max_body: 0,
         source: transport.source,
         proxy: transport.proxy,
+        allow_private,
     };
     let urls = chain
         .ok_or_else(|| "certificate chain could not be retrieved".to_owned())
@@ -1118,17 +1214,22 @@ async fn http_section(
     }
 }
 
-/// Probes compression, renegotiation and downgrade protection when `probe`
-/// is set, then derives the named vulnerabilities from everything the scan
-/// collected.
+/// Probes compression, renegotiation, downgrade protection, ALPN and, unless
+/// STARTTLS is used, the RFC 2817 HTTP upgrade when `probe` is set, then
+/// derives the named vulnerabilities from everything the scan
+/// collected: protocols, cipher and key exchange sections, and the HTTP
+/// response when one was retrieved.
 ///
-/// A failed or skipped feature probe leaves the affected verdicts as not
-/// tested.
+/// A failed or skipped feature probe or HTTP fetch leaves the affected
+/// verdicts as not tested.
 async fn vulnerability_section(
     transport: &Transport,
-    protocols: &[ProtocolResult],
-    ciphers: &[CipherSection],
-    key_exchange: &[KeyExchangeSection],
+    (protocols, ciphers, key_exchange, http): (
+        &[ProtocolResult],
+        &[CipherSection],
+        &[KeyExchangeSection],
+        Option<&HttpResponse>,
+    ),
     sni: Option<&str>,
     probe: bool,
 ) -> Vec<Vulnerability> {
@@ -1137,12 +1238,29 @@ async fn vulnerability_section(
         .filter_map(|s| s.outcome.as_ref().ok().cloned())
         .collect();
     let key_exchange = measured(key_exchange);
-    let features = if probe {
-        probe_features(transport, &ciphers, sni).await.ok()
+    // The RFC 2817 upgrade probe speaks plaintext HTTP, which STARTTLS
+    // protocols are not.
+    let (features, upgrade) = if probe {
+        let upgrade = async {
+            match transport.starttls {
+                Some(_) => None,
+                None => Some(Box::pin(probe_tls_upgrade(transport, sni)).await),
+            }
+        };
+        let (features, upgrade) =
+            tokio::join!(Box::pin(probe_features(transport, &ciphers, sni)), upgrade);
+        (features.ok(), upgrade)
     } else {
-        None
+        (None, None)
     };
-    assess_vulnerabilities(protocols, &ciphers, &key_exchange, features.as_ref())
+    assess_vulnerabilities(
+        protocols,
+        &ciphers,
+        &key_exchange,
+        features.as_ref(),
+        http,
+        upgrade.as_deref(),
+    )
 }
 
 /// Sends unusual but valid `ClientHello`s at the best offered version.
@@ -1300,6 +1418,45 @@ mod tests {
             25
         );
         assert!(Cli::try_parse_from(["testls", "--starttls", "gopher", "a.example"]).is_err());
+    }
+
+    /// `--mx` implies `--starttls smtp` and port 25, keeps explicit ports,
+    /// and rejects other protocols and IP targets.
+    #[test]
+    fn mx_targets() {
+        let cli =
+            Cli::try_parse_from(["testls", "--mx", "a.example", "b.example:587"]).expect("mx");
+        assert_eq!(starttls(&cli), Some(Starttls::Smtp));
+        let names: Vec<String> = targets(&cli)
+            .expect("targets")
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(names, ["a.example:25", "b.example:587"]);
+        let cli = Cli::try_parse_from(["testls", "--mx", "--starttls", "smtp", "a.example"])
+            .expect("mx smtp");
+        assert!(targets(&cli).is_ok());
+        let cli = Cli::try_parse_from(["testls", "--mx", "--starttls", "imap", "a.example"])
+            .expect("mx imap");
+        assert!(targets(&cli).expect_err("imap").contains("--starttls smtp"));
+        for ip in ["192.0.2.1", "192.0.2.0/31", "[2001:db8::1]:25"] {
+            let cli = Cli::try_parse_from(["testls", "--mx", "a.example", ip]).expect("mx ip");
+            assert!(targets(&cli).expect_err(ip).contains("needs a domain name"));
+        }
+        let cli = Cli::try_parse_from(["testls", "a.example"]).expect("plain");
+        assert_eq!(starttls(&cli), None);
+    }
+
+    /// Without `--mx`, the targets are scanned unchanged.
+    #[tokio::test]
+    async fn mail_hosts_without_mx() {
+        let cli = Cli::try_parse_from(["testls", "a.example"]).expect("plain");
+        let (hosts, failed) = mail_hosts(&cli, targets(&cli).expect("targets"))
+            .await
+            .expect("hosts");
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].to_string(), "a.example:443");
+        assert!(failed.is_empty());
     }
 
     /// Target lists skip blanks and comments and name the bad line.
@@ -1488,13 +1645,13 @@ mod tests {
     #[tokio::test]
     async fn revocation_without_chain() {
         let transport = Transport::new(SocketAddr::from(([127, 0, 0, 1], 9)));
-        let (section, findings) = revocation_section(&transport, None).await;
+        let (section, findings) = revocation_section(&transport, None, false).await;
         assert_eq!(
             section.unwrap_err(),
             "certificate chain could not be retrieved"
         );
         assert_eq!(findings[0].id, "revocation.error");
-        let (section, findings) = revocation_section(&transport, Some(&[])).await;
+        let (section, findings) = revocation_section(&transport, Some(&[]), false).await;
         assert_eq!(section.unwrap_err(), "empty certificate chain");
         assert_eq!(findings[0].severity, Severity::Info);
     }
@@ -1527,7 +1684,8 @@ mod tests {
                 order: testls_probe::CipherOrder::Server,
             }),
         }];
-        let list = vulnerability_section(&transport, &protocols, &ciphers, &[], None, true).await;
+        let measured = (&protocols[..], &ciphers[..], &[][..], None);
+        let list = vulnerability_section(&transport, measured, None, true).await;
         let crime = list.iter().find(|v| v.id == "crime").expect("crime");
         assert_eq!(crime.status, testls_checks::VulnStatus::NotTested);
         assert_eq!(vulnerability_findings(&list), vec![]);

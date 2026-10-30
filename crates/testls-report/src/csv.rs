@@ -21,10 +21,19 @@ const HEADER: [&str; 6] = ["target", "address", "severity", "id", "message", "fa
 /// are wrapped in double quotes with inner quotes doubled (RFC 4180,
 /// section 2). Fields starting with `=`, `+`, `-`, `@`, tab, CR or LF get
 /// a leading `'` so spreadsheets do not evaluate scanned server data as a
-/// formula (OWASP "CSV Injection").
+/// formula (OWASP "CSV Injection"). Other control characters, such as
+/// ESC, are escaped so viewing the file cannot drive a terminal.
 fn field(s: &str) -> String {
+    let s: String = s
+        .chars()
+        .map(|c| match c {
+            '\t' | '\r' | '\n' => c.to_string(),
+            c if c.is_control() => c.escape_default().to_string(),
+            c => c.to_string(),
+        })
+        .collect();
     let guard = s.starts_with(['=', '+', '-', '@', '\t', '\r', '\n']);
-    let value = if guard { format!("'{s}") } else { s.to_owned() };
+    let value = if guard { format!("'{s}") } else { s };
     if value.contains([',', '"', '\r', '\n']) {
         format!("\"{}\"", value.replace('"', "\"\""))
     } else {
@@ -143,5 +152,6 @@ mod tests {
         assert_eq!(field("\rx"), "\"'\rx\"");
         assert_eq!(field("\n=1+1"), "\"'\n=1+1\"");
         assert_eq!(field(""), "");
+        assert_eq!(field("a\x1b[2Jb"), "a\\u{1b}[2Jb");
     }
 }

@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/kjpopov/testls/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kjpopov/testls/actions/workflows/ci.yml)
 [![Release](https://github.com/kjpopov/testls/actions/workflows/release.yml/badge.svg)](https://github.com/kjpopov/testls/actions/workflows/release.yml)
+[![Coverage](https://codecov.io/gh/kjpopov/testls/graph/badge.svg)](https://codecov.io/gh/kjpopov/testls)
 [![Latest release](https://img.shields.io/github/v/release/kjpopov/testls?include_prereleases&sort=semver)](https://github.com/kjpopov/testls/releases)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 

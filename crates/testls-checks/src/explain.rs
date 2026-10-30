@@ -280,8 +280,14 @@ const EXPLANATIONS: &[Explanation] = &[
     entry(
         "cert.error",
         "Certificate chain could not be retrieved",
-        "The full handshake used to fetch the certificate chain failed.",
+        "The full handshake used to fetch the certificate chain failed. A handshake signature that does not match the leaf key also fails it: the peer does not hold the key of the certificate it presented.",
         "testls",
+    ),
+    entry(
+        "cert.signature_unverified",
+        "Handshake signature not verified",
+        "The server signed the handshake with a scheme or key testls cannot check (ML-DSA, P-521, Ed448, or RSA keys under 2048 bits), so it cannot confirm the server holds the key of the certificate it presented. The certificate results still apply to the chain as sent.",
+        "RFC 8446 §4.4.3",
     ),
     // Stapled OCSP.
     entry(
@@ -527,6 +533,24 @@ const EXPLANATIONS: &[Explanation] = &[
         "RFC 7919 §8.3, raccoon-attack.com",
     ),
     entry(
+        "vuln.breach",
+        "BREACH: HTTP responses are compressed",
+        "Compressing response bodies leaks the length of secrets, such as CSRF tokens, that appear next to attacker-reflected input. Only the front page is checked; disable compression for pages with secrets, or mask tokens per response.",
+        "RFC 7457 §2.6, breachattack.com",
+    ),
+    entry(
+        "vuln.alpaca",
+        "ALPACA: unknown ALPN protocols are accepted",
+        "A server that completes the handshake for an ALPN protocol it does not speak helps an attacker redirect traffic between services that share a certificate. Refuse unknown protocols with no_application_protocol and keep certificates specific to one service.",
+        "RFC 7301 §3.2, alpaca-attack.com",
+    ),
+    entry(
+        "vuln.opossum",
+        "Opossum: plaintext HTTP can be upgraded to TLS",
+        "A server that switches a plaintext HTTP connection to TLS on request (RFC 2817) lets a man-in-the-middle splice responses from that connection into a browser's HTTPS session. Disable the HTTP Upgrade to TLS and serve HTTPS on its own port only.",
+        "RFC 2817 §3, opossum-attack.com",
+    ),
+    entry(
         "intolerance.unknown_version",
         "Server rejects an unknown protocol version",
         "A server must negotiate the highest version both sides support; failing on a newer version offer breaks future clients and invites insecure fallback.",
@@ -667,10 +691,11 @@ mod tests {
     ];
 
     /// Ids emitted by the CLI itself for scan errors.
-    const CLI_IDS: [&str; 7] = [
+    const CLI_IDS: [&str; 8] = [
         "cipher.error",
         "group.error",
         "cert.error",
+        "cert.signature_unverified",
         "revocation.error",
         "http.error",
         "intolerance.error",

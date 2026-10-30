@@ -9,9 +9,11 @@ mod groups;
 pub mod hello;
 mod http;
 mod intolerance;
+mod mx;
 mod protocols;
 mod response;
 mod starttls;
+mod upgrade;
 
 use std::fmt;
 use std::io;
@@ -30,11 +32,13 @@ pub use fetch::{Fetcher, HttpBody};
 pub use groups::{KeyExchangeResult, probe_key_exchange};
 pub use http::{HttpResponse, fetch_http_headers};
 pub use intolerance::{Intolerance, probe_intolerance};
+pub use mx::{MxError, MxResolver};
 pub use protocols::{ProtocolResult, ProtocolSupport, classify, detect_protocols, probe_protocol};
 pub use response::HelloResponse;
 use response::ResponseParser;
 pub use starttls::Starttls;
 use testls_wire::{DecodeError, EncodeError};
+pub use upgrade::{TlsUpgrade, probe_tls_upgrade};
 
 /// Error from a single probe.
 #[derive(Debug)]

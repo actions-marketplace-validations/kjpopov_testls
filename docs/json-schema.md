@@ -115,6 +115,8 @@ per target, in scan order. This page describes schema version **1**.
 ### HTTP headers
 
 One `GET /` request is sent over a full handshake; redirects are not followed.
+It offers `Accept-Encoding: gzip, deflate, br, zstd` like a browser, so the
+`breach` verdict can see whether the reply is compressed.
 
 | Field | Type | Description |
 | --- | --- | --- |
@@ -141,7 +143,9 @@ One `GET /` request is sent over a full handshake; redirects are not followed.
 
 Only with `--revocation`: the OCSP responders named in the leaf certificate
 are queried first, then its CRLs are downloaded, until one gives a verifiable
-answer. Only `http://` URLs are used.
+answer. Only `http://` URLs are used. Non-public addresses are refused
+unless `--revocation-allow-private` is given; such attempts have the error
+`non-public address refused`.
 
 | Field | Type | Description |
 | --- | --- | --- |
@@ -158,13 +162,13 @@ answer. Only `http://` URLs are used.
 
 ### Vulnerability
 
-Named vulnerabilities judged from the protocols, cipher suites, key exchange
-and handshake features the scan collected; no attack traffic is sent. Always
-the same twelve entries in a fixed order.
+Named vulnerabilities judged from the protocols, cipher suites, key exchange,
+handshake features, HTTP headers and HTTP upgrade replies the scan collected; no
+attack traffic is sent. Always the same fifteen entries in a fixed order.
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `id` | string | Stable id: `poodle`, `beast`, `sweet32`, `rc4`, `freak`, `logjam`, `drown`, `crime`, `renegotiation`, `fallback_scsv`, `no_forward_secrecy`, `raccoon` |
+| `id` | string | Stable id: `poodle`, `beast`, `sweet32`, `rc4`, `freak`, `logjam`, `drown`, `crime`, `renegotiation`, `fallback_scsv`, `no_forward_secrecy`, `raccoon`, `breach`, `alpaca`, `opossum` |
 | `name` | string | Display name, e.g. `"POODLE"` |
 | `status` | string | `"vulnerable"`, `"not vulnerable"`, or `"not tested"` |
 | `detail` | string | Short reason for the verdict; wording may change |
@@ -213,7 +217,9 @@ reported.
 ### Suppressed finding
 
 A [finding](#finding) silenced by an active `.testls.toml` (or `--config`)
-entry, or listed for the same `target.input` in the `--baseline` report.
+entry, or listed for the same `target.input` in the `--baseline` report
+with the same or a higher severity (failed or incomplete measurements are
+never taken from the baseline).
 It does not count towards `--fail-on`.
 
 | Field | Type | Description |

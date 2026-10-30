@@ -114,6 +114,10 @@ fn legacy_server() {
         "Raccoon                        not vulnerable fresh DH public value per handshake"
     );
     assert_eq!(
+        s.line("ALPACA"),
+        "ALPACA                         vulnerable     unknown ALPN protocol accepted [vuln.alpaca]"
+    );
+    assert_eq!(
         s.line("ClientHello tolerance"),
         "ClientHello tolerance TLSv1.2"
     );
@@ -169,7 +173,7 @@ fn modern_server() {
     );
     let vulns = s.stdout.split_once("\nVulnerabilities\n").expect("vulns").1;
     let vulns = vulns.split_once("\n\n").expect("section end").0;
-    assert_eq!(vulns.lines().count(), 12, "{vulns}");
+    assert_eq!(vulns.lines().count(), 15, "{vulns}");
     assert!(
         vulns.lines().all(|l| l.contains(" not vulnerable ")),
         "{vulns}"

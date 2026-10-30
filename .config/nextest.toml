@@ -1,0 +1,7 @@
+# cargo-nextest settings (PLAN decision #86). The `ci` profile writes a
+# JUnit report that the coverage workflow uploads to Codecov Test Analytics.
+[profile.ci]
+fail-fast = false
+
+[profile.ci.junit]
+path = "junit.xml"
