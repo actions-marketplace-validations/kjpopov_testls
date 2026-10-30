@@ -103,7 +103,8 @@ struct Cli {
 
     /// Let revocation lookups reach loopback, private, link-local and other
     /// non-public addresses, e.g. for an internal CA. The scanned server's
-    /// certificate chooses these URLs, so they are refused by default.
+    /// certificate chooses these URLs, so they are refused by default, as are
+    /// numeric host forms like `127.1` that cannot be checked via `--proxy`.
     #[arg(long)]
     revocation_allow_private: bool,
 

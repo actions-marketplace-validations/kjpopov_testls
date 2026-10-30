@@ -237,13 +237,30 @@ fn blocked() -> ProbeError {
 }
 
 /// Reports whether `host` is visibly local without resolving it: a
-/// non-public IP literal or a `localhost` name (RFC 6761 §6.3).
+/// non-public IP literal, a `localhost` name (RFC 6761 §6.3), a scoped
+/// address (`%`) or a non-canonical numeric form such as `127.1`, which
+/// `inet_aton`-style resolvers read as an IPv4 address.
 fn local_host(host: &str) -> bool {
     if let Ok(ip) = host.parse::<IpAddr>() {
         return !public_address(ip);
     }
     let name = host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase();
-    name == "localhost" || name.ends_with(".localhost")
+    name == "localhost"
+        || name.ends_with(".localhost")
+        || name.contains('%')
+        || ends_in_number(&name)
+}
+
+/// Reports whether the last label is numeric (decimal, octal or `0x` hex),
+/// so the host parses as an IPv4 address rather than a domain name (WHATWG
+/// URL Standard, "ends in a number"). No top-level domain is numeric.
+fn ends_in_number(name: &str) -> bool {
+    let last = name.rsplit('.').next().unwrap_or(name);
+    !last.is_empty()
+        && (last.bytes().all(|b| b.is_ascii_digit())
+            || last
+                .strip_prefix("0x")
+                .is_some_and(|hex| hex.bytes().all(|b| b.is_ascii_hexdigit())))
 }
 
 /// Reports whether `ip` is a public unicast address.
@@ -584,10 +601,22 @@ mod tests {
             "ocsp.localhost",
             "127.0.0.2",
             "fd00::1",
+            "127.1",
+            "2130706433",
+            "0x7f000001",
+            "0177.0.0.1",
+            "fe80::1%1",
+            "134744072",
         ] {
             assert!(local_host(host), "{host}");
         }
-        for host in ["ocsp.example", "localhost.example", "8.8.8.8"] {
+        for host in [
+            "ocsp.example",
+            "localhost.example",
+            "8.8.8.8",
+            "0x.example",
+            "ocsp1.example",
+        ] {
             assert!(!local_host(host), "{host}");
         }
     }
