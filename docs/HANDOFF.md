@@ -6,20 +6,16 @@ if `gh` is allowed); update it when a session ends.
 
 ## State (2026-10-30)
 
-- Latest release **v0.4.3** (GitHub release, container image
-  `ghcr.io/kjpopov/testls:0.4.3`, Homebrew/Scoop in-repo, Marketplace action).
-  v0.4.2 was deleted (web UI mistake); skip it in compare links.
-- `main` has unreleased v0.5 work: `--starttls
-  smtp|imap|pop3|ftp|xmpp|ldap|postgres|mysql` (PRs #108–#115, decisions
-  #68–#75) and `--mx` (probe PR #119 `MxResolver` in `testls-probe/src/mx.rs`,
-  CLI PR #120 `mail_hosts` in `main.rs`, decisions #76–#77), plus the
-  PR #117 security hardening (PRs #122–#126, decisions #78–#81, CHANGELOG
-  "Security" section), Codecov upload (PR #128, decision #82) and the
-  application-layer checks: BREACH (#129, decision #83), ALPACA (#130,
-  #84), Opossum (#131, #85), Codecov Test Analytics (PR #133, decision
-  #86) and grading (PR #134 model, PR #135 report/CLI; decisions
-  #87–#89, which also settled the default profile and politeness open
-  questions). Next decision log number: **#90**.
+- Latest release **v0.5.0** (release PR `chore/release-0.5.0`; tag,
+  GitHub release, container image `ghcr.io/kjpopov/testls:0.5.0`,
+  Homebrew/Scoop in-repo via the packages PR). v0.4.2 was deleted (web UI
+  mistake); skip it in compare links.
+- v0.5.0 contains `--starttls smtp|imap|pop3|ftp|xmpp|ldap|postgres|mysql`
+  (decisions #68–#75), `--mx` (#76–#77, `testls-probe/src/mx.rs`,
+  `mail_hosts` in `main.rs`), PR #117 security hardening (#78–#81),
+  Codecov upload and Test Analytics (#82, #86), BREACH/ALPACA/Opossum
+  (#83–#85) and grading (#87–#89). Intrusive checks moved to the backlog
+  (decision #90). Next decision log number: **#91**.
 - Grading code map: `testls-checks/src/grade.rs` (`grade()`, `Grade`,
   `Letter`), rendered by `text::grade` / `grade_label` and every summary
   format via `sarif::Scan::grade`; `main.rs` grades before `triage`.
@@ -34,11 +30,8 @@ if `gh` is allowed); update it when a session ends.
   scanned port and port 80, joined with the feature probe in
   `vulnerability_section`). Verdicts in `testls-checks/src/vulnerabilities.rs`
   (15 entries).
-- PR #117 (external audit by r4d1um, Stephan
-  `<dertoradium@googlemail.com>`) stays open as reference; **close it when
-  v0.5 is released** (status comment 6521444559 lists the follow-ups). Its
-  exit-code change (exit 2 on incomplete scans) was declined. Local branch
-  `pr-117` holds its commit and can be deleted after closing.
+- PR #117 (external audit by r4d1um) is closed by the maintainer; all
+  findings shipped in v0.5.0. Local branch `pr-117` can be deleted.
 - Hardening code map: escaping via `printable()` in
   `testls-report/src/text.rs` and `csv::field`; baseline severity in
   `testls/src/baseline.rs` (`scan_failure`); handshake signature in
@@ -72,15 +65,13 @@ if `gh` is allowed); update it when a session ends.
 
 ## Next work
 
-v0.5 in PLAN.md, suggested order:
-
-1. Intrusive checks behind `--intrusive` (Heartbleed, CCS injection,
-   Ticketbleed, ROBOT), one PR each. Skipped by the maintainer in the
-   2026-10-30 session; a remote branch `feat/intrusive-checks` exists (not
-   ours, check with the maintainer before touching it).
-2. v0.5 release once the maintainer decides; close PR #117 then.
-
-Backlog gained `--delay` and `--parallel` (decision #89).
+1. Finish the v0.5.0 release loop if not done: tag, `release.yml`,
+   packages PR `chore/packages-0.5.0`, Marketplace tick by the maintainer.
+2. v0.6 web service (`testls serve`) in PLAN.md; ask the maintainer design
+   questions first.
+3. Backlog: intrusive checks (`--intrusive`: Heartbleed, CCS injection,
+   Ticketbleed, ROBOT; a remote branch `feat/intrusive-checks` exists, not
+   ours, check with the maintainer), `--delay`, `--parallel`.
 
 ## Habits that worked
 

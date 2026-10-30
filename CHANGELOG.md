@@ -6,6 +6,12 @@ All notable changes to `testls` are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-30
+
+STARTTLS for mail, FTP, XMPP, LDAP and database servers, `--mx`, BREACH,
+ALPACA and Opossum verdicts, a letter grade, and the security fixes from
+the external audit in #117. Intrusive checks moved to the backlog.
+
 ### Added
 
 - `--starttls smtp|imap|pop3|ftp|xmpp|ldap|postgres|mysql` upgrades each
@@ -276,7 +282,8 @@ First pre-release.
 - Target parsing for host, host:port, IPv4/IPv6 and URLs, plus `--sni`.
 - Release binaries for Linux (static musl), macOS and Windows.
 
-[Unreleased]: https://github.com/kjpopov/testls/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/kjpopov/testls/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/kjpopov/testls/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/kjpopov/testls/compare/v0.4.1...v0.4.3
 [0.4.1]: https://github.com/kjpopov/testls/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/kjpopov/testls/compare/v0.3.0...v0.4.0
