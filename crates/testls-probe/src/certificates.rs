@@ -126,8 +126,12 @@ fn config_with(verifier: Arc<AcceptAll>) -> ClientConfig {
         .with_no_client_auth()
 }
 
-/// ML-DSA signature schemes (IANA TLS `SignatureScheme` registry, 0x0904-0x0906).
-const ML_DSA_SCHEMES: [SignatureScheme; 3] = [
+/// Signature schemes ring cannot verify, advertised so servers whose only
+/// certificate uses them still send their chain (IANA TLS `SignatureScheme`
+/// registry: 0x0603 P-521, 0x0808 Ed448, 0x0904-0x0906 ML-DSA).
+const UNVERIFIABLE_SCHEMES: [SignatureScheme; 5] = [
+    SignatureScheme::ECDSA_NISTP521_SHA512,
+    SignatureScheme::ED448,
     SignatureScheme::ML_DSA_44,
     SignatureScheme::ML_DSA_65,
     SignatureScheme::ML_DSA_87,
@@ -286,16 +290,16 @@ impl ServerCertVerifier for AcceptAll {
         self.check(result, cert, dss.scheme)
     }
 
-    /// Advertises every scheme the crypto provider knows plus ML-DSA, which
-    /// ring cannot verify; such signatures are accepted but recorded as
-    /// unverified, so servers with only an ML-DSA certificate still send
+    /// Advertises every scheme the crypto provider knows plus
+    /// [`UNVERIFIABLE_SCHEMES`]; their signatures are accepted but recorded
+    /// as unverified, so servers with only such a certificate still send
     /// their chain.
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
         let mut schemes = self
             .provider
             .signature_verification_algorithms
             .supported_schemes();
-        for scheme in ML_DSA_SCHEMES {
+        for scheme in UNVERIFIABLE_SCHEMES {
             if !schemes.contains(&scheme) {
                 schemes.push(scheme);
             }
@@ -324,6 +328,10 @@ mod tests {
     const RSA1024_CERT: &[u8] = include_bytes!("testdata/rsa1024.cert.der");
     /// Self-signed ML-DSA-65 certificate (`mldsa.example`).
     const MLDSA65_CERT: &[u8] = include_bytes!("testdata/mldsa65.cert.der");
+    /// Self-signed P-521 certificate (`p521.example`).
+    const P521_CERT: &[u8] = include_bytes!("testdata/p521.cert.der");
+    /// Self-signed Ed448 certificate (`ed448.example`).
+    const ED448_CERT: &[u8] = include_bytes!("testdata/ed448.cert.der");
 
     /// Starts a one-shot rustls server limited to `versions`.
     async fn serve(versions: &[&'static rustls::SupportedProtocolVersion]) -> SocketAddr {
@@ -358,11 +366,12 @@ mod tests {
         addr
     }
 
-    /// ML-DSA schemes are advertised once, next to the provider's schemes.
+    /// P-521, Ed448 and ML-DSA schemes are advertised once, next to the
+    /// provider's schemes.
     #[test]
-    fn advertises_ml_dsa() {
+    fn advertises_unverifiable_schemes() {
         let schemes = AcceptAll::new().supported_verify_schemes();
-        for scheme in ML_DSA_SCHEMES {
+        for scheme in UNVERIFIABLE_SCHEMES {
             assert_eq!(schemes.iter().filter(|s| **s == scheme).count(), 1);
         }
         assert!(schemes.contains(&SignatureScheme::ECDSA_NISTP256_SHA256));
@@ -417,6 +426,20 @@ mod tests {
 
         let verifier = AcceptAll::new();
         assert!(verifier.check(unsupported(), &mldsa_cert, mldsa).is_ok());
+        assert!(!verifier.signature_verified());
+
+        let p521 = CertificateDer::from(P521_CERT.to_vec());
+        let ed448 = CertificateDer::from(ED448_CERT.to_vec());
+        let verifier = AcceptAll::new();
+        let ed448_scheme = SignatureScheme::ED448;
+        assert!(verifier.check(unsupported(), &p521, ed448_scheme).is_err());
+        assert!(verifier.check(unsupported(), &ed448, mldsa).is_err());
+        assert!(verifier.signature_verified());
+        let p521_scheme = SignatureScheme::ECDSA_NISTP521_SHA512;
+        assert!(verifier.check(unsupported(), &p521, p521_scheme).is_ok());
+        assert!(!verifier.signature_verified());
+        let verifier = AcceptAll::new();
+        assert!(verifier.check(unsupported(), &ed448, ed448_scheme).is_ok());
         assert!(!verifier.signature_verified());
     }
 
