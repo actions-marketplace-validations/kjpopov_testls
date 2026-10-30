@@ -4,7 +4,7 @@ State left by the last agent session for the next one. Read this right
 after [AGENTS.md](../AGENTS.md) (then [agent-workflow.md](agent-workflow.md)
 if `gh` is allowed); update it when a session ends.
 
-## State (2026-10-29)
+## State (2026-10-30)
 
 - Latest release **v0.4.3** (GitHub release, container image
   `ghcr.io/kjpopov/testls:0.4.3`, Homebrew/Scoop in-repo, Marketplace action).
@@ -12,8 +12,23 @@ if `gh` is allowed); update it when a session ends.
 - `main` has unreleased v0.5 work: `--starttls
   smtp|imap|pop3|ftp|xmpp|ldap|postgres|mysql` (PRs #108–#115, decisions
   #68–#75) and `--mx` (probe PR #119 `MxResolver` in `testls-probe/src/mx.rs`,
-  CLI PR #120 `mail_hosts` in `main.rs`, decisions #76–#77). Next decision
-  log number: **#82**.
+  CLI PR #120 `mail_hosts` in `main.rs`, decisions #76–#77), plus the
+  PR #117 security hardening (PRs #122–#126, decisions #78–#81, CHANGELOG
+  "Security" section). Next decision log number: **#82**.
+- PR #117 (external audit by r4d1um, Stephan
+  `<dertoradium@googlemail.com>`) stays open as reference; **close it when
+  v0.5 is released** (status comment 6521444559 lists the follow-ups). Its
+  exit-code change (exit 2 on incomplete scans) was declined. Local branch
+  `pr-117` holds its commit and can be deleted after closing.
+- Hardening code map: escaping via `printable()` in
+  `testls-report/src/text.rs` and `csv::field`; baseline severity in
+  `testls/src/baseline.rs` (`scan_failure`); handshake signature in
+  `testls-probe/src/certificates.rs` (`AcceptAll::check`, `unverifiable`,
+  `UNVERIFIABLE_SCHEMES`, finding `cert.signature_unverified`); CRL scope in
+  `testls-checks/src/revocation.rs` (`check_scope`, `distribution_points`);
+  revocation guard in `testls-probe/src/fetch.rs` (`Fetcher::allow_private`,
+  `local_host`, `ends_in_number`, `public_address`), CLI flag
+  `--revocation-allow-private`.
 - `--mx` has unit tests only (fake UDP DNS server in `mx.rs`, CLI parsing
   in `main.rs`); no integration test (would need a DNS server in
   `tests/servers`). Outbound port 25 is blocked on the dev machine, so live
@@ -42,24 +57,11 @@ if `gh` is allowed); update it when a session ends.
 
 v0.5 in PLAN.md, suggested order:
 
-1. Security hardening from PR #117 (external audit by r4d1um). The
-   maintainer keeps #117 open as reference until the next release, then
-   closes it. Redo each accepted finding as its own PR with
-   `Co-authored-by: Stephan <dertoradium@googlemail.com>` and a CHANGELOG
-   "Security" entry. Review summary: PR #117 comment 6508947202. Decided:
-   revocation fetches block non-public endpoints by default plus an opt-in
-   flag, proxy keeps host names (#48); exit-code contract unchanged (only
-   errors can't be baselined); ML-DSA-only servers keep the chain result,
-   marked "signature not verified". Escaping (#122), baseline
-   severity (decision #78), handshake signature (decision #79,
-   `cert.signature_unverified`), CRL partition scope (decision #80) and
-   the revocation endpoint guard (decision #81,
-   `--revocation-allow-private`) are done. The PR branch is fetched
-   locally as `pr-117`.
-2. Codecov upload (once the maintainer enabled the app).
-3. Intrusive checks behind `--intrusive` (Heartbleed, CCS injection,
+1. Codecov upload (once the maintainer enabled the app).
+2. Intrusive checks behind `--intrusive` (Heartbleed, CCS injection,
    Ticketbleed, ROBOT), one PR each.
-4. Application-layer checks (BREACH, ALPACA, Opossum), then grading.
+3. Application-layer checks (BREACH, ALPACA, Opossum), then grading.
+4. v0.5 release once the maintainer decides; close PR #117 then.
 
 Open questions in PLAN.md (default profile runtime, politeness/rate limits)
 still need a decision before grading.
@@ -84,5 +86,11 @@ still need a decision before grading.
 - CodeRabbit sometimes answers in issue comments or posts empty COMMENTED
   reviews; check both before assuming nothing changed. If it never reviews
   a PR (seen on docs-only #116), comment `@coderabbitai review`.
+- External PRs: review with zero trust (check CI/workflow/dependency/binary
+  changes first), post a per-finding review, then redo accepted parts as
+  small PRs with `Co-authored-by` and a CHANGELOG credit
+  ("Reported by @user in #N.").
+- CRL/OCSP test fixtures come from `scripts/gen-ocsp-fixtures.sh`
+  (gitignored output; rerun after editing it).
 - hickory 0.26 sources are in `~/.cargo/registry/src/*/hickory-*-0.26.3`;
   grep them for API details (docs.rs lags).
