@@ -17,13 +17,15 @@ const CERT: &[u8] = include_bytes!("../../testls-probe/src/testdata/localhost.ce
 /// Private key for [`CERT`].
 const KEY: &[u8] = include_bytes!("../../testls-probe/src/testdata/localhost.key.der");
 
-/// HTTP reply with a versioned banner, `Alt-Svc` and two weak cookies.
+/// HTTP reply with a versioned banner, `Alt-Svc`, two weak cookies and a
+/// compressed body.
 const REPLY: &[u8] = b"HTTP/1.1 200 OK\r\n\
 Server: nginx/1.25.3\r\n\
 X-Powered-By: PHP/8.3\r\n\
 Alt-Svc: h3=\":443\"; ma=60\r\n\
 Set-Cookie: session=abc; HttpOnly\r\n\
 Set-Cookie: theme=dark; Secure; SameSite=None\r\n\
+Content-Encoding: gzip\r\n\
 Content-Length: 0\r\n\
 Connection: close\r\n\r\n";
 
@@ -71,8 +73,8 @@ fn handle(config: Arc<ServerConfig>, stream: TcpStream) {
     let _ = tls.flush();
 }
 
-/// Banners, `Alt-Svc` and cookie attributes appear in the JSON report and
-/// produce their findings.
+/// Banners, `Alt-Svc`, cookie attributes and HTTP compression (BREACH)
+/// appear in the JSON report and produce their findings.
 #[test]
 fn json_reports_http_extras() {
     let addr = serve();
@@ -121,10 +123,26 @@ fn json_reports_http_extras() {
         "cookie.insecure",
         "cookie.no_httponly",
         "cookie.no_samesite",
+        "vuln.breach",
     ] {
         assert!(ids.contains(&id), "missing {id} in {ids:?}");
     }
     assert!(!ids.contains(&"header.alt_svc_invalid"), "{ids:?}");
+    let breach = v["vulnerabilities"]
+        .as_array()
+        .expect("vulnerabilities")
+        .iter()
+        .find(|b| b["id"] == "breach")
+        .expect("breach verdict");
+    assert_eq!(breach["status"], "vulnerable", "{breach}");
+    assert_eq!(breach["detail"], "HTTP compression: gzip");
+    let finding = v["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .find(|f| f["id"] == "vuln.breach")
+        .expect("breach finding");
+    assert_eq!(finding["severity"], "low", "{finding}");
 }
 
 /// `--format sarif` prints one SARIF 2.1.0 log whose results carry the

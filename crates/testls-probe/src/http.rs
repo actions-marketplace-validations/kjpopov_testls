@@ -2,7 +2,9 @@
 //!
 //! One `GET` request is sent and only the status line and header section of
 //! the reply are read (RFC 9112 §2–§5); the body is ignored. The headers feed
-//! the HSTS and security header checks.
+//! the HSTS, security header and BREACH checks. The request offers the
+//! common content codings like a browser does, so `Content-Encoding` shows
+//! whether the server compresses responses.
 
 use std::net::IpAddr;
 
@@ -46,6 +48,10 @@ impl HttpResponse {
     }
 }
 
+/// Content codings offered in `Accept-Encoding` (RFC 9110 §12.5.3): the
+/// ones browsers send, so the reply matches what they receive.
+const ACCEPT_ENCODING: &str = "gzip, deflate, br, zstd";
+
 /// Sends `GET /` over TLS 1.2/1.3 and returns the reply's status and
 /// headers.
 ///
@@ -63,7 +69,7 @@ pub async fn fetch_http_headers(
 ) -> Result<HttpResponse, ProbeError> {
     let mut tls = connect_tls(transport, sni, http_config()).await?;
     let request = format!(
-        "GET / HTTP/1.1\r\nHost: {}\r\nUser-Agent: testls/{}\r\nAccept: */*\r\nConnection: close\r\n\r\n",
+        "GET / HTTP/1.1\r\nHost: {}\r\nUser-Agent: testls/{}\r\nAccept: */*\r\nAccept-Encoding: {ACCEPT_ENCODING}\r\nConnection: close\r\n\r\n",
         host_header(transport, sni),
         env!("CARGO_PKG_VERSION"),
     );
@@ -278,6 +284,10 @@ mod tests {
         assert!(request.starts_with("GET / HTTP/1.1\r\n"), "{request}");
         assert!(
             request.contains(&format!("\r\nHost: localhost:{}\r\n", addr.port())),
+            "{request}"
+        );
+        assert!(
+            request.contains("\r\nAccept-Encoding: gzip, deflate, br, zstd\r\n"),
             "{request}"
         );
     }

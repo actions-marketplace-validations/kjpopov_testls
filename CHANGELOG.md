@@ -21,6 +21,11 @@ All notable changes to `testls` are listed here. The format follows
   scanned itself; a null MX, an unknown domain or a failed lookup is a
   scan error for that target (exit code 2). IP and CIDR targets are
   rejected.
+- BREACH verdict (`breach`, finding `vuln.breach`, low): the `GET /`
+  request now offers `Accept-Encoding: gzip, deflate, br, zstd`, and a
+  reply with a content coding other than `identity` is reported as
+  vulnerable. Without an HTTP reply (quick profile, `--starttls`, non-HTTP
+  service) it is not tested.
 
 ### Security
 

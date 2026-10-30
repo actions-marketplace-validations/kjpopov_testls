@@ -115,6 +115,8 @@ per target, in scan order. This page describes schema version **1**.
 ### HTTP headers
 
 One `GET /` request is sent over a full handshake; redirects are not followed.
+It offers `Accept-Encoding: gzip, deflate, br, zstd` like a browser, so the
+`breach` verdict can see whether the reply is compressed.
 
 | Field | Type | Description |
 | --- | --- | --- |
@@ -160,13 +162,13 @@ unless `--revocation-allow-private` is given; such attempts have the error
 
 ### Vulnerability
 
-Named vulnerabilities judged from the protocols, cipher suites, key exchange
-and handshake features the scan collected; no attack traffic is sent. Always
-the same twelve entries in a fixed order.
+Named vulnerabilities judged from the protocols, cipher suites, key exchange,
+handshake features and HTTP headers the scan collected; no attack traffic is
+sent. Always the same thirteen entries in a fixed order.
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `id` | string | Stable id: `poodle`, `beast`, `sweet32`, `rc4`, `freak`, `logjam`, `drown`, `crime`, `renegotiation`, `fallback_scsv`, `no_forward_secrecy`, `raccoon` |
+| `id` | string | Stable id: `poodle`, `beast`, `sweet32`, `rc4`, `freak`, `logjam`, `drown`, `crime`, `renegotiation`, `fallback_scsv`, `no_forward_secrecy`, `raccoon`, `breach` |
 | `name` | string | Display name, e.g. `"POODLE"` |
 | `status` | string | `"vulnerable"`, `"not vulnerable"`, or `"not tested"` |
 | `detail` | string | Short reason for the verdict; wording may change |
