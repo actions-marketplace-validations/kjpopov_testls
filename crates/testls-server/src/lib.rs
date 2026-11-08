@@ -9,9 +9,12 @@
 //! | `GET` | `/scans/{id}` | One scan with its sections and JSON report |
 //! | `GET` | `/scans/{id}/events` | Progress as server-sent events |
 //! | `GET` | `/scans/{id}/report?format=` | Report in a CLI output format |
+//! | `GET` | `/explanations/{id}` | Explanation of a finding id |
+//! | `GET` | `/` | Browser UI (with `/ui/app.js` and `/ui/app.css`) |
 
 mod api;
 mod history;
+mod ui;
 
 use std::collections::VecDeque;
 use std::fmt::{self, Write as _};
@@ -118,6 +121,17 @@ impl fmt::Debug for Shared {
 }
 
 impl Shared {
+    /// Fresh state for `config`.
+    fn new(config: Config) -> Self {
+        Self {
+            slots: Arc::new(Semaphore::new(config.max_concurrent.max(1))),
+            streams: Arc::new(Semaphore::new(config.max_streams.max(1))),
+            history: History::new(config.max_history),
+            recent: Mutex::new(VecDeque::new()),
+            config,
+        }
+    }
+
     /// Records a scan start unless `max_per_minute` scans already started
     /// in the last minute.
     fn admit(&self, now: Instant) -> bool {
@@ -145,14 +159,7 @@ impl Shared {
 /// clients apart, so serve them only on a loopback listener unless
 /// `config.token` is set; [`serve`] enforces this.
 pub fn router(config: Config) -> Router {
-    let state = Arc::new(Shared {
-        slots: Arc::new(Semaphore::new(config.max_concurrent.max(1))),
-        streams: Arc::new(Semaphore::new(config.max_streams.max(1))),
-        history: History::new(config.max_history),
-        recent: Mutex::new(VecDeque::new()),
-        config,
-    });
-    api::routes(state)
+    api::routes(Arc::new(Shared::new(config)))
 }
 
 /// Serves the API on `listener` until `shutdown` completes.
@@ -220,16 +227,10 @@ mod tests {
     /// minute.
     #[test]
     fn rate_limit() {
-        let state = Shared {
-            slots: Arc::new(Semaphore::new(1)),
-            streams: Arc::new(Semaphore::new(1)),
-            history: History::new(1),
-            recent: Mutex::new(VecDeque::new()),
-            config: Config {
-                max_per_minute: 2,
-                ..Config::default()
-            },
-        };
+        let state = Shared::new(Config {
+            max_per_minute: 2,
+            ..Config::default()
+        });
         let start = Instant::now();
         assert!(state.admit(start));
         assert!(state.admit(start));

@@ -6,6 +6,8 @@ All notable changes to `testls` are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-08
+
 ### Added
 
 - New library crate `testls-scan` runs the whole scan pipeline and reports
@@ -16,7 +18,12 @@ All notable changes to `testls` are listed here. The format follows
   scans and download reports in every output format. It listens on
   127.0.0.1 by default, demands a bearer token on other addresses, refuses
   private targets unless `--allow-private`, and limits concurrent scans,
-  scans per minute and scan time.
+  scans per minute and scan time. Ctrl-C (and SIGTERM on Unix) shuts it
+  down gracefully; a second signal stops it at once.
+- `testls serve` includes a browser UI at `/`: scan form, live progress,
+  grade, findings with severity filter and explanations, certificate
+  expiry, history and report export. Plain JavaScript embedded in the
+  binary, served under a strict content security policy.
 
 ## [0.5.0] - 2026-10-30
 
@@ -294,7 +301,8 @@ First pre-release.
 - Target parsing for host, host:port, IPv4/IPv6 and URLs, plus `--sni`.
 - Release binaries for Linux (static musl), macOS and Windows.
 
-[Unreleased]: https://github.com/kjpopov/testls/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/kjpopov/testls/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/kjpopov/testls/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/kjpopov/testls/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/kjpopov/testls/compare/v0.4.1...v0.4.3
 [0.4.1]: https://github.com/kjpopov/testls/compare/v0.4.0...v0.4.1

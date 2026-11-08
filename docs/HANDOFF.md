@@ -4,9 +4,10 @@ State left by the last agent session for the next one. Read this right
 after [AGENTS.md](../AGENTS.md) (then [agent-workflow.md](agent-workflow.md)
 if `gh` is allowed); update it when a session ends.
 
-## State (2026-10-30)
+## State (2026-11-08)
 
-- Latest release **v0.5.0** (release PR `chore/release-0.5.0`; tag,
+- Latest release **v0.6.0** (web service: `testls serve`, REST/SSE,
+  browser UI). Previous v0.5.0 (release PR `chore/release-0.5.0`; tag,
   GitHub release, container image `ghcr.io/kjpopov/testls:0.5.0`,
   Homebrew/Scoop in-repo via the packages PR). v0.4.2 was deleted (web UI
   mistake); skip it in compare links.
@@ -63,16 +64,16 @@ if `gh` is allowed); update it when a session ends.
 
 ## Next work
 
-1. v0.5.0 released (tag, `release.yml`, packages PR #140 merged).
-   All 6 crates on crates.io at 0.5.0. Maintainer: Marketplace tick.
-2. v0.6 web service: scope settled (#91, #92; branch
-   merged). Maintainer supplied dashboard CSS (own project, reuse OK;
-   re-ask to paste if needed). PR #146 merged: crate `testls-scan` (#93).
-   Branch `feat/server`: target parsing moved to `testls-scan`, `Event`
-   gets `section()/version()/text()`, crate `testls-server` (REST + SSE +
-   bounded history + safety, #94, #95) and `testls serve`. Smoke-tested
-   against example.com. Next: embedded UI PR (vanilla JS, #92) served by
-   the same router with a strict CSP. Next decision number: **#96**.
+1. v0.6.0 released: GitHub release, container, all 8 crates on crates.io,
+   packages PR #151 merged. New crates need a manual first publish plus a
+   trusted-publishing entry by the maintainer before `release.yml` can
+   publish them (done for `testls-scan`, `testls-server`). Maintainer:
+   Marketplace tick.
+2. v0.6 web service done: `testls-scan` (#93), `testls-server` + `testls
+   serve` (#94, #95), embedded UI (`crates/testls-server/ui/`, #96).
+   Maintainer supplied the dashboard CSS (own project, reuse OK). Next:
+   v0.7 monitoring sketch in PLAN (ask maintainer to settle scope).
+   Next decision number: **#97**.
 3. Backlog: intrusive checks (`--intrusive`: Heartbleed, CCS injection,
    Ticketbleed, ROBOT; a remote branch `feat/intrusive-checks` exists, not
    ours, check with the maintainer), `--delay`, `--parallel`.
@@ -82,8 +83,9 @@ if `gh` is allowed); update it when a session ends.
 - CodeRabbit no longer auto-reviews (repo under 10 stars; trigger with
   `@coderabbitai review`) and is slow. Maintainer prefers a local review
   by a `review` subagent with a GPT model (used `litellm/gpt-6.1-sol#high`);
-  tell it to read the PR with the `gh` CLI (not webfetch) and post its
-  findings as a PR review with `gh`; fix them, then merge when CI is green.
+  when the maintainer allows `gh` for the session, tell it to read the PR
+  with the `gh` CLI (not webfetch) and post its findings as a PR review;
+  fix them, then merge when CI is green.
 
 - One topic per PR, all review fixes in one commit per round, reply to each
   thread; reviews take 10–15 minutes, poll with `sleep 290` and a 320 s tool
