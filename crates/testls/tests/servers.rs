@@ -784,3 +784,55 @@ fn stop_server(mut child: std::process::Child, _stderr: impl Read) {
     child.kill().expect("stop testls serve");
     child.wait().expect("reap testls serve");
 }
+
+/// OpenSSL 1.0.1f discloses memory only when attack traffic is enabled.
+#[test]
+#[ignore = "needs tests/servers running"]
+fn heartbleed_server() {
+    let ordinary = scan("127.0.0.1:14435", &["--profile", "quick"]);
+    assert!(!ordinary.has("Heartbleed"));
+    assert!(!ordinary.has("Ticketbleed"));
+    let attack = scan("127.0.0.1:14435", &["--profile", "quick", "--intrusive"]);
+    assert!(attack.has("[vuln.heartbleed]"), "{}", attack.stdout);
+    assert!(attack.has("Ticketbleed"), "{}", attack.stdout);
+    assert_eq!(attack.code, 1);
+}
+
+/// OpenSSL 1.0.1g drops the malformed request; silence is not a safe verdict.
+#[test]
+#[ignore = "needs tests/servers running"]
+fn heartbleed_patched_server() {
+    let scan = scan("127.0.0.1:14436", &["--profile", "quick", "--intrusive"]);
+    assert!(scan.has("Heartbleed"), "{}", scan.stdout);
+    assert!(!scan.has("[vuln.heartbleed]"), "{}", scan.stdout);
+    assert!(scan.line("Heartbleed").contains("not tested"));
+    assert!(scan.has("Ticketbleed"), "{}", scan.stdout);
+    assert!(!scan.has("[vuln.ticketbleed]"), "{}", scan.stdout);
+}
+
+/// Detects early CCS on OpenSSL 1.0.1g only when explicitly requested.
+#[test]
+#[ignore = "needs tests/servers running"]
+fn ccs_injection_server() {
+    let ordinary = scan("127.0.0.1:14436", &["--profile", "quick"]);
+    assert!(!ordinary.has("CCS injection"));
+    let attack = scan("127.0.0.1:14436", &["--profile", "quick", "--intrusive"]);
+    assert!(
+        attack
+            .stdout
+            .lines()
+            .any(|line| line.contains("high") && line.contains("[vuln.ccs_injection]")),
+        "{}",
+        attack.stdout
+    );
+    assert!(attack.line("CCS injection").contains("vulnerable"));
+}
+
+/// The fixed OpenSSL version must not produce a CCS injection finding.
+#[test]
+#[ignore = "needs tests/servers running"]
+fn ccs_injection_patched_server() {
+    let scan = scan("127.0.0.1:14437", &["--profile", "quick", "--intrusive"]);
+    assert!(!scan.has("[vuln.ccs_injection]"), "{}", scan.stdout);
+    assert!(scan.line("CCS injection").contains("not tested"));
+}

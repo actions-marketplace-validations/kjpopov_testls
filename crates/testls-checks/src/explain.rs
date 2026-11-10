@@ -545,6 +545,24 @@ const EXPLANATIONS: &[Explanation] = &[
         "RFC 7301 §3.2, alpaca-attack.com",
     ),
     entry(
+        "vuln.ticketbleed",
+        "Ticketbleed: possible memory exposure on ticket resumption",
+        "The server extended a short session ID during ticket resumption. This can disclose uninitialized memory, although other implementations may exhibit a similar error without exposing memory. Check the server implementation and disable session tickets or apply its security updates.",
+        "CVE-2016-9244; RFC 5077 §3.4",
+    ),
+    entry(
+        "vuln.ccs_injection",
+        "CCS injection: premature cipher activation",
+        "The server appears to activate its cipher before the key exchange. CVE-2014-0224 allows a man-in-the-middle to weaken connections when both client and server are affected. Upgrade the TLS implementation.",
+        "CVE-2014-0224; OpenSSL security advisory 2014-06-05; RFC 5246 §7.1",
+    ),
+    entry(
+        "vuln.heartbleed",
+        "Heartbleed: heartbeat discloses memory",
+        "An opt-in malformed heartbeat received a correlated response containing more payload bytes than were supplied. Upgrade the affected TLS implementation and rotate potentially exposed secrets. Disclosed bytes are not reported.",
+        "CVE-2014-0160; RFC 6520 §4",
+    ),
+    entry(
         "vuln.opossum",
         "Opossum: plaintext HTTP can be upgraded to TLS",
         "A server that switches a plaintext HTTP connection to TLS on request (RFC 2817) lets a man-in-the-middle splice responses from that connection into a browser's HTTPS session. Disable the HTTP Upgrade to TLS and serve HTTPS on its own port only.",

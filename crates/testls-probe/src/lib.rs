@@ -1,11 +1,13 @@
 //! Async TLS probes over TCP built on testls-wire.
 
+mod ccs;
 mod certificates;
 mod ciphers;
 mod details;
 mod features;
 mod fetch;
 mod groups;
+mod heartbleed;
 pub mod hello;
 mod http;
 mod intolerance;
@@ -13,6 +15,7 @@ mod mx;
 mod protocols;
 mod response;
 mod starttls;
+mod ticketbleed;
 mod upgrade;
 
 use std::fmt;
@@ -24,12 +27,14 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::time::timeout;
 
+pub use ccs::probe_ccs;
 pub use certificates::{CertificateChain, fetch_certificates};
 pub use ciphers::{CipherOrder, CipherResult, enumerate_ciphers};
 pub use details::{HandshakeDetails, probe_details};
 pub use features::{HandshakeFeatures, probe_features};
 pub use fetch::{Fetcher, HttpBody, public_address};
 pub use groups::{KeyExchangeResult, probe_key_exchange};
+pub use heartbleed::probe_heartbleed;
 pub use http::{HttpResponse, fetch_http_headers};
 pub use intolerance::{Intolerance, probe_intolerance};
 pub use mx::{MxError, MxResolver};
@@ -38,6 +43,7 @@ pub use response::HelloResponse;
 use response::ResponseParser;
 pub use starttls::Starttls;
 use testls_wire::{DecodeError, EncodeError};
+pub use ticketbleed::{TicketbleedVerdict, probe_ticketbleed};
 pub use upgrade::{TlsUpgrade, probe_tls_upgrade};
 
 /// Error from a single probe.

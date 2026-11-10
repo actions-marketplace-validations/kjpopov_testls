@@ -159,6 +159,15 @@ Two connection paths:
   `innerHTML` for scanned text (#95, #96)
 - [x] Released as v0.6.0
 
+### v0.6.1 — Intrusive checks
+
+All behind the opt-in `--intrusive` flag (decision #97), one PR per check.
+
+- [x] Heartbleed (PR #154)
+- [x] CCS injection (PR #157)
+- [x] Ticketbleed (PR #158)
+- [ ] ROBOT
+
 ### v0.7 — Monitoring (sketch)
 - Target groups with owners, expiry dashboard, scheduled rescans with diff
   against the previous scan, persistent storage (format open)
@@ -194,14 +203,16 @@ Not scheduled; pulled into a milestone when someone picks it up.
 - Docs: catalogue of checks, mapping from testssl.sh options, threat model
 - Politeness: `--delay` between connections to one target
 - Bounded parallel probes per target (`--parallel`, #8 as planned, see #89)
-- Intrusive checks behind `--intrusive`: Heartbleed, CCS injection,
-  Ticketbleed, ROBOT (moved from v0.5, #90)
+- Intrusive checks behind `--intrusive`: see the v0.6.1 milestone
+  (Heartbleed, CCS injection and Ticketbleed implemented; ROBOT pending;
+  moved from v0.5, #90)
 
 ## Open questions
 
 None at the moment (default profile and politeness settled in #88, #89).
 
 ## Decision log
+
 
 | # | Decision | Rationale |
 | --- | --- | --- |
@@ -301,3 +312,7 @@ None at the moment (default profile and politeness settled in #88, #89).
 | 94 | `testls-server` (axum 0.8, HTTP/1 only) runs each scan as a background task and records every section as `{section, version, text}` with the CLI's plain text; SSE sends one `section` event per section (id = index, `Last-Event-ID` resumes) and a final `done` event. `GET /scans/{id}` returns the sections plus the JSON report; `/report` renders every CLI format from the kept JSON and summary. Findings drop `ok` and sort as in the CLI; config suppressions and baselines do not apply. A drop guard fails a scan whose task ends without a result (panic, cancellation). `testls serve` shuts down gracefully on SIGINT/SIGTERM, waits up to 10 s for open connections, and exits 130 on a second signal. New dependencies: `futures-util` (`stream::unfold` for the SSE stream) and, dev-only, `tower` (`ServiceExt::oneshot` in handler tests) and `rustls` (already a workspace dependency; in-process TLS server for the successful-scan test) | Plain-text sections let the UI show progress without a second renderer, and the finished JSON report carries the structured data; resumable SSE survives proxies dropping idle connections. Suppressions are per-repo CLI concerns |
 | 95 | Server safety: without a token only requests whose `Host` names loopback are served (blocks DNS rebinding); binding a non-loopback address generates a random 256-bit token unless `--token-file` gives one, compared in constant time. Targets are resolved once and the address checked against the special-purpose ranges (`public_address`, also used for revocation fetches) unless `--allow-private`. `serve` refuses a non-loopback listener without a token. Limits: concurrent scans (try-acquire, 429) and scans per minute, both checked before the DNS lookup; open progress streams; history size (oldest finished first); per-scan timeout; 16 KiB request bodies; policies deduplicated; SNI must be a host name (probes put it in plaintext `Host` headers). Every response sends `CSP default-src 'none'; frame-ancestors 'none'`, `nosniff`, `no-referrer`, `no-store`; the HTML report allows inline styles only | A scanner reachable from a browser is an SSRF and DoS tool for any web page; loopback-by-default plus Host checking covers local use, the token covers shared use, and resolving once means the checked address is the scanned one |
 | 96 | Embedded UI: `index.html`, `app.js`, `app.css` in `crates/testls-server/ui/`, compiled in with `include_str!` and served at `/`, `/ui/app.js`, `/ui/app.css` under `default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`. The files skip the token check (they hold no data; a browser cannot send a bearer token when opening a page) but not the loopback Host check. The page asks for the token and keeps it in `sessionStorage`; SSE is read through `fetch` because `EventSource` cannot send headers; exports are fetched as blobs. DOM is built with `createElement`/`textContent` only; a unit test rejects `innerHTML`-style sinks and inline code. Explanations come from new `GET /explanations/{id}`. The UI renders the structured JSON report, the section text only as progress and raw output | No build step or JS dependencies to audit; a strict CSP plus no markup parsing means hostile certificate or header text cannot run script |
+| 97 | Intrusive checks ship as a series, starting with explicit `--intrusive` Heartbleed detection at measured TLS 1.0–1.2 versions. Only correlated pre-handshake disclosure confirms vulnerability; errors and refusals remain not tested. No profile enables it and the server API does not expose it. CCS injection, Ticketbleed and ROBOT remain pending | Maintainer selected staged PRs and confirmed evidence; keep attack traffic opt-in and avoid false assurance |
+| 98 | Intrusive checks are scheduled as milestone v0.6.1, one PR per check behind `--intrusive`: Heartbleed (shipped in PR #154, #97), then CCS injection, Ticketbleed and ROBOT | Amends #34 and #90; staging one vulnerability per PR keeps the review, the test server and the fixtures small while attack traffic stays opt-in |
+| 99 | CCS injection probe sends premature CCS and bogus ciphertext for measured TLS 1.0–1.2 only when `--intrusive` is set, after a flight containing exactly one validated ServerHello; a fatal bad_record_mac at the measured version indicates early cipher activation, other outcomes remain not tested | Keep the attack opt-in, reject duplicate hellos before attack traffic, and avoid treating rejection or silence as proof of safety. High follows [NVD CVSS 3.1, 7.4](https://nvd.nist.gov/vuln/detail/CVE-2014-0224), reflecting confidentiality/integrity compromise despite high attack complexity; the [OpenSSL 2014-06-05 advisory](https://openssl-library.org/news/secadv/20140605.txt) requires both vulnerable client and server plus MITM, so this probe confirms only the server-side prerequisite, not a completed exploit |
+| 100 | Ticketbleed uses a TLS 1.2 ticket and a 31-byte session ID; an extended matching ID in an abbreviated flight flags possible memory exposure, rated High to match [NVD CVSS 3.x, 7.5](https://nvd.nist.gov/vuln/detail/CVE-2016-9244). An unchanged echo plus valid CCS reports not vulnerable; refusals, unsupported handshakes and TLS 1.2 not offered remain not tested | Request at most one extra byte; a similar protocol error can have no security impact; RFC 5077 §3.4 requires the echo, so it is a real negative |

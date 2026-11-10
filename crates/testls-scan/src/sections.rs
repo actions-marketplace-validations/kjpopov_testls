@@ -11,9 +11,9 @@ use testls_checks::{
 };
 use testls_probe::{
     CipherResult, Fetcher, HandshakeDetails, HttpResponse, Intolerance, KeyExchangeResult,
-    ProtocolResult, ProtocolSupport, Transport, enumerate_ciphers, fetch_certificates,
-    fetch_http_headers, probe_details, probe_features, probe_intolerance, probe_key_exchange,
-    probe_tls_upgrade,
+    ProtocolResult, ProtocolSupport, TicketbleedVerdict, Transport, enumerate_ciphers,
+    fetch_certificates, fetch_http_headers, probe_details, probe_features, probe_intolerance,
+    probe_key_exchange, probe_tls_upgrade,
 };
 use testls_report::text::{CertificateSection, CipherSection, KeyExchangeSection};
 use testls_wire::ProtocolVersion;
@@ -160,7 +160,7 @@ pub(crate) async fn later_sections(
         &[KeyExchangeSection],
     ),
     sni: Option<&str>,
-    deep: bool,
+    (deep, intrusive): (bool, bool),
     findings: &mut Vec<Finding>,
     on_event: &mut OnEvent<'_>,
 ) -> (
@@ -183,7 +183,12 @@ pub(crate) async fn later_sections(
     };
 
     let measured = (protocols, ciphers, key_exchange, http.as_ref().ok());
-    let vulns = vulnerability_section(transport, measured, sni, deep).await;
+    let mut vulns = vulnerability_section(transport, measured, sni, deep).await;
+    if intrusive {
+        vulns.push(heartbleed_section(transport, ciphers, sni).await);
+        vulns.push(ccs_section(transport, ciphers, sni).await);
+        vulns.push(ticketbleed_section(transport, protocols, sni).await);
+    }
     on_event(Event::Vulnerabilities(&vulns));
     findings.extend(vulnerability_findings(&vulns));
 
@@ -457,6 +462,147 @@ pub(crate) async fn details_section(
     }
 }
 
+/// Selects measured TLS 1.0–1.2 suites for intrusive probes, preserving order.
+fn intrusive_suites(
+    ciphers: &[CipherSection],
+) -> impl Iterator<Item = (ProtocolVersion, Vec<u16>)> + '_ {
+    ciphers.iter().filter_map(|section| {
+        if !(ProtocolVersion::TLS10..=ProtocolVersion::TLS12).contains(&section.version) {
+            return None;
+        }
+        let suites = section.outcome.as_ref().ok()?;
+        let offered = suites
+            .suites
+            .iter()
+            .filter_map(|&id| u16::try_from(id).ok())
+            .collect();
+        Some((section.version, offered))
+    })
+}
+
+/// Tests supported TLS 1.0–1.2 versions sequentially, confirming only disclosure.
+async fn heartbleed_section(
+    transport: &Transport,
+    ciphers: &[CipherSection],
+    sni: Option<&str>,
+) -> Vulnerability {
+    let mut detail = Vec::new();
+    for (version, offered) in intrusive_suites(ciphers) {
+        match testls_probe::probe_heartbleed(transport, version, &offered, sni).await {
+            Ok(()) => {
+                return Vulnerability {
+                    id: "heartbleed",
+                    name: "Heartbleed",
+                    status: testls_checks::VulnStatus::Vulnerable,
+                    detail: format!(
+                        "{version}: correlated heartbeat response disclosed an extra payload byte"
+                    ),
+                    finding: Some("vuln.heartbleed"),
+                };
+            }
+            Err(e) => detail.push(format!("{version}: {e}")),
+        }
+    }
+    Vulnerability {
+        id: "heartbleed",
+        name: "Heartbleed",
+        status: testls_checks::VulnStatus::NotTested,
+        detail: if detail.is_empty() {
+            "no measured TLS 1.0–1.2 cipher suites".to_owned()
+        } else {
+            detail.join("; ")
+        },
+        finding: None,
+    }
+}
+
+/// Checks for an extended session ID on TLS 1.2 ticket resumption; skipped
+/// without a connection when TLS 1.2 is known to be unsupported.
+async fn ticketbleed_section(
+    transport: &Transport,
+    protocols: &[ProtocolResult],
+    sni: Option<&str>,
+) -> Vulnerability {
+    let item = |status, detail: String, finding| Vulnerability {
+        id: "ticketbleed",
+        name: "Ticketbleed",
+        status,
+        detail,
+        finding,
+    };
+    let tls12_unsupported = protocols
+        .iter()
+        .any(|r| r.version == ProtocolVersion::TLS12 && r.support == ProtocolSupport::NotSupported);
+    if tls12_unsupported {
+        return item(
+            testls_checks::VulnStatus::NotTested,
+            "TLS 1.2 not offered".to_owned(),
+            None,
+        );
+    }
+    ticketbleed_item(testls_probe::probe_ticketbleed(transport, sni).await)
+}
+
+/// Maps a Ticketbleed probe result to its report entry.
+fn ticketbleed_item(result: Result<TicketbleedVerdict, testls_probe::ProbeError>) -> Vulnerability {
+    let item = |status, detail: String, finding| Vulnerability {
+        id: "ticketbleed",
+        name: "Ticketbleed",
+        status,
+        detail,
+        finding,
+    };
+    match result {
+        Ok(TicketbleedVerdict::ExtendedId) => item(
+            testls_checks::VulnStatus::Vulnerable,
+            "TLS 1.2 ticket resumption extended the session ID by one byte; possible memory exposure".to_owned(),
+            Some("vuln.ticketbleed"),
+        ),
+        Ok(TicketbleedVerdict::EchoedId) => item(
+            testls_checks::VulnStatus::NotVulnerable,
+            "TLS 1.2 ticket resumption echoed the session ID unchanged".to_owned(),
+            None,
+        ),
+        Err(e) => item(testls_checks::VulnStatus::NotTested, e.to_string(), None),
+    }
+}
+
+/// Tests measured TLS 1.0–1.2 versions for premature cipher activation.
+async fn ccs_section(
+    transport: &Transport,
+    ciphers: &[CipherSection],
+    sni: Option<&str>,
+) -> Vulnerability {
+    let mut detail = Vec::new();
+    for (version, offered) in intrusive_suites(ciphers) {
+        match testls_probe::probe_ccs(transport, version, &offered, sni).await {
+            Ok(()) => {
+                return Vulnerability {
+                    id: "ccs_injection",
+                    name: "CCS injection",
+                    status: testls_checks::VulnStatus::Vulnerable,
+                    detail: format!(
+                        "{version}: premature CCS followed by bad_record_mac indicates early cipher activation"
+                    ),
+                    finding: Some("vuln.ccs_injection"),
+                };
+            }
+            Err(e) => detail.push(format!("{version}: {e}")),
+        }
+    }
+    Vulnerability {
+        id: "ccs_injection",
+        name: "CCS injection",
+        status: testls_checks::VulnStatus::NotTested,
+        detail: if detail.is_empty() {
+            "no measured TLS 1.0–1.2 cipher suites".to_owned()
+        } else {
+            detail.join("; ")
+        },
+        finding: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Unit tests for section results when probes fail.
@@ -464,6 +610,35 @@ mod tests {
     use std::net::SocketAddr;
 
     use super::*;
+
+    /// Intrusive probes keep successful legacy measurements in original order.
+    #[test]
+    fn intrusive_suite_selection() {
+        let section = |version, suites| CipherSection {
+            version,
+            outcome: Ok(CipherResult {
+                version,
+                suites,
+                order: testls_probe::CipherOrder::NotApplicable,
+            }),
+        };
+        let sections = [
+            section(ProtocolVersion::TLS13, vec![0x1301]),
+            section(ProtocolVersion::TLS10, vec![0x2f, 0x1_0000, 0x35]),
+            CipherSection {
+                version: ProtocolVersion::TLS11,
+                outcome: Err("failed".into()),
+            },
+            section(ProtocolVersion::TLS12, vec![]),
+        ];
+        assert_eq!(
+            intrusive_suites(&sections).collect::<Vec<_>>(),
+            vec![
+                (ProtocolVersion::TLS10, vec![0x2f, 0x35]),
+                (ProtocolVersion::TLS12, vec![]),
+            ]
+        );
+    }
 
     /// A failed cipher enumeration is reported in the key exchange section
     /// without probing the server.
@@ -532,6 +707,48 @@ mod tests {
         let crime = list.iter().find(|v| v.id == "crime").expect("crime");
         assert_eq!(crime.status, testls_checks::VulnStatus::NotTested);
         assert_eq!(vulnerability_findings(&list), vec![]);
+    }
+
+    /// Each Ticketbleed probe result maps to the matching status and finding.
+    #[test]
+    fn ticketbleed_results_map_to_items() {
+        let item = ticketbleed_item(Ok(TicketbleedVerdict::ExtendedId));
+        assert_eq!(item.status, testls_checks::VulnStatus::Vulnerable);
+        assert_eq!(item.finding, Some("vuln.ticketbleed"));
+        let item = ticketbleed_item(Ok(TicketbleedVerdict::EchoedId));
+        assert_eq!(item.status, testls_checks::VulnStatus::NotVulnerable);
+        assert!(item.finding.is_none());
+        let item = ticketbleed_item(Err(testls_probe::ProbeError::Timeout));
+        assert_eq!(item.status, testls_checks::VulnStatus::NotTested);
+        assert!(item.finding.is_none());
+    }
+
+    /// Ticketbleed opens no connection when TLS 1.2 is not offered.
+    #[tokio::test]
+    async fn ticketbleed_skipped_without_tls12() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let protocols = [ProtocolResult {
+            version: ProtocolVersion::TLS12,
+            support: ProtocolSupport::NotSupported,
+        }];
+        let item = ticketbleed_section(&Transport::new(addr), &protocols, None).await;
+        assert_eq!(item.status, testls_checks::VulnStatus::NotTested);
+        assert_eq!(item.detail, "TLS 1.2 not offered");
+        assert!(item.finding.is_none());
+        assert!(listener.accept().is_err(), "no connection expected");
+        // An errored TLS 1.2 measurement keeps probing; the silent listener
+        // makes the probe time out.
+        let protocols = [ProtocolResult {
+            version: ProtocolVersion::TLS12,
+            support: ProtocolSupport::Error("x".to_owned()),
+        }];
+        let mut transport = Transport::new(addr);
+        transport.read_timeout = std::time::Duration::from_millis(200);
+        let item = ticketbleed_section(&transport, &protocols, None).await;
+        assert_ne!(item.detail, "TLS 1.2 not offered");
+        assert!(listener.accept().is_ok(), "connection expected");
     }
 
     /// A failed tolerance probe is reported as an info finding.
