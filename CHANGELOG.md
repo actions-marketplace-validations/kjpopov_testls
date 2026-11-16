@@ -17,6 +17,12 @@ All notable changes to `testls` are listed here. The format follows
   an unchanged echo reports not vulnerable. Skipped when TLS 1.2 is not offered.
 - Opt-in ROBOT probe compares RSA padding responses and reports a high
   finding for a repeated alert difference; inconclusive results remain untested.
+- Local fixture audit runner with a versioned manifest, pinned external
+  comparator validation, bounded sequential scans and review-only reports.
+
+### Fixed
+
+- Update transitive `rustix` to 1.1.6 to address RUSTSEC-2026-0486.
 
 ## [0.6.0] - 2026-11-08
 
