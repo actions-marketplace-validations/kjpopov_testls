@@ -15,13 +15,28 @@ port 14389), a PostgreSQL server with `SSLRequest`
 coverage: 3.12.2 (CVE-2017-13099, port 14438) and 3.13.0 (fixed, port 14439),
 TLS 1.2 `AES128-SHA` only. On invalid RSA padding 3.12.2 sends `close_notify`
 right after the ClientKeyExchange; for a valid block it waits for the client's
-Finished. 3.13.0 waits in both cases. testls compares fatal alerts only, so it
-reports ROBOT as not tested on both. Both releases answer a hello without a
-shared suite with `TLS_NULL_WITH_NULL_NULL`, so scans also report
-`cipher.null` and a certificate fetch error. Check by hand:
+Finished. 3.13.0 waits in both cases. testls reports the differing flow as a
+high `vuln.robot` on 3.12.2 and not tested on 3.13.0. Both releases answer a
+hello without a shared suite with `TLS_NULL_WITH_NULL_NULL`, so scans also
+report `cipher.null` and a certificate fetch error. Check by hand:
 
 ```sh
 testls --intrusive --profile quick 127.0.0.1:14438
+```
+
+Every fixture resolves names through the `dns` service (CoreDNS,
+`Dockerfile.coredns`), on the fixed compose network `10.253.53.0/24`.
+`fixtures.test.zone` and its reverse zone give each fixture, the gateway and
+the name server A and PTR records; keep them in step with the static
+addresses in `compose.yaml`. Clients outside the network, such as the
+address a runtime's port forwarder connects from, get a generated
+`ip-a-b-c-d.peer.fixtures.test` PTR record and a matching A record. Other
+names are refused, so no query leaves the network. OpenSSL `s_server`
+and Postfix look up each client's name; without these records every
+connection waited for the host resolver to time out (#163). Check by hand:
+
+```sh
+podman exec servers-smtp-1 getent hosts 10.253.53.1 smtp.fixtures.test
 ```
 
 `server.pem` (SAN `localhost`, `127.0.0.1`; valid 2026–2126) is signed by the
