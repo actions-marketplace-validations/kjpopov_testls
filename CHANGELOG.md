@@ -6,6 +6,33 @@ All notable changes to `testls` are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Integration test for `--mx` against the fixture DNS server (CoreDNS now
+  published on `127.0.0.1:15353/udp`), using a hidden `--mx-dns` option.
+  Reported in #189.
+- Fuzz targets `http_header_parser` and `starttls_dialogue` for the probe
+  crate's HTTP head and STARTTLS reply parsers, in the fuzz CI matrix
+  ([#188](https://github.com/kjpopov/testls/issues/188)).
+- Integration test pinning the historical OpenSSL fixtures as ROBOT negative
+  controls; documented that ROBOT is validated positively only on wolfSSL.
+  Reported in #191.
+
+### Changed
+
+- BREACH and ALPACA details now read "compression enabled (...), review BREACH
+  risk" and "unknown ALPN protocol accepted, review ALPACA risk"; both
+  describe a precondition, not a confirmed attack. Status, severity and
+  finding ids are unchanged
+  ([#192](https://github.com/kjpopov/testls/issues/192)).
+- Reworded BREACH and ALPACA findings keep their SARIF
+  `primaryLocationLineHash`, so existing code-scanning alerts stay open
+  (`Finding::with_key` pins the pre-rewording text for future rewordings).
+
+### Fixed
+
+- Update transitive `url` to 2.5.9 to address RUSTSEC-2026-0592.
+
 ## [0.6.1] - 2026-11-20
 
 ### Added

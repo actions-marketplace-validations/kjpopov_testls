@@ -117,7 +117,7 @@ fn legacy_server() {
     );
     assert_eq!(
         s.line("ALPACA"),
-        "ALPACA                         vulnerable     unknown ALPN protocol accepted [vuln.alpaca]"
+        "ALPACA                         vulnerable     unknown ALPN protocol accepted, review ALPACA risk [vuln.alpaca]"
     );
     assert_eq!(
         s.line("ClientHello tolerance"),
@@ -652,6 +652,57 @@ fn smtp_without_starttls() {
     assert_eq!(s.code, 1);
 }
 
+/// Fixture DNS (`CoreDNS`) published on loopback by `tests/servers`.
+const FIXTURE_DNS: &str = "127.0.0.1:15353";
+
+/// Runs `testls` with `args`, waiting for the SMTP fixture first; returns
+/// exit code, stdout and stderr.
+fn mx_scan(args: &[&str]) -> (i32, String, String) {
+    wait_for("127.0.0.1:14425");
+    let out = Command::new(env!("CARGO_BIN_EXE_testls"))
+        .args(["--mx-dns", FIXTURE_DNS])
+        .args(args)
+        .output()
+        .expect("run testls");
+    (
+        out.status.code().expect("exit code"),
+        String::from_utf8(out.stdout).expect("utf-8 output"),
+        String::from_utf8(out.stderr).expect("utf-8 output"),
+    )
+}
+
+/// `--mx` resolves the MX of `fixtures.test` through the fixture DNS to
+/// `smtp.fixtures.test`, then scans it with SMTP STARTTLS (address pinned
+/// to the published port by `--resolve`); the findings of the fixture's
+/// anonymous suites give exit code 1, never 2. An unknown domain is a scan
+/// error.
+#[test]
+#[ignore = "needs tests/servers running"]
+fn mx_lookup() {
+    let (code, stdout, stderr) = mx_scan(&[
+        "--mx",
+        "fixtures.test:14425",
+        "--resolve",
+        "smtp.fixtures.test:14425:127.0.0.1",
+        "--sni",
+        "localhost",
+        "--ca-file",
+        CA_FILE,
+        "--profile",
+        "quick",
+    ]);
+    assert!(stdout.contains("smtp.fixtures.test"), "{stdout}{stderr}");
+    assert!(stdout.contains("TLSv1.2  offered"), "{stdout}{stderr}");
+    assert_eq!(code, 1, "{stdout}{stderr}");
+
+    let (code, stdout, stderr) = mx_scan(&["--mx", "nonexistent.fixtures.test:14425"]);
+    assert_eq!(code, 2, "{stdout}{stderr}");
+    assert!(
+        format!("{stdout}{stderr}").contains("domain does not exist"),
+        "{stdout}{stderr}"
+    );
+}
+
 /// IMAP and POP3 STARTTLS on Dovecot, FTP `AUTH TLS` on vsftpd, XMPP
 /// STARTTLS on Prosody (stream addressed to the SNI name) and LDAP
 /// `StartTLS` on `OpenLDAP` and `SSLRequest` on PostgreSQL and `MariaDB`:
@@ -977,6 +1028,29 @@ fn heartbleed_server() {
     );
     assert!(!attack.has("[vuln.robot]"), "{}", attack.stdout);
     assert_eq!(attack.code, 1);
+}
+
+/// Historical OpenSSL releases are ROBOT negative controls (#191): they
+/// answer every malformed RSA block alike (alert and flow), so ROBOT stays
+/// not tested and never becomes a finding. Positive ROBOT evidence comes
+/// only from the wolfSSL fixtures.
+#[test]
+#[ignore = "needs tests/servers running"]
+fn robot_openssl_negative_controls() {
+    for addr in ["127.0.0.1:14435", "127.0.0.1:14436", "127.0.0.1:14437"] {
+        let scan = scan(addr, &["--profile", "quick", "--intrusive"]);
+        let robot = scan.line("ROBOT");
+        assert!(robot.contains("not tested"), "{addr}: {robot}");
+        assert!(
+            robot.contains("no reproducible RSA padding alert difference"),
+            "{addr}: {robot}"
+        );
+        assert!(
+            robot.contains("no reproducible RSA padding flow difference"),
+            "{addr}: {robot}"
+        );
+        assert!(!scan.has("[vuln.robot]"), "{addr}: {}", scan.stdout);
+    }
 }
 
 /// OpenSSL 1.0.1g drops the malformed request; silence is not a safe verdict.
